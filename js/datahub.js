@@ -115,7 +115,8 @@ export class DataHub {
     this.interval = 10;         // 수집 주기 (시뮬레이션 초)
     this.maxTicks = 6000;       // 보관 수집 회차 (기본 10초 × 6000 = 16시간 40분)
     this.publishOn = true;
-    this.mqtt = { available: null, status: null, sent: 0, failed: 0, lastError: null };
+    this.shared = !!globalThis.window?.JIN3D_SHARED;   // 서버 없는 공유 페이지: 수집만 하고 발행·저장은 하지 않는다
+    this.mqtt = { available: this.shared ? false : null, status: null, sent: 0, failed: 0, lastError: null };
     this.queue = []; this.flushT = 0; this.lastMsg = null;
   }
 
@@ -244,6 +245,7 @@ export class DataHub {
     } finally { this.flushing = false; }
   }
   async refreshStatus() {
+    if (this.shared) return this.mqtt;
     try { const r = await fetch('/api/mqtt/status'); this.mqtt.status = await r.json(); this.mqtt.available = !!this.mqtt.status.listening; }
     catch { this.mqtt.available = false; }
     return this.mqtt;

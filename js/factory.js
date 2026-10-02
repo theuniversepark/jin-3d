@@ -752,6 +752,15 @@ export class FactoryView {
       this.lampMats.push(m);
       put(box(4, 0.12, 0.5, m, false), x, 9.5, z, r);
     }
+    // 캠틱종합기술원 사인 — 뒷벽 왼쪽(자재창고 랙 위). 로고 글자가 흰색이라 남색 백보드 위에 붙인 백라이트 사인으로 만든다
+    // 벽 기둥(9m 간격, x=-27·-18) 사이에 들어가도록 폭 8m
+    const sign = put(new THREE.Group(), -22.5, 6.0, -19.78, r);
+    put(box(8.0, 2.95, 0.12, std(0x0c2048, { roughness: 0.5, metalness: 0.2 })), 0, 0, 0, sign);
+    put(box(8.0, 0.08, 0.14, MAT.accent), 0, -1.52, 0, sign);
+    const logoTex = new THREE.TextureLoader().load('assets/camtic_logo.png');
+    logoTex.colorSpace = THREE.SRGBColorSpace; logoTex.anisotropy = 8;
+    // 흰 글자가 블룸으로 번지지 않게 밝기를 조금 낮춘다
+    put(new THREE.Mesh(new THREE.PlaneGeometry(7.4, 7.4 * 187 / 550), new THREE.MeshBasicMaterial({ map: logoTex, color: 0xcfd3d8, transparent: true, depthWrite: false })), 0, 0, 0.07, sign);
     // 출하 도크 도어
     for (const x of [26, 31]) {
       put(box(4, 4.5, 0.1, MAT.dark), x, 2.25, -19.8, r);

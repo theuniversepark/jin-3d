@@ -303,7 +303,8 @@ function renderData() {
   const st = hub.stats(), mq = hub.mqtt, ms = mq.status;
   const kinds = hub.assets.reduce((m, a) => ((m[a.kind] = (m[a.kind] ?? 0) + 1), m), {});
   const kindLabel = { Factory: '라인', Station: '설비·셀', CellRobot: '셀 로봇', AMR: '운반 AMR', AGV: 'AGV', Forklift: '지게차', Humanoid: '휴머노이드', Quadruped: '사족보행', MaintenanceRobot: '정비로봇' };
-  const broker = mq.available === false ? '<b class="bad">연결 안 됨</b> — 서버(npm start 또는 맥 앱) 없이 열려 있어 수집·저장만 합니다'
+  const broker = hub.shared ? '<b class="bad">공유 페이지에서는 사용할 수 없음</b> — 데이터 수집만 합니다. MQTT 발행과 파일 저장은 맥 앱이나 npm start로 실행하세요'
+    : mq.available === false ? '<b class="bad">연결 안 됨</b> — 서버(npm start 또는 맥 앱) 없이 열려 있어 수집·저장만 합니다'
     : !ms ? '확인 중…' : ms.listening ? `<b class="ok">실행 중</b> · mqtt://${ms.host}:${ms.port} · 구독 클라이언트 ${ms.clients}개` : `<b class="bad">시작 실패</b> — ${escH(ms.error ?? '')}`;
   const preview = hub.lastMsg ? JSON.stringify(hub.lastMsg.msg, null, 1).slice(0, 1600) : '(아직 발행 전)';
   dataBody.innerHTML = `
@@ -347,6 +348,7 @@ dataBody.addEventListener('change', (e) => {
 });
 dataBody.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-fmt]'); if (!b) return;
+  if (hub.shared) { dataNote = '공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.'; return renderData(); }
   if (!hub.samples.length) { dataNote = '아직 수집된 데이터가 없습니다. 시뮬레이션을 잠시 돌린 뒤 저장하세요.'; return renderData(); }
   const out = hub.download(b.dataset.fmt);
   dataNote = out ? `저장: ${out.name} (${kb(out.bytes)})${b.dataset.fmt === 'aml' ? ' — 시계열은 같은 이름의 CSV를 함께 저장해 두면 연결됩니다' : ''}` : '';
@@ -400,7 +402,8 @@ ui.onDetailAction = (act, st) => {
     if (sim.requestTech(st, 'pm')) sim.log('act', `[수동 지시] ${st.name} 정비`, { act: '정비 인력 배정' });
   }
   if (act === 'close') { view.selected = null; view.selectRobot(null); ui.hideDetail(); }
-  if (act === 'robotSave' && view.telemetry) {
+  if (act === 'robotSave' && view.telemetry && hub.shared) ui.robotSaved('공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.');
+  else if (act === 'robotSave' && view.telemetry) {
     const fmt = document.getElementById('rbFmt').value;
     try {
       const out = hub.downloadRobot(view.telemetry, fmt);
@@ -416,6 +419,29 @@ addEventListener('resize', () => {
   persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix();
   fitOrtho();
 });
+
+// ── 로봇 텔레메트리 패널 위치: 선택한 로봇이 패널에 가려지면 반대쪽(왼쪽 ↔ 오른쪽)으로 옮긴다 ─────────────────
+const detailEl = document.getElementById('detail');
+const _p = new THREE.Vector3();
+function robotScreenRect() {
+  const obj = view.telemetry?.R?.obj; if (!obj) return null;
+  obj.getWorldPosition(_p);
+  const pts = [0, 1.6].map((dy) => { const v = _p.clone(); v.y += dy; v.project(camera); return { x: (v.x + 1) / 2 * innerWidth, y: (1 - v.y) / 2 * innerHeight, z: v.z }; });
+  if (pts.some((q) => q.z > 1)) return null;   // 카메라 뒤쪽
+  const pad = 50;
+  return { l: Math.min(...pts.map((q) => q.x)) - pad, r: Math.max(...pts.map((q) => q.x)) + pad, t: Math.min(...pts.map((q) => q.y)) - pad, b: Math.max(...pts.map((q) => q.y)) + pad };
+}
+function placeRobotPanel() {
+  const rb = robotScreenRect(); if (!rb) return;
+  const cur = detailEl.getBoundingClientRect(), right = detailEl.classList.contains('side-right');
+  const w = cur.width, rightGap = innerWidth <= 1100 ? 304 : 364, leftX = innerWidth <= 1100 ? 270 : 314;
+  const rects = { left: { l: leftX, r: leftX + w, t: cur.top, b: cur.bottom }, right: { l: innerWidth - rightGap - w, r: innerWidth - rightGap, t: cur.top, b: cur.bottom } };
+  const hit = (a) => !(a.r < rb.l || a.l > rb.r || a.b < rb.t || a.t > rb.b);
+  const dist = (a) => Math.abs((a.l + a.r) / 2 - (rb.l + rb.r) / 2);
+  const now = right ? 'right' : 'left', other = right ? 'left' : 'right';
+  if (!hit(rects[now])) return;
+  if (!hit(rects[other]) || dist(rects[other]) > dist(rects[now])) detailEl.classList.toggle('side-right', other === 'right');
+}
 
 // ── 루프 ─────────────────────────────
 const clock = new THREE.Clock();
@@ -439,6 +465,7 @@ function frame() {
   if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
   robotTimer += rdt;
   if (view.telemetry && robotTimer > 0.12) { robotTimer = 0; ui.renderRobot(view.telemetry.snapshot(), hub.robotCounts(view.telemetry)); }
+  if (view.telemetry && ui.robotMode) placeRobotPanel();
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought); }
   composer.render();
   labelRenderer.render(scene, camera);

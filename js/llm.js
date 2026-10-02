@@ -25,6 +25,8 @@ export class LLMController {
   }
 
   async probe() {
+    // 공유 페이지(서버 없음)에서는 Claude 서버에 묻지 않는다
+    if (window.JIN3D_SHARED) { this.available = false; this.onChange?.(); return; }
     try {
       const r = await fetch('/api/status');
       if (r.ok) { const j = await r.json(); this.available = !!j.llm; this.model = j.model; }
