@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Jin-3D</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+  </script>
+</head>
+<body data-mode="smart">
+  <div id="viewport"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">◆</div>
+      <div>
+        <h1>Jin-3D</h1>
+        <p>레거시 → 자동화 → 피지컬AI 자율공장 시뮬레이션 에이전트</p>
+      </div>
+    </div>
+    <div class="seg" id="modeSeg">
+      <button data-mode="traditional">레거시</button><i class="seg-arrow">›</i>
+      <button data-mode="smart" class="on">자동화</button><i class="seg-arrow">›</i>
+      <button data-mode="dark">피지컬AI 자율</button>
+    </div>
+    <div class="seg" id="viewSeg">
+      <button data-view="3d" class="on">3D</button>
+      <button data-view="iso">2.5D</button>
+    </div>
+    <div class="timectl">
+      <button id="playBtn" class="icon" title="일시정지/재생">❚❚</button>
+      <div class="seg small" id="speedSeg">
+        <button data-speed="1">1×</button>
+        <button data-speed="3" class="on">3×</button>
+        <button data-speed="10">10×</button>
+        <button data-speed="30">30×</button>
+      </div>
+      <div class="clock" id="clock">08:00:00</div>
+      <button id="btnSettings" class="icon app-only" title="Claude API 키 설정 (⌘,)">⚙</button>
+    </div>
+  </header>
+
+  <aside class="panel left" id="kpiPanel">
+    <div class="zone-card" id="zoneCard"></div>
+    <div class="mode-desc" id="modeDesc"></div>
+    <div class="kpis" id="kpis"></div>
+    <div class="chart">
+      <div class="chart-h"><span>시간당 생산량 (UPH, 최근 10분)</span><b id="uphNow"></b></div>
+      <canvas id="chartUph" height="70"></canvas>
+    </div>
+    <div class="chart">
+      <div class="chart-h"><span>OEE (누적, %)</span><b id="oeeNow"></b></div>
+      <canvas id="chartOee" height="70"></canvas>
+    </div>
+  </aside>
+
+  <aside class="panel right" id="agentPanel">
+    <div class="agent-h">
+      <div class="agent-avatar" id="agentAvatar">AI</div>
+      <div>
+        <div class="agent-name" id="agentName">AI 운영 에이전트</div>
+        <div class="agent-sub"><span class="pill" id="agentPill">활성</span> 의사결정 <b id="agentCount">0</b>건</div>
+      </div>
+    </div>
+    <div class="engine">
+      <div class="seg small" id="engineSeg">
+        <button data-engine="rule" class="on">규칙 기반</button>
+        <button data-engine="llm">Claude LLM</button>
+      </div>
+      <label class="chk" title="Claude 응답을 기다리는 동안 시뮬레이션을 멈춥니다"><input type="checkbox" id="pauseThink" checked /> 응답 대기 시 일시정지</label>
+    </div>
+    <div class="llm-status" id="llmStatus"></div>
+    <div class="thought" id="thought"></div>
+    <div class="loop"><span>관찰</span>→<span>판단</span>→<span>실행</span></div>
+    <div class="log" id="log"></div>
+    <form class="chatbox" id="chatForm" autocomplete="off">
+      <input id="chatInput" placeholder="Claude에게 지시·질문 (예: 도장 설비 상태 어때?)" disabled />
+      <button type="submit" id="chatSend" disabled>전송</button>
+    </form>
+  </aside>
+
+  <div class="panel detail hidden" id="detail"></div>
+
+  <section class="panel dock" id="lineDock">
+    <button id="dockToggle" class="dock-title" type="button">
+      <span>🏭 공정 설계</span><span class="dock-line" id="dockLineName"></span><i id="dockArrow">▲</i>
+    </button>
+    <div class="dock-body">
+      <div class="dock-status" id="dockStatus"></div>
+      <div class="dock-summary" id="dockSummary"></div>
+      <div class="dock-meta">
+        <label>라인 이름 <input id="lineName" maxlength="40" /></label>
+        <label>레이아웃 <select id="lineLayout"></select></label>
+      </div>
+      <div class="dock-metrics" id="dockMetrics"></div>
+      <div class="st-list" id="stList"></div>
+      <div class="dock-actions">
+        <button type="button" id="stAdd">＋ 공정 추가</button>
+        <span class="dock-cost" id="dockCost"></span>
+        <button type="button" id="dockDefault">기본 라인</button>
+        <button type="button" id="dockRevert">되돌리기</button>
+        <button type="button" id="dockApply" class="primary">적용</button>
+      </div>
+    </div>
+    <div class="dock-files" id="dockFiles"></div>
+    <form class="dock-form" id="dockForm" autocomplete="off">
+      <button type="button" id="dockAttach" class="attach" title="공정도·레이아웃·설비 목록 파일 첨부 (PDF, 이미지, 엑셀, 워드, 텍스트) — 끌어다 놓아도 됩니다">📎</button>
+      <input type="file" id="dockFile" multiple hidden />
+      <input id="dockInput" maxlength="500" />
+      <button type="submit" id="dockSend">보내기</button>
+    </form>
+  </section>
+
+  <footer class="bottombar">
+    <button id="btnFault" title="임의 설비에 돌발 고장을 주입합니다">⚡ 설비 고장 주입</button>
+    <button id="btnSupply" title="자재 창고 출고를 10분간 중단합니다">⛔ 자재 공급 차질</button>
+    <button id="btnLabels" class="on">🏷 라벨</button>
+    <button id="btnData" title="AAS · OPC UA PubSub over MQTT 데이터 연동과 파일 저장">📡 데이터 연동</button>
+    <button id="btnConcept">🧭 진화 컨셉</button>
+    <button id="btnCompare" class="primary">📊 3단계 8시간 비교</button>
+    <button id="btnReset">↺ 리셋</button>
+  </footer>
+
+  <div class="modal hidden" id="compare">
+    <div class="modal-card">
+      <div class="modal-h"><h2>단계별 성과 비교 <small>레거시 → 자동화 → 피지컬AI 자율 · 동일 조건 8시간 가동 시뮬레이션</small></h2><button id="closeCompare">✕</button></div>
+      <div id="compareBody"></div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="concept">
+    <div class="modal-card wide">
+      <div class="modal-h"><h2>공장 진화 컨셉 <small>레거시 공장 → 자동화 공장 → 피지컬AI 기반 자율화 공장</small></h2><button id="closeConcept">✕</button></div>
+      <div id="conceptBody"></div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="datahub">
+    <div class="modal-card wide">
+      <div class="modal-h"><h2>데이터 연동 <small>기준 시계 동기화 · AAS(Asset Administration Shell) 모델 · OPC UA PubSub(JSON) over MQTT · 파일 저장</small></h2><button id="closeData">✕</button></div>
+      <div id="dataBody"></div>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="settings">
+    <div class="modal-card small">
+      <div class="modal-h"><h2>Claude API 키 설정 <small>키는 macOS 키체인으로 암호화되어 이 Mac에만 저장되며, 화면(렌더러)으로는 전달되지 않습니다.</small></h2><button id="closeSettings">✕</button></div>
+      <div class="key-status" id="keyStatus"></div>
+      <form id="keyForm" autocomplete="off">
+        <input type="password" id="keyInput" placeholder="sk-ant-..." spellcheck="false" />
+        <div class="key-btns">
+          <button type="button" id="keyClear">저장된 키 삭제</button>
+          <button type="submit" class="primary">저장</button>
+        </div>
+      </form>
+      <p class="key-note">API 키는 <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic Console</a>에서 발급받을 수 있습니다. 호출 비용은 패널에 표시됩니다.</p>
+    </div>
+  </div>
+
+  <div class="hint" id="hint">설비를 클릭하면 상세 정보 · 드래그 회전 · 휠 확대</div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

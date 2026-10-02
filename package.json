@@ -1,0 +1,29 @@
+{
+  "name": "jin-3d",
+  "version": "1.0.0",
+  "description": "제조공정·스마트팩토리·다크팩토리 3D 시뮬레이션 에이전트",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "app": "electron .",
+    "package": "electron-packager . Jin-3D --platform=darwin --arch=arm64 --icon=build/icon.icns --out=dist --overwrite --app-bundle-id=kr.or.camtic.jin3d --app-category-type=public.app-category.productivity --ignore=^/dist --ignore=^/build --ignore=^/\\.env --ignore=^/README.md --ignore=^/server\\.mjs$",
+    "postpackage": "codesign --force --deep --sign - dist/Jin-3D-darwin-arm64/Jin-3D.app"
+  },
+  "keywords": [],
+  "author": "Jin Park",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "aedes": "^1.2.0",
+    "mqtt": "^5.16.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^44.5.1",
+    "mammoth": "^1.13.0",
+    "three": "^0.186.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "productName": "Jin-3D"
+}
