@@ -6,7 +6,7 @@ import { FactoryAgent } from '../js/agent.js';
 let pass = 0, fail = 0; const fails = [];
 const check = (mode, name, ok, info = '') => { if (ok) pass++; else { fail++; fails.push(`${mode} · ${name} ${info}`); } console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  — ' + info : ''}`); };
 const mk = (mode, seed = 7) => { const s = new Simulation(mode, seed, { line: zoneLine(), quiet: false }); const ag = new FactoryAgent(s); const run = (sec) => { for (let t = 0; t < sec - 1e-9; t += 0.05) { s.step(0.05); ag.update(0.05); s.events = []; } }; return { s, ag, run }; };
-const movers = (s) => [...s.vehicles, ...s.carriers, ...s.techs, ...s.helpers, ...s.quads];
+const movers = (s) => [...s.vehicles, ...s.forklifts, ...s.carriers, ...s.techs, ...s.helpers, ...s.quads];
 const snap = (s) => JSON.stringify({ m: movers(s).map((m) => [m.x.toFixed(4), m.z.toFixed(4)]), p: s.processing.map((st) => (st.progress ?? 0).toFixed(5)), conv: s.conveyors.map((c) => c.items.map((i) => i.s.toFixed(4))), ammr: s.processing.map((st) => st.ammr?.map((u) => [u.pos, u.phase, u.bin]) ?? null), rep: s.processing.map((st) => (st.repairRemaining ?? 0).toFixed(3)), rel: s.stats.released, raw: s.rawStock });
 const LAT = { traditional: 3, smart: 0.3, dark: 0.05 };
 for (const mode of ['traditional', 'smart', 'dark']) {

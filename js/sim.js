@@ -1,5 +1,6 @@
 // 제조 라인 시뮬레이션 엔진 — 렌더링과 분리되어 있어 헤드리스(고속 비교) 실행이 가능하다.
 import { CommandCenter } from './commands.js';
+import { TruckYard, planForklift } from './shipping.js';
 import { Orchestrator } from './orchestrator.js';
 import { AMMR, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
@@ -69,7 +70,6 @@ export const LOC = {
   WH_PARTS: { x: -22.5, z: -13.5, aisle: 'B', name: '부품 랙' },   // 휴머노이드 부품 피킹 — AGV 팔레트 위치(x=-26)와 진입로 분리
   SRC: { x: -26, z: 4.2, aisle: 'F', name: '투입구' },
   SINK: { x: 29, z: 4.2, aisle: 'F', name: '완제품 적재장' },
-  SHIP: { x: 29, z: -13.5, aisle: 'B', name: '출하장' },
   TECH: { x: 12, z: 13.5, aisle: 'F', name: '정비실' },
   CTRL: { x: -2, z: -12.5, aisle: 'B', name: '관제실' },
 };
@@ -256,7 +256,11 @@ export class Simulation {
 
     // 투입·적재 도크는 레이아웃에 따라 달라진다 (U자형이면 적재는 뒤쪽 통로)
     // 적재장 상차 위치: Zone 구분 적재장은 제품 구역(앞쪽 적재 팔레트)과 겹치지 않게 조금 더 앞에서 싣는다
-    this.loc = { ...LOC, SRC: localLoc(this.stations[0].def, 0, 4.2, '투입구'), SINK: localLoc(this.stations[this.stations.length - 1].def, 0, isZone(this.line) ? 4.9 : 4.2, '완제품 적재장') };
+    this.loc = { ...LOC, SRC: localLoc(this.stations[0].def, 0, 4.2, '투입구'), SINK: localLoc(this.stations[this.stations.length - 1].def, 0, isZone(this.line) ? 5.4 : 4.2, '완제품 적재장') };
+    // 출하 지게차 상차 위치: 구분 적재장 앞쪽(도어트림 구역)·뒤쪽(e-axle 구역)
+    const sinkDef = this.stations[this.stations.length - 1].def;
+    this.loc.PICK_DT = { ...this.loc.SINK, name: isZone(this.line) ? '도어트림 적재 구역' : '완제품 적재장' };
+    this.loc.PICK_EA = localLoc(sinkDef, 0, -5.4, 'e-axle 적재 구역');
 
     this.vehicles = [];
     for (let i = 0; i < m.vehicles; i++) {
@@ -264,6 +268,10 @@ export class Simulation {
       v.battery = 60 + this.rand() * 40;
       this.vehicles.push(v);
     }
+    // 출하 지게차: 구분 적재장 → 뒷벽 출하 도크 → 트럭 야드 화물트럭 (레거시는 유인, 자동화·피지컬AI는 자율 지게차)
+    this.forklifts = [new Mover(m.key === 'traditional' ? '지게차-출하' : '자율 지게차', 'forklift', { x: 19.5, z: -16.5, aisle: 'B', name: '출하 지게차 대기' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
+    this.forklifts[0].shipper = true; this.forklifts[0].auto = m.key !== 'traditional';
+    this.yard = new TruckYard(this);
     this.techs = [];
     for (let i = 0; i < m.techs; i++) {
       const home = { ...LOC.TECH, x: LOC.TECH.x + i * 1.6 };
@@ -299,7 +307,7 @@ export class Simulation {
       }
     }
     // 충돌 회피: 모든 이동체가 서로를 감지한다 (우선순위: 운반 중 AMR·AGV > 정비 > 기타)
-    this.movers = [...this.carriers, ...this.vehicles, ...this.techs, ...this.helpers, ...this.quads, ...this.workers];
+    this.movers = [...this.carriers, ...this.vehicles, ...this.forklifts, ...this.techs, ...this.helpers, ...this.quads, ...this.workers];
     const prio = { carrier: 5, agv: 4, forklift: 4, humanoid: 3, human: 3, robot: 3, quadruped: 1, worker: 2 };
     this.movers.forEach((m, i) => { m.prio = (prio[m.kind] ?? 1) * 100 - i; m.sense = this.sense; });
   }
@@ -451,7 +459,7 @@ export class Simulation {
   }
 
   peopleOnSite() {
-    return this.workers.length + this.techs.filter((t) => t.kind === 'human').length + (this.mode.vehicleKind === 'forklift' ? this.vehicles.length : 0);
+    return this.workers.length + this.techs.filter((t) => t.kind === 'human').length + (this.mode.vehicleKind === 'forklift' ? this.vehicles.length : 0) + this.forklifts.filter((f) => !f.auto).length;
   }
 
   log(level, title, body = {}) {
@@ -503,6 +511,9 @@ export class Simulation {
         else if (!v.charging) v.battery = Math.max(0, v.battery - 0.01 * dt);
       }
     }
+    // 출하: 트럭은 건물 밖이라 계속 움직이고, 지게차는 Zone 명령(정지·감속·대피)을 따른다
+    this.yard.update(dt);
+    if (mdt > 0) for (const f of this.forklifts) { if (f.idle && !K.evac) planForklift(this, f); f.update(mdt); }
     if (mdt > 0) {
       for (const t of this.techs) t.update(mdt);
       if (this.helpers.length) this.assignHelpers();
@@ -992,19 +1003,6 @@ export class Simulation {
         this.rawStock = Math.min(RAW_CAP, this.rawStock + n); this.inboundRaw -= n; v.load = null; this.stats.supplyTrips++;
         const inc = this.orch.find('supply'); this.orch.step(inc, 'exec', 'act', `${v.id} 안전재고 ${n}개 투입구 도착 (재고 ${this.rawStock}개)`);
       } },
-    ]);
-  }
-  dispatchShip(v) {
-    v.setTask('완제품 출하', [
-      { go: this.loc.SINK },
-      { wait: 4, done: () => {
-        const n = Math.min(this.fgStock, this.mode.vehicleCap); this.fgStock -= n; v.load = { type: 'fg', n };
-        // 구분 적재장: 많이 쌓인 제품 구역부터 싣는다
-        let left = n;
-        while (left > 0 && this.fgBy.doortrim + this.fgBy.eaxle > 0) { const p = this.fgBy.doortrim >= this.fgBy.eaxle ? 'doortrim' : 'eaxle'; this.fgBy[p]--; left--; }
-      } },
-      { go: LOC.SHIP },
-      { wait: 4, done: () => { this.stats.shipped += v.load?.n || 0; v.load = null; } },
     ]);
   }
   dispatchCharge(v) { v.setTask('충전', [{ go: v.home }, { charge: true }]); }

@@ -105,7 +105,7 @@ function buildAssets(sim, view) {
       ],
     });
   };
-  for (const v of sim.vehicles) mobile(v, v.kind === 'agv' ? 'AGV' : 'Forklift', v.kind === 'agv' ? 'AGV' : '지게차', v.kind === 'agv' ? 'AGV' : 'FL',
+  for (const v of [...sim.vehicles, ...(sim.forklifts ?? [])]) mobile(v, v.kind === 'agv' ? 'AGV' : 'Forklift', v.kind === 'agv' ? 'AGV' : '지게차', v.kind === 'agv' ? 'AGV' : 'FL',
     v.kind === 'agv' ? [f('Battery', '배터리', 'double', '%', () => v.battery), f('LoadCount', '적재 수량', 'int', 'pcs', () => v.load?.n ?? 0)] : []);
   for (const c of sim.carriers) mobile(c, 'AMR', '운반 AMR', 'AMR', [
     f('OperationState', '운행 상태', 'string', null, () => c.state),

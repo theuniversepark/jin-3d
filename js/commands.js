@@ -183,7 +183,7 @@ export class CommandCenter {
         return done(`${n}개 셀 정상 속도 복귀`);
       case 'EVACUATE': {
         this.evac = true;
-        const movers = [...s.vehicles, ...s.helpers, ...s.quads];   // 정비 로봇은 수리를 마저 하고 복귀
+        const movers = [...s.vehicles, ...s.forklifts, ...s.helpers, ...s.quads];   // 정비 로봇은 수리를 마저 하고 복귀
         for (const m of movers) this.preempt(m, '대피', [{ go: m.home }, { until: () => !this.evac }]);
         o.step(c.inc, 'exec', 'act', `실행: 이동로봇 ${movers.length}대 대기 구역으로 복귀`);
         c.wait = () => !this.evac || movers.every((m) => Math.hypot(m.x - m.home.x, m.z - m.home.z) < 0.6);

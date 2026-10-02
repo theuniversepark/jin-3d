@@ -6,7 +6,7 @@ import { FIELD_EVENTS, ST_LABEL, moverRadius } from './sim.js';
 import { makeAlarmFx, blinkAlarmFx, ALARM_COLOR } from './factory.js';
 
 const COLS = 3, ROWS = 2, TW = 512, TH = 256, W = COLS * TW, H = ROWS * TH;
-const DISPLAY = { x: 12.6, y: 5.1, z: -19.15, w: 12, h: 4 };   // 중앙 관제 화면(x -2, 12×4) 오른쪽, 벽 기둥 앞에 설치
+const DISPLAY = { x: 10.6, y: 5.1, z: -19.15, w: 12, h: 4 };   // 중앙 관제 화면(x -2, 12×4) 바로 오른쪽(테두리 사이 0.3m), 같은 높이·크기로 벽 기둥 앞에 설치
 const FONT = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
 const CLS_COLOR = { 설비: '#37a0ff', 협동로봇: '#2bd4c6', AMR: '#3ddc84', AGV: '#3ddc84', 휴머노이드: '#b89bff', 사족보행: '#f5d36b', 사람: '#ff5a5a', 누유: '#ff7a3d', 이물질: '#f5b82e', 연기: '#ff5a5a' };
 const hash = (s) => { let h = 2166136261; for (const c of String(s)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0) / 4294967295; };

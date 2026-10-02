@@ -1,7 +1,7 @@
 // 공장 운영 에이전트 — 관찰(Observe) → 판단(Decide) → 실행(Act) 루프.
 // 전통 모드에서는 '작업반장'의 경험 기반 수동 운영(지연·임계치 기반)을 흉내낸다.
 
-import { LOC, PALLET_RAW, FG_CAP, RAW_CAP } from './sim.js';
+import { LOC, PALLET_RAW, RAW_CAP } from './sim.js';
 
 const fmtMin = (sec) => (sec >= 60 ? `${(sec / 60).toFixed(1)}분` : `${Math.round(sec)}초`);
 
@@ -13,7 +13,6 @@ export class FactoryAgent {
     this.cool = new Map();
     this.decisions = 0;
     this.supplyWait = 0;
-    this.shipWait = 0;
     this.boosted = null;
     this.disruptHandled = 0;
     this.llm = false;   // true면 감독 판단(정비·품질·흐름)을 Claude에 위임하고 반사 계층만 수행
@@ -94,28 +93,7 @@ export class FactoryAgent {
       }
     } else this.supplyWait = 0;
 
-    const shipping = s.vehicles.filter((v) => v.task === '완제품 출하').length;
-    const need = s.fgStock >= m.shipBatch || s.fgStock >= FG_CAP - 6;
-    if (need && shipping === 0) {
-      this.shipWait += 1;
-      if (this.shipWait >= m.dispatchDelay) {
-        const avail = free.filter((v) => v.idle);
-        const v = m.agentActive ? this.nearest(avail, s.loc.SINK) : avail[0];
-        if (v) {
-          s.dispatchShip(v);
-          this.shipWait = 0;
-          if (m.agentActive) {
-            this.decide('act', `완제품 출하 배차 → ${v.id}`, {
-              obs: `적재장 ${s.fgStock}/${FG_CAP}개`,
-              dec: `만재 시 라인 정지 위험 → 배치 기준(${m.shipBatch}개) 도달`,
-              act: `${v.id} 적재장→출하장 운송`,
-            });
-          } else {
-            this.decide('warn', '적재장 포화 → 출하 지시', { obs: `완제품 ${s.fgStock}개 적치`, act: `${v.id} 출하 운반` });
-          }
-        }
-      }
-    } else if (!need) this.shipWait = 0;
+    // 완제품 출하는 출하 지게차가 트럭 야드로 옮긴다 (js/shipping.js)
   }
 
   // ── 예지보전 ─────────────────
