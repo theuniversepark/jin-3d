@@ -1,6 +1,7 @@
 // 데이터 허브 — 공장 운영 데이터를 하나의 기준 시계로 동기화해 수집하고,
 // AAS 모델로 정의한 값을 OPC UA PubSub(Part 14, JSON 인코딩) NetworkMessage로 만들어 MQTT로 보내며,
 // 수집 데이터를 JSON(AAS) · XML(AAS) · RDF(Turtle) · CSV · AutomationML로 저장한다.
+import { COMMANDS, CMD_STATE } from './commands.js';
 import { ST_LABEL } from './sim.js';
 import { ROBOT_KINDS, STATION_TYPES, ZONE_MIXES, isZone } from './line.js';
 import { buildEnvironment, buildRobotEnvironment, detailCSV, toXML, toTurtle, toCSV, toAutomationML, aasId, smId, SEM, AAS_RECENT } from './aas.js';
@@ -158,6 +159,13 @@ export class DataHub {
       this.lastLogId = sim.logSeq;
       if (this.events.length > 20000) this.events.splice(0, this.events.length - 20000);
     }
+    // 상위 명령 상태 변화 (전송 → 수신 확인 → 실행 → 완료/거부) → 이벤트 + OPC UA 명령 메시지
+    if (sim.cmd?.out.length) for (const x of sim.cmd.out.splice(0)) {
+      const c = x.c, C = COMMANDS[c.code];
+      const rec = { t: this.iso(x.t), simT: x.t, id: c.id, code: c.code, name: sim.cmd.label(c), group: C.group, target: c.target, targetName: sim.cmd.targetName(c.target), arg: c.arg, issuer: c.by, reason: c.why ?? '', state: x.state, note: x.text ?? '' };
+      this.events.push({ t: rec.t, simT: x.t, source: rec.targetName, level: C.group === 'emergency' ? 'alert' : 'act', title: `명령 #${c.id} ${rec.name} · ${CMD_STATE[x.state]}`, text: [rec.issuer, rec.reason, rec.note].filter(Boolean).join(' / ') });
+      if (this.publishOn) this.enqueueCommand(rec);
+    }
     if (sim.time - this.lastT >= this.interval) this.sample();
     this.flushT += rdt;
     if (this.flushT > 0.8) { this.flushT = 0; this.flush(); }
@@ -210,6 +218,19 @@ export class DataHub {
       }],
     };
     this.queue.push({ topic: this.topic('data', 'Events'), payload: JSON.stringify(msg) });
+  }
+  // 상위 명령 메시지: 명령 상태가 바뀔 때마다 한 건 (오케스트레이터 → 셀 컨트롤러 명령과 셀의 ACK·완료 보고)
+  enqueueCommand(r) {
+    const f = (v) => ({ Value: v, SourceTimestamp: r.t });
+    const msg = {
+      MessageId: uuid(), MessageType: 'ua-data', PublisherId: PUBLISHER_ID, WriterGroupName: WRITER_GROUP,
+      Messages: [{
+        DataSetWriterId: 0, DataSetWriterName: 'Commands', SequenceNumber: ++this.seq, Timestamp: r.t, MessageType: 'ua-keyframe',
+        Payload: { CommandId: f(r.id), Code: f(r.code), Name: f(r.name), Group: f(r.group), Target: f(r.target), TargetName: f(r.targetName), Argument: f(r.arg), Issuer: f(r.issuer), Reason: f(r.reason), State: f(r.state), Note: f(r.note) },
+      }],
+    };
+    this.lastCmd = { topic: this.topic('data', 'Commands'), msg };
+    this.queue.push({ topic: this.topic('data', 'Commands'), payload: JSON.stringify(msg) });
   }
   // DataSetMetaData (retain): 필드 이름·타입·단위와 AAS 의미 정보(semanticId·서브모델 id·idShort 경로)
   enqueueMetadata() {

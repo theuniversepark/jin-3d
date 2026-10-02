@@ -1,7 +1,7 @@
 // 공장 운영 에이전트 — 관찰(Observe) → 판단(Decide) → 실행(Act) 루프.
 // 전통 모드에서는 '작업반장'의 경험 기반 수동 운영(지연·임계치 기반)을 흉내낸다.
 
-import { LOC, PALLET_RAW, FG_CAP } from './sim.js';
+import { LOC, PALLET_RAW, FG_CAP, RAW_CAP } from './sim.js';
 
 const fmtMin = (sec) => (sec >= 60 ? `${(sec / 60).toFixed(1)}분` : `${Math.round(sec)}초`);
 
@@ -68,9 +68,8 @@ export class FactoryAgent {
 
     if (projected <= m.reorderPoint) {
       this.supplyWait += 1;
-      if (s.supplyDisrupted && m.agentActive) {
-        // 공급 차질은 flowControl에서 처리
-      } else if (this.supplyWait >= m.dispatchDelay) {
+      // 공급 차질 중에도 배차한다 — AGV는 자재창고에서 출고 재개를 기다린다 (안전재고 긴급 운송은 flowControl)
+      if (this.supplyWait >= m.dispatchDelay) {
         const pool = free.length ? free : [];
         const v = m.agentActive
           ? pool.sort((a, b) => (Math.abs(a.x - LOC.WH.x) - a.battery * 0.3) - (Math.abs(b.x - LOC.WH.x) - b.battery * 0.3))[0]
@@ -172,6 +171,7 @@ export class FactoryAgent {
     if (s.supplyDisrupted && this.disruptHandled < s.supplyDisruptedUntil) {
       const remain = s.supplyDisruptedUntil - s.time;
       const act = this.expedite();
+      if (!act) return;   // 운송할 AGV가 없으면 다음 주기에 다시 시도
       s.supplyCommand?.(act);   // 오케스트레이터 판단·명령 단계로 기록
       this.decide('alert', '자재 공급 차질 감지', {
         obs: `창고 출고 중단 — 복구까지 ${fmtMin(remain)} 예상`,
@@ -212,7 +212,7 @@ export class FactoryAgent {
       s.releaseHold = false;
       this.decide('ok', '투입 재개', { obs: `재공 ${wip}개 · 정지 설비 ${down.length}대`, act: '자재 투입 재개' });
     }
-    if (src.state === 'HOLD' && !s.releaseHold) src.state = 'BUSY';
+    if (src.state === 'HOLD' && !s.releaseHold && !s.cmd.feedHold) src.state = 'BUSY';
 
     // 4) 병목 설비 사이클 최적화
     if (!this.ready('bneck', 45)) return;
@@ -239,16 +239,19 @@ export class FactoryAgent {
     }
   }
 
-  // 안전재고 긴급 투입 + 대체 발주로 차질 기간 절반 단축 (차질 1건당 1회)
+  // 안전재고를 AGV로 긴급 운송 + 대체 발주로 차질 기간 30% 단축 (차질 1건당 1회)
+  // 재고가 실제로 투입구에 도착해야 쓰이고, 차질이 길면 그래도 라인이 자재 대기에 빠진다.
   expedite() {
     const s = this.sim;
     if (!s.supplyDisrupted || this.disruptHandled >= s.supplyDisruptedUntil) return null;
+    const v = s.vehicles.filter((x) => x.idle && x.battery > 25).sort((a, b) => Math.abs(a.x - LOC.WH.x) - Math.abs(b.x - LOC.WH.x))[0];
+    if (!v) return null;
     const remain = s.supplyDisruptedUntil - s.time;
-    const add = Math.min(s.safetyStock, 40 - s.rawStock);
-    s.rawStock += add; s.safetyStock -= add;
-    s.supplyDisruptedUntil = s.time + remain * 0.5;
+    const add = Math.max(0, Math.min(s.safetyStock, RAW_CAP - s.rawStock - s.inboundRaw));
+    if (add) s.dispatchSafety(v, add);
+    s.supplyDisruptedUntil = s.time + remain * 0.7;
     this.disruptHandled = s.supplyDisruptedUntil;
-    return `안전재고 ${add}개 긴급 투입 + 대체 발주 (복구 ${fmtMin(remain * 0.5)}로 단축)`;
+    return `${add ? `안전재고 ${add}개 ${v.id} 긴급 운송 + ` : ''}대체 발주 (복구 ${fmtMin(remain * 0.7)}로 단축)`;
   }
 
   // ── 에너지 ─────────────────

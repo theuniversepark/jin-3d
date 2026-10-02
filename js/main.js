@@ -243,6 +243,27 @@ document.getElementById('btnFault').addEventListener('click', () => {
   if (st) { sim.log('warn', `[시나리오] ${st.name} 고장 주입`, {}); sim.injectFault(st); orchView.show('equipment'); }
 });
 document.getElementById('btnOrch').addEventListener('click', () => orchView.toggle());
+// 상단 비상정지: 발령 중이 아니면 전체 비상정지, 발령 중이면 리셋 명령 (어느 쪽이든 명령 콘솔을 연다)
+const btnEstop = document.getElementById('btnEstop'), cmdBanner = document.getElementById('cmdBanner');
+btnEstop.addEventListener('click', () => {
+  const K = sim.cmd;
+  K.issue(K.estopAll ? 'RESET' : 'ESTOP', 'all', null, { by: `${sim.orch.name} · 비상정지 버튼` });
+  orchView.show('cmd');
+});
+function updateCmdUI() {
+  const K = sim.cmd, pend = K.active().find((c) => c.code === 'ESTOP' || c.code === 'RESET');
+  btnEstop.textContent = K.estopAll ? '🔄 비상정지 리셋' : '🛑 비상정지';
+  btnEstop.classList.toggle('armed', K.estopAll);
+  const sts = sim.processing.filter((st) => st.cmd?.estop);
+  const msg = K.estopAll ? ['🛑 비상정지 발령 — 정밀조립Zone 전체 정지 (로봇·AMR·이동로봇 정지) · 리셋 명령으로 재가동', 'bad']
+    : sts.length ? [`🛑 셀 비상정지 — ${sts.map((st) => st.name).join(', ')} · 리셋 필요`, 'bad']
+    : sim.processing.some((st) => st.cmd?.check > 0) ? ['🔄 비상정지 해제 — 셀 자가진단 중', 'info']
+    : K.pstopAll ? ['✋ 보호정지 — 정밀조립Zone 전체 감속 정지 · 재개 명령 대기', 'warn']
+    : K.evac ? ['🏃 이동로봇 대피 중 — 운전 재개 명령으로 복귀', 'warn']
+    : pend ? [`📡 ${K.label(pend)} 명령 전송 중…`, 'info'] : null;
+  cmdBanner.hidden = !msg;
+  if (msg) { cmdBanner.textContent = msg[0]; cmdBanner.className = `cmd-banner ${msg[1]}`; }
+}
 document.getElementById('btnEvent').addEventListener('click', () => {
   const ev = camWall.injectRandom();
   if (ev) { sim.log('warn', `[시나리오] 현장 이벤트 발생 · ${ev.label}`, { obs: '아직 아무도 인지하지 못한 상태 — 로봇 카메라 영상의 AI 추론으로 감지되면 자율 대응합니다' }); orchView.show('field'); }
@@ -311,6 +332,7 @@ function renderData() {
         <span>발행</span><b><label class="chk"><input type="checkbox" id="dhPub" ${hub.publishOn ? 'checked' : ''}/> 수집할 때마다 발행</label> · 보낸 메시지 ${mq.sent.toLocaleString()}개${ms ? ` · ${kb(ms.bytes)}` : ''}${ms?.bridgeUrl ? ` · 외부 브로커 ${escH(ms.bridgeUrl)} ${ms.bridgeConnected ? '연결됨' : '미연결'}` : ''}</b>
         <span>데이터 토픽</span><b><code>opcua/json/data/${PUBLISHER_ID}/${WRITER_GROUP}/&lt;자산 id&gt;</code> (ua-data · ua-keyframe)</b>
         <span>메타데이터 토픽</span><b><code>opcua/json/metadata/${PUBLISHER_ID}/${WRITER_GROUP}/&lt;자산 id&gt;</code> (ua-metadata · retain, AAS semanticId 포함)</b>
+        <span>상위 명령</span><b><code>opcua/json/data/${PUBLISHER_ID}/${WRITER_GROUP}/Commands</code> (명령 상태가 바뀔 때마다: 전송 · 수신 확인 · 실행 · 완료/거부)</b>
         <span>이벤트 · AAS 모델</span><b><code>opcua/json/data/${PUBLISHER_ID}/${WRITER_GROUP}/Events</code> · <code>aas/${PUBLISHER_ID}/environment</code> (retain)</b></div>
         <details><summary>마지막 NetworkMessage — <code>${escH(hub.lastMsg?.topic ?? '')}</code></summary><pre class="dh-pre">${escH(preview)}</pre></details></section>
       <section class="span2"><h4>💾 저장 (현재까지 수집한 데이터)</h4>
@@ -441,12 +463,12 @@ const alarmBtns = { fault: document.getElementById('btnFault'), supply: document
 function updateAlarmButtons() {
   const n = {
     fault: sim.processing.filter((st) => st.state === 'DOWN').length,
-    supply: sim.supplyDisrupted ? 1 : 0,
+    supply: sim.supplyAlarm ? 1 : 0,
     event: (sim.fieldEvents ?? []).filter((e) => !e.cleared).length,
   };
   for (const [k, b] of Object.entries(alarmBtns)) {
     b.classList.toggle(`alarm-${k}`, n[k] > 0);
-    if (n[k] > 0) b.dataset.count = k === 'supply' ? `${Math.ceil((sim.supplyDisruptedUntil - sim.time) / 60)}분` : `${n[k]}건`;
+    if (n[k] > 0) b.dataset.count = k === 'supply' ? (sim.supplyDisrupted ? `${Math.ceil((sim.supplyDisruptedUntil - sim.time) / 60)}분` : '복구 중') : `${n[k]}건`;
     else delete b.dataset.count;
   }
 }
@@ -470,7 +492,7 @@ function frame() {
   view.update(rdt, running, speed);
   controls.update();
   uiTimer += rdt; screenTimer += rdt;
-  if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); updateAlarmButtons(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
+  if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); updateAlarmButtons(); updateCmdUI(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
   robotTimer += rdt;
   if (view.telemetry && robotTimer > 0.12) { robotTimer = 0; ui.renderRobot(view.telemetry.snapshot(), hub.robotCounts(view.telemetry)); }
   if (view.telemetry && ui.robotMode) placeRobotPanel();

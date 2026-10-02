@@ -19,6 +19,7 @@ export const INCIDENT_TYPES = {
   supply: { label: '자재 공급 차질', icon: '⛔' },
   field: { label: '현장 이벤트', icon: '⚠' },
   quality: { label: '공정 편차', icon: '◎' },
+  command: { label: '상위 명령', icon: '📡' },
   parts: { label: '부품 선반 결품', icon: '▦' },
 };
 

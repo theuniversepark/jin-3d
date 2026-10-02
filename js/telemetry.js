@@ -65,7 +65,7 @@ export class RobotTelemetry {
       const st = R.st, busy = st.state === 'BUSY', p = st.progress ?? 0;
       const tool = TOOL[st.type];
       const force = tool ? tool.force(busy ? p : 0) : { label: '파지력', value: busy ? 30 : 0, unit: 'N' };
-      put('State', '상태', null, busy ? 'Operating' : st.state === 'DOWN' || st.state === 'MAINT' ? 'Stopped' : 'Idle', 'string');
+      put('State', '상태', null, busy ? 'Operating' : st.state === 'ESTOP' ? 'EmergencyStop' : st.state === 'PSTOP' ? 'ProtectiveStop' : st.state === 'DOWN' || st.state === 'MAINT' ? 'Stopped' : 'Idle', 'string');
       put('CycleProgress', '작업 진행률', '%', busy ? p * 100 : 0);
       put('TcpX', 'TCP X', 'mm', this.tcp?.x); put('TcpY', 'TCP Y', 'mm', this.tcp?.y); put('TcpZ', 'TCP Z', 'mm', this.tcp?.z);
       put('TcpSpeed', 'TCP 속도', 'mm/s', this.tcp?.speed);
@@ -251,7 +251,7 @@ export class RobotTelemetry {
       const safety = !cobot ? null : near < 1.0 ? ['보호 정지', 'bad'] : near < 2.0 ? ['협동 감속 50%', 'warn'] : ['정상 속도 100%', 'ok'];
       const vib = 0.6 + (100 - st.health) * 0.045 + (busy ? 0.4 : 0);
       out.title = `${st.name} · ${ROBOT_LABEL[r.kind]} ${R.view ? '' : `#${this.ref.idx + 1}`}`;
-      out.status = [['상태', busy ? `가동 (진행 ${(p * 100).toFixed(0)}%)` : st.state === 'DOWN' ? '설비 고장 — 정지' : st.state === 'MAINT' ? '정비 중 — 정지' : '대기'], ['정격 가반하중', `${r.payload} kg`]];
+      out.status = [['상태', busy ? `가동 (진행 ${(p * 100).toFixed(0)}%)` : st.state === 'DOWN' ? '설비 고장 — 정지' : st.state === 'MAINT' ? '정비 중 — 정지' : st.state === 'ESTOP' ? '비상정지 — 동력 차단' : st.state === 'PSTOP' ? '보호정지 — 자세 유지' : st.state === 'CHECK' ? '자가진단 중' : st.state === 'CSTOP' ? '사이클 정지' : '대기'], ['정격 가반하중', `${r.payload} kg`]];
       const xyz = (p) => `${p.x.toFixed(0)} / ${p.y.toFixed(0)} / ${p.z.toFixed(0)} mm`;
       out.sections.push({ title: 'TCP (툴 끝점, 베이스 기준)', rows: !this.tcp ? [] : this.tcp2 ? [
         ['왼팔 X / Y / Z', xyz(this.tcp)], ['왼팔 TCP 속도', `${this.tcp.speed.toFixed(0)} mm/s`],

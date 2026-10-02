@@ -93,6 +93,10 @@ function makeStackLight() {
     const blink = Math.sin(t * 8) > 0;
     const on = [0, 0, 0];
     if (state === 'BUSY') on[0] = 1;
+    else if (state === 'ESTOP') on[2] = 1;                                  // 비상정지: 적색 점등 유지
+    else if (state === 'PSTOP') on[1] = 1;                                  // 보호정지: 황색 점등 유지
+    else if (state === 'CSTOP') on[1] = Math.sin(t * 3) > 0 ? 0.9 : 0.15;   // 사이클 정지: 황색 느린 점멸
+    else if (state === 'CHECK') on[0] = blink ? 1 : 0.15;                   // 자가진단: 녹색 점멸
     else if (state === 'DOWN') on[2] = blink ? 1 : 0.1;
     else if (state === 'MAINT') { on[1] = blink ? 1 : 0.1; on[2] = blink ? 0.1 : 0.8; }
     else if (state === 'BLOCKED' || state === 'FULL' || state === 'HOLD') on[1] = blink ? 1 : 0.2;
@@ -349,6 +353,19 @@ export function blinkAlarmFx(g, on, color, t) {
   const k = REDUCED_MOTION ? 1 : 0.35 + 0.65 * (Math.sin(t * Math.PI * 2 / 0.9) > 0 ? 1 : 0.15);
   g.userData.mats.forEach((m, i) => { m.color.setHex(color); m.opacity = g.userData.base[i] * k; });
   g.userData.beacon.scale.setScalar(REDUCED_MOTION ? 1 : 0.85 + 0.3 * k);
+}
+// 설비·벽에 가려지지 않는 경고 표지 (Sprite)
+export function makeSignSprite(text, hex, width = 6) {
+  const c = document.createElement('canvas'); c.width = 640; c.height = 128;
+  const x = c.getContext('2d');
+  x.fillStyle = 'rgba(12,14,18,0.88)'; x.beginPath(); x.roundRect(4, 4, 632, 120, 26); x.fill();
+  x.lineWidth = 8; x.strokeStyle = hex; x.stroke();
+  x.fillStyle = hex; x.font = '800 54px "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(text, 320, 68);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, toneMapped: false }));
+  sp.scale.set(width, width / 5, 1); sp.renderOrder = 10;
+  return sp;
 }
 export const ALARM_COLOR = { fault: 0xff3030, supply: 0xff8a1f, event: 0xffc21f };
 
@@ -873,12 +890,14 @@ export class FactoryView {
     this.whAlarm = put(makeAlarmFx(12.4, 4.6, 5.2), -26, 0, -16.5, r);
     // 자재 창고 랙
     const rack = new THREE.Group(); put(rack, -26, 0, -16.5, r);
+    this.whStock = []; this.whOut = false;
+    this.whSign = put(makeSignSprite('⛔ 출고 중단 · 공급 차질', '#ff8a1f', 7.5), -26, 7.4, -15.5, r); this.whSign.visible = false;
     for (const x of [-5, -2.5, 0, 2.5, 5]) for (const z of [-1, 1]) put(box(0.12, 5, 0.12, MAT.accent), x, 2.5, z, rack);
     for (const y of [0.3, 1.9, 3.5]) {
       put(box(10.2, 0.1, 2.1, MAT.steel), 0, y, 0, rack);
       for (const x of [-3.75, -1.25, 1.25, 3.75]) {
         put(box(2.0, 0.12, 1.6, MAT.pallet), x, y + 0.11, 0, rack);
-        put(box(1.8, 0.9, 1.4, MAT.raw), x, y + 0.62, 0, rack);
+        this.whStock.push(put(box(1.8, 0.9, 1.4, MAT.raw), x, y + 0.62, 0, rack));
       }
     }
     // 출하 대기
@@ -1279,11 +1298,17 @@ export class FactoryView {
     for (const sv of this.stationViews) this.animateStation(sv, t, rdt, dts);
     // 경보 깜빡임: 고장 설비(빨강), 공급 차질 시 자재창고·투입구(주황) — 해결되면 꺼진다
     for (const sv of this.stationViews) {
-      const kind = sv.st.state === 'DOWN' ? 'fault' : sv.st.type === 'source' && sim.supplyDisrupted ? 'supply' : null;
+      const s0 = sv.st.state;
+      const kind = s0 === 'DOWN' || s0 === 'ESTOP' ? 'fault' : s0 === 'PSTOP' ? 'event' : sv.st.type === 'source' && sim.supplyAlarm ? 'supply' : null;
       blinkAlarmFx(sv.alarm, !!kind, ALARM_COLOR[kind] ?? 0, t);
       sv.el.classList.toggle('alarm-fault', kind === 'fault'); sv.el.classList.toggle('alarm-supply', kind === 'supply');
     }
-    blinkAlarmFx(this.whAlarm, sim.supplyDisrupted, ALARM_COLOR.supply, t);
+    blinkAlarmFx(this.whAlarm, sim.supplyAlarm, ALARM_COLOR.supply, t);
+    // 출고 중단 동안 창고 랙은 비어 보이고 '출고 중단' 표지가 깜빡인다
+    const out = sim.supplyDisrupted;
+    if (out !== this.whOut) { this.whOut = out; this.whStock.forEach((b, i) => { b.visible = !out || i % 6 === 0; }); }
+    this.whSign.visible = out;
+    if (out) this.whSign.material.opacity = REDUCED_MOTION || Math.sin(t * Math.PI * 2 / 0.9) > 0 ? 1 : 0.35;
 
     // 불량 배출 연출
     for (let i = this.flyers.length - 1; i >= 0; i--) {
@@ -1442,7 +1467,9 @@ export class FactoryView {
     const busy = st.state === 'BUSY';
     sv.light.userData.set(st.state, t);
     const p = st.progress ?? 0;
-    if (parts.robots) for (const r of parts.robots) r.anim(busy, t + r.phase, p);
+    // 비상정지·보호정지: 로봇이 그 자세 그대로 멈춘다
+    const frozen = st.state === 'ESTOP' || st.state === 'PSTOP';
+    if (parts.robots && !frozen) for (const r of parts.robots) r.anim(busy, t + r.phase, p);
     // AMMR: 작업 위치 ↔ 부품 선반 왕복 (회전 → 주행 → 양팔 피킹 → 회전 → 복귀)
     if (st.ammr && parts.robots) parts.robots.forEach((r, i) => {
       const u = st.ammr[i]; if (!u || !r.slot) return;
@@ -1567,6 +1594,10 @@ export class FactoryView {
       sv.el.querySelector('.nm span').textContent = st.name;
       const chip = sv.el.querySelector('.chip');
       chip.textContent = ST_LABEL[st.state] ?? st.state;
+      // 상위 명령으로 걸린 속도 제한·오버라이드
+      const k = st.cmd;
+      if (k?.safe) chip.textContent += ' · 감속 25%';
+      else if (k && k.override !== 1) chip.textContent += ` · 속도 ${Math.round(k.override * 100)}%`;
       chip.className = 'chip s-' + st.state;
       const hp = sv.el.querySelector('.hp');
       if (st.standby) {
@@ -1602,7 +1633,7 @@ export class FactoryView {
     });
     this.sim.processing.forEach((st, i) => {
       const x = 28 + i * 196;
-      const col = { BUSY: '#3ddc84', DOWN: '#ff5a5a', MAINT: '#f5b82e', BLOCKED: '#f5b82e' }[st.state] ?? '#5b7080';
+      const col = { BUSY: '#3ddc84', DOWN: '#ff5a5a', ESTOP: '#ff5a5a', PSTOP: '#f5b82e', MAINT: '#f5b82e', BLOCKED: '#f5b82e' }[st.state] ?? '#5b7080';
       g.fillStyle = col; g.fillRect(x, 200, 180, 10);
       g.fillStyle = '#cfe6f0'; g.font = '20px sans-serif'; g.fillText(st.name.slice(0, 9), x, 238);
       g.fillStyle = '#7fb8cc'; g.font = '18px sans-serif'; g.fillText(`건강도 ${st.health.toFixed(0)}%`, x, 264);

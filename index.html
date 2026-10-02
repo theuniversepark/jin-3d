@@ -25,6 +25,7 @@
       <button data-mode="smart" class="on">자동화</button><i class="seg-arrow">›</i>
       <button data-mode="dark">피지컬AI</button>
     </div>
+    <button id="btnEstop" class="estop" title="상위 긴급 명령 — 정밀조립Zone 전체 비상정지 (발령 중에는 리셋 명령)">🛑 비상정지</button>
     <div class="timectl">
       <button id="playBtn" class="icon" title="일시정지/재생">❚❚</button>
       <div class="seg small" id="speedSeg">
@@ -78,6 +79,7 @@
   </aside>
 
   <div class="panel detail hidden" id="detail"></div>
+  <div class="cmd-banner" id="cmdBanner" role="status" aria-live="assertive" hidden></div>
   <section class="panel orch hidden" id="orchPanel" aria-label="오케스트레이터 인시던트 흐름"></section>
 
   <section class="panel dock" id="lineDock">
@@ -115,7 +117,7 @@
     <button id="btnSupply" title="자재 창고 출고를 10분간 중단합니다">⛔ 자재 공급 차질</button>
     <button id="btnEvent" class="dark-only" title="누유·이물질·무단 진입·연기 의심 중 하나를 로봇 카메라 앞에 발생시킵니다 — 로봇 영상 AI 추론으로 감지해 자율 대응합니다">⚠ 현장 이벤트</button>
     <button id="btnLabels" class="on">🏷 라벨</button>
-    <button id="btnOrch" title="설비 고장·공급 차질·현장 이벤트가 셀 자체 조치 → 상위 보고 → 오케스트레이터 판단·명령 → 조치로 처리되는 흐름">🛰 오케스트레이터 <b class="badge" id="orchBadge" hidden></b></button>
+    <button id="btnOrch" title="설비 고장·공급 차질·현장 이벤트의 처리 흐름과, 셀 현장으로 보내는 긴급·제어 명령 콘솔">🛰 오케스트레이터 <b class="badge" id="orchBadge" hidden></b></button>
     <button id="btnData" title="AAS · OPC UA PubSub over MQTT 데이터 연동과 파일 저장">📡 데이터 연동</button>
     <button id="btnConcept">🧭 진화 컨셉</button>
     <button id="btnCompare" class="primary">📊 3단계 8시간 비교</button>
