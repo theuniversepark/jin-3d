@@ -51,7 +51,7 @@ function buildMenu() {
       submenu: [
         { role: 'about', label: `${APP_NAME} 정보` },
         { type: 'separator' },
-        { label: 'Claude API 키 설정…', accelerator: 'Cmd+,', click: openSettings },
+        { label: 'Agent API 키 설정…', accelerator: 'Cmd+,', click: openSettings },
         { type: 'separator' },
         { role: 'hide', label: `${APP_NAME} 가리기` },
         { role: 'hideOthers', label: '기타 가리기' },

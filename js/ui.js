@@ -76,8 +76,8 @@ export class UI {
 
     $('agentCount').textContent = this.agent.decisions;
     this.renderEngine();
-    $('thought').innerHTML = this.agent.llm
-      ? `<b>반사 계층(규칙)</b> · AGV 배차·충전·절전 자동 처리<br><b>감독 계층(Claude)</b> · 정비·품질·병목·투입·공급 차질 판단`
+    $('thought').innerHTML = this.llm?.enabled
+      ? `<b>운영</b> · 추론 기반 에이전트가 정비·품질·흐름·물류를 계속 판단합니다 — ${this.agent.lastThought}<br><b>대화</b> · 입력창 지시를 해석해 공정에 반영합니다 (예: 포장셀 속도 75% · 도어트림 2:1 · e-axle 조립셀 예방정비)`
       : sim.mode.agentActive
       ? `<b>현재 판단</b> · ${this.agent.lastThought}`
       : '<b>수동 운영</b> · 설비 데이터가 수집되지 않아 고장·자재 부족을 사람이 발견한 뒤에 대응합니다.';
@@ -93,7 +93,7 @@ export class UI {
       const d = document.createElement('div');
       d.className = 'entry ' + l.level;
       const row = (tag, txt) => (txt ? `<div class="r"><em>${tag}</em>${esc(txt)}</div>` : '');
-      const tags = l.level === 'llm' ? ['호출 사유', 'Claude', '결과'] : l.level === 'chat' ? ['운영자'] : ['관찰', '판단', '실행'];
+      const tags = l.level === 'llm' ? ['지시', 'Agent', '결과'] : l.level === 'chat' ? ['운영자'] : l.level === 'dialog' ? ['지시', '해석', '반영'] : ['관찰', '판단', '실행'];
       d.innerHTML = `<div class="h"><span>${esc(l.title)}</span><time>${fmtClock(l.t)}</time></div>${row(tags[0], l.obs)}${row(tags[1] ?? '판단', l.dec)}${row(tags[2] ?? '실행', l.act)}`;
       box.prepend(d);
     }
@@ -105,22 +105,21 @@ export class UI {
     const llm = this.llm, sim = this.sim;
     if (!llm || !sim) return;
     const seg = $('engineSeg');
-    const canLLM = llm.available && sim.mode.agentActive;
+    const canLLM = sim.mode.agentActive;   // 대화 기반: 내장 해석기로 언제나 사용 (Claude는 연결되어 있으면 보조)
     seg.querySelector('[data-engine="llm"]').disabled = !canLLM;
     seg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.engine === 'llm') === llm.enabled));
     document.body.classList.toggle('llm-on', llm.enabled);
-    $('agentName').textContent = llm.enabled ? 'Claude 운영 에이전트' : this.agent.name;
-    $('agentAvatar').textContent = llm.enabled ? 'C' : sim.mode.agentActive ? 'AI' : '반장';
+    $('agentName').textContent = llm.enabled ? `${this.agent.name} · 대화 기반` : this.agent.name;
+    $('agentAvatar').textContent = llm.enabled ? '💬' : sim.mode.agentActive ? 'AI' : '반장';
     $('chatInput').disabled = $('chatSend').disabled = !llm.enabled;
     const st = $('llmStatus');
     st.classList.toggle('busy', llm.inFlight);
     let msg;
-    if (!sim.mode.agentActive) msg = '레거시 공장은 데이터 수집이 없어 LLM 에이전트를 쓸 수 없습니다';
-    else if (!llm.available) msg = window.JIN3D_SHARED ? '공유 페이지에서는 Claude 연동을 쓸 수 없어 규칙 기반 에이전트로 운영합니다'
-      : window.JIN3D_NO_SERVER ? '웹 버전에서는 Claude 연동을 쓸 수 없어 규칙 기반 에이전트로 운영합니다 (맥 앱·npm start에서 사용)'
-      : window.jin3d ? 'Claude 사용 불가 — ⚙ 설정(⌘,)에서 API 키를 입력하세요' : 'Claude 사용 불가 — npm start로 실행하고 ANTHROPIC_API_KEY를 설정하세요';
-    else if (!llm.enabled) msg = `${llm.model} 연결 가능`;
-    else msg = `${llm.inFlight ? '' : '대기 · '}${llm.status || '준비'} · 호출 ${llm.calls}회 · 약 $${llm.costUSD.toFixed(3)}`;
+    const helper = llm.available ? `Agent 연결됨` : '내장 해석기 (Agent 미연결)';
+    if (!sim.mode.agentActive) msg = '레거시 공장은 데이터 수집이 없어 대화 기반을 쓸 수 없습니다';
+    else if (!llm.enabled) msg = `대화 기반: 추론 기반 운영 + 입력 지시 해석·반영 · ${helper}`;
+    else if (llm.inFlight || llm.calls) msg = `${llm.inFlight ? '' : '대기 · '}${llm.status || '준비'} · Agent 해석 ${llm.calls}회 · 약 $${llm.costUSD.toFixed(3)}`;
+    else msg = `대화 기반 · 입력창 지시를 공정에 반영합니다 · ${helper}`;
     st.innerHTML = (llm.inFlight ? '<span class="spin"></span>' : '') + esc(msg);
   }
 

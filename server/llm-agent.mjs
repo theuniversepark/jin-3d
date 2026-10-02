@@ -23,8 +23,11 @@ const SYSTEM_PROMPT = `당신은 제조 라인의 운영을 맡은 AI 운영 에
 - 하류 설비가 멈춰 재공이 쌓이면 투입을 잠시 보류(hold)하고, 복구되면 해제하십시오. 보류를 잊고 남겨 두면 라인이 굶습니다.
 - 자재 공급 차질(supply_disrupted_remaining_s > 0)이 생기면 expedite_supply로 안전재고를 투입하고 대체 공급처에 발주할 수 있습니다(차질 1건당 1회만 효과가 있음).
 
-## 역할 분담
-AGV 배차, 충전, 절전은 반사 계층(규칙)이 자동으로 처리합니다. 당신은 정비·품질·병목·투입·공급 차질 같은 감독 판단에 집중하고, 운영자 지시가 있으면 그에 답하고 따르십시오. 운영자 지시가 안전하지 않거나 생산에 해롭다면 이유를 설명하고 대안을 제시하십시오.
+## 역할 분담 (대화 기반 모드)
+공장은 추론 기반 에이전트가 계속 운영합니다(정비·품질·병목·투입·공급 차질·AGV 배차·충전·절전). 당신은 운영자가 입력창에 쓴 지시 중 내장 해석기가 알아듣지 못한 문장만 받습니다. 그 지시를 해석해 도구로 공정에 반영하고, 질문이면 스냅샷을 근거로 답하십시오. 지시와 관계없는 운영 조치는 하지 마십시오.
+- 셀 정지·속도·투입·대피·재보정·예방정비 지시는 issue_command로 보냅니다. code: ESTOP 비상정지, RESET 비상정지 해제·리셋, SAFE_STOP 보호정지, SAFE_SPEED 안전 감속 25%, SAFE_SPEED_OFF 감속 해제, EVACUATE 이동로봇 대피(target=all), EVAC_END 대피 해제(target=all), CYCLE_STOP 사이클 정지, RESUME 운전 재개, SPEED 속도 오버라이드(arg=30~120 %), FEED_HOLD 투입 정지(target=all), FEED_RESUME 투입 재개(target=all), RECALIB 자율 재보정(셀만), MAINT 예방정비(셀만). arg는 SPEED에만 쓰고 나머지는 null.
+- 혼류 비율(정밀조립Zone) 지시는 set_mix로 보냅니다: 1:1, 2:1(도어트림이 두 배), 1:2(e-axle이 두 배), dt(도어트림만), ea(e-axle만).
+- 지시가 모호하면(대상 셀을 알 수 없는 등) 도구를 쓰지 말고 무엇이 필요한지 물으십시오. 안전하지 않거나 생산에 해롭다면 이유를 설명하고 대안을 제시하십시오.
 
 ## 작업 방식
 1. 스냅샷을 검토하고 지금 꼭 필요한 조치만 도구로 실행합니다. 필요한 조치가 없으면 도구를 호출하지 않아도 됩니다. 이미 request(정비 요청)가 걸려 있는 설비에 중복 지시하지 마십시오.
@@ -59,6 +62,16 @@ export function buildTools(stationIds) {
     input_schema: obj({ hold: { type: 'boolean' }, reason }),
   },
   {
+    name: 'issue_command',
+    description: '운영자 지시를 셀 현장 긴급·제어 명령으로 보낸다. target은 all(정밀조립Zone 전체) 또는 설비 ID. arg는 SPEED일 때 속도 %(30~120), 그 밖에는 null.',
+    input_schema: obj({ code: { type: 'string', enum: ['ESTOP', 'RESET', 'SAFE_STOP', 'SAFE_SPEED', 'SAFE_SPEED_OFF', 'EVACUATE', 'EVAC_END', 'CYCLE_STOP', 'RESUME', 'SPEED', 'FEED_HOLD', 'FEED_RESUME', 'RECALIB', 'MAINT'] }, target: { type: 'string', enum: ['all', ...stationIds] }, arg: { anyOf: [{ type: 'number' }, { type: 'null' }] }, reason }),
+  },
+  {
+    name: 'set_mix',
+    description: '정밀조립Zone 혼류 비율(도어트림 : e-axle)을 바꾼다. 다음 투입부터 적용된다.',
+    input_schema: obj({ mix: { type: 'string', enum: ['1:1', '2:1', '1:2', 'dt', 'ea'] }, reason }),
+  },
+  {
     name: 'expedite_supply',
     description: '자재 공급 차질 중일 때 안전재고를 긴급 투입하고 대체 공급처에 발주해 차질 기간을 절반으로 줄인다.',
     input_schema: obj({ reason }),
@@ -87,6 +100,16 @@ function validate(name, input, snap, pending) {
       if (!(input.seconds >= 5 && input.seconds <= 20)) return '투입 간격은 5~20초';
       return null;
     case 'set_release_hold':
+      return null;
+    case 'issue_command': {
+      const cellOnly = ['RECALIB', 'MAINT'], allOnly = ['EVACUATE', 'EVAC_END', 'FEED_HOLD', 'FEED_RESUME'];
+      if (cellOnly.includes(input.code) && input.target === 'all') return `${input.code}는 셀을 지정해야 함`;
+      if (allOnly.includes(input.code) && input.target !== 'all') return `${input.code}는 target=all만 가능`;
+      if (input.code === 'SPEED' && !(input.arg >= 30 && input.arg <= 120)) return '속도는 30~120%';
+      return null;
+    }
+    case 'set_mix':
+      if (!snap.product_mix) return '정밀조립Zone 라인이 아님';
       return null;
     case 'expedite_supply':
       if (!(snap.material.supply_disrupted_remaining_s > 0)) return '현재 공급 차질이 없음';

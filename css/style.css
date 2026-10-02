@@ -515,3 +515,5 @@ table.rb-j .tq i { display: block; height: 100%; }
 @media (max-width: 1100px) { .cmd-b { grid-template-columns: 1fr; overflow-y: auto; } }
 @media (prefers-reduced-motion: reduce) { .topbar .estop.armed, .cmd-banner.bad { animation: none; } }
 
+.entry.dialog { border-left-color: #2bd4c6; background: rgba(43, 212, 198, 0.08); }
+.entry.dialog .r { white-space: pre-line; }

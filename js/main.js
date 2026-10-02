@@ -74,6 +74,8 @@ const ui = new UI();
 const llm = new LLMController();
 ui.llm = llm;
 llm.onChange = () => { ui.renderEngine(); designer?.onLLMChange(); };
+// 대화 지시로 혼류 비율이 바뀌면 라인 설정·Zone 카드를 맞춘다 (재시작하지 않고 다음 투입부터 적용)
+llm.onMix = (key) => { currentLine = lines.zone = { ...currentLine, mix: key }; saveLines(); renderZoneCard(); designer?.sync(); };
 let sim, agent;
 let modeKey = 'smart', speed = 3, running = true, labelsOn = true;
 const SEED = 20261001;
@@ -278,8 +280,9 @@ document.getElementById('btnLabels').addEventListener('click', (e) => {
 document.getElementById('engineSeg').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
   llm.setEnabled(b.dataset.engine === 'llm');
-  sim.log('info', llm.enabled ? '감독 계층을 Claude LLM으로 전환' : '규칙 기반 에이전트로 전환', {
-    obs: llm.enabled ? '정비·품질·병목·투입·공급 차질 판단을 Claude가 담당, AGV·충전·절전은 규칙 유지' : '모든 판단을 규칙 엔진이 수행',
+  sim.log('info', llm.enabled ? '대화 기반으로 전환' : '추론 기반으로 전환', {
+    obs: llm.enabled ? '추론 기반 에이전트가 계속 운영하고, 입력창 지시를 해석해 공정에 반영' : '추론 기반 에이전트가 모든 판단을 수행',
+    act: llm.enabled ? `해석: 내장 해석기${llm.available ? ' + Agent 보조' : ''}` : '',
   });
 });
 document.getElementById('pauseThink').addEventListener('change', (e) => { llm.pauseWhileThinking = e.target.checked; });
@@ -535,8 +538,8 @@ if (bridge?.isApp) {
   const showStatus = (st, msg) => {
     statusEl.className = 'key-status ' + (msg ? 'err' : st.hasKey ? 'ok' : '');
     statusEl.textContent = msg || (st.hasKey
-      ? `키 설정됨 (${st.source === 'keychain' ? '키체인에 저장' : '환경변수'}) — Claude LLM 에이전트를 쓸 수 있습니다`
-      : '키가 없습니다 — 규칙 기반 에이전트만 사용 가능');
+      ? `키 설정됨 (${st.source === 'keychain' ? '키체인에 저장' : '환경변수'}) — 대화 기반 Agent를 쓸 수 있습니다`
+      : '키가 없습니다 — 추론 기반 에이전트만 사용 가능');
   };
   const open = async () => { modal.classList.remove('hidden'); input.value = ''; showStatus(await bridge.keyStatus()); input.focus(); };
   const afterChange = async (res) => {

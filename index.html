@@ -35,7 +35,7 @@
         <button data-speed="30">30×</button>
       </div>
       <div class="clock" id="clock">08:00:00</div>
-      <button id="btnSettings" class="icon app-only" title="Claude API 키 설정 (⌘,)">⚙</button>
+      <button id="btnSettings" class="icon app-only" title="Agent API 키 설정 (⌘,)">⚙</button>
     </div>
   </header>
 
@@ -63,17 +63,17 @@
     </div>
     <div class="engine">
       <div class="seg small" id="engineSeg">
-        <button data-engine="rule" class="on">규칙 기반</button>
-        <button data-engine="llm">Claude LLM</button>
+        <button data-engine="rule" class="on">추론 기반</button>
+        <button data-engine="llm">대화 기반</button>
       </div>
-      <label class="chk" title="Claude 응답을 기다리는 동안 시뮬레이션을 멈춥니다"><input type="checkbox" id="pauseThink" checked /> 응답 대기 시 일시정지</label>
+      <label class="chk" title="Agent 응답을 기다리는 동안 시뮬레이션을 멈춥니다"><input type="checkbox" id="pauseThink" checked /> 응답 대기 시 일시정지</label>
     </div>
     <div class="llm-status" id="llmStatus"></div>
     <div class="thought" id="thought"></div>
     <div class="loop"><span>관찰</span>→<span>판단</span>→<span>실행</span></div>
     <div class="log" id="log"></div>
     <form class="chatbox" id="chatForm" autocomplete="off">
-      <input id="chatInput" placeholder="Claude에게 지시·질문 (예: 도장 설비 상태 어때?)" disabled />
+      <input id="chatInput" placeholder="공정 지시 (예: 포장셀 속도 75%, 도어트림 2:1, e-axle 조립셀 예방정비)" disabled />
       <button type="submit" id="chatSend" disabled>전송</button>
     </form>
   </aside>
@@ -147,7 +147,7 @@
 
   <div class="modal hidden" id="settings">
     <div class="modal-card small">
-      <div class="modal-h"><h2>Claude API 키 설정 <small>키는 macOS 키체인으로 암호화되어 이 Mac에만 저장되며, 화면(렌더러)으로는 전달되지 않습니다.</small></h2><button id="closeSettings">✕</button></div>
+      <div class="modal-h"><h2>Agent API 키 설정 <small>키는 macOS 키체인으로 암호화되어 이 Mac에만 저장되며, 화면(렌더러)으로는 전달되지 않습니다.</small></h2><button id="closeSettings">✕</button></div>
       <div class="key-status" id="keyStatus"></div>
       <form id="keyForm" autocomplete="off">
         <input type="password" id="keyInput" placeholder="sk-ant-..." spellcheck="false" />

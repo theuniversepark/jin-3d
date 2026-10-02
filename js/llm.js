@@ -1,8 +1,8 @@
-// Claude(LLM) 감독 계층 — 언제 호출할지 판단하고, 스냅샷을 보내고, 돌아온 조치를 시뮬레이션에 적용한다.
-// 반사 계층(AGV 배차·충전·절전)은 계속 규칙 기반 FactoryAgent가 처리한다.
+// 대화 기반 운영 컨트롤러 — 추론 기반 에이전트(FactoryAgent)가 정비·품질·흐름·물류를 계속 운영하고,
+// 입력창의 운영자 지시만 해석해 공정에 반영한다. 내장 해석기(js/dialog.js)가 먼저 처리하고,
+// 해석하지 못한 문장은 Claude가 연결되어 있을 때 Claude가 해석해 같은 조치(도구)로 돌려준다.
+import { parseInstruction, applyAction, DIALOG_EXAMPLES } from './dialog.js';
 
-const PERIOD = 300;          // 정기 점검 주기 (시뮬레이션 초)
-const RISK_TRIGGER = 0.15;   // 10분 고장확률이 이 값을 넘으면 즉시 호출
 const HISTORY = 12;
 
 const fmt = (t) => {
@@ -37,16 +37,14 @@ export class LLMController {
   attach(sim, agent) {
     this.sim = sim; this.agent = agent;
     this.history = []; this.queue = null;
-    this.lastPeriodic = 0; this.lastFailures = 0; this.wasDisrupted = false;
-    this.riskNotified = new Map();
     this.gen = (this.gen ?? 0) + 1;     // 모드 전환 시 이전 응답 무시
     this.setEnabled(this.enabled && sim.mode.agentActive);
   }
 
+  // 대화 기반은 Claude 연결 없이도 쓸 수 있다 (내장 해석기). 운영 판단은 언제나 추론 기반 에이전트가 한다
   setEnabled(on) {
-    this.enabled = on && this.available && this.sim?.mode.agentActive;
-    if (this.agent) this.agent.llm = this.enabled;
-    if (this.enabled) { this.lastPeriodic = this.sim.time; this.request('LLM 감독 모드 시작 — 초기 상황 점검', false); }
+    this.enabled = !!(on && this.sim?.mode.agentActive);
+    if (this.agent) this.agent.llm = false;
     this.onChange?.();
   }
 
@@ -61,39 +59,33 @@ export class LLMController {
     this.pump();
   }
 
+  // 운영자 지시: 내장 해석기로 문장별 조치를 만들어 바로 반영하고, 해석하지 못한 문장은 Claude에 맡긴다
   chat(text) {
     if (!this.enabled) return false;
-    this.history.push({ t: fmt(this.sim.time), who: '운영자', text });
-    this.sim.log('chat', '운영자 지시', { obs: text });
-    this.request('운영자 지시 수신', true, text);
+    const sim = this.sim;
+    this.history.push({ t: fmt(sim.time), who: '운영자', text });
+    sim.log('chat', '운영자 지시', { obs: text });
+    const { actions, unknown } = parseInstruction(text, sim);
+    const results = actions.map((a) => ({ a, r: applyAction(a, sim, { agent: this.agent, onMix: this.onMix }) }));
+    const done = results.filter((x) => x.r.ok && !x.r.reply), replies = results.filter((x) => x.r.reply), failed = results.filter((x) => !x.r.ok);
+    if (results.length) {
+      this.agent.decisions += done.length;
+      sim.log('dialog', done.length ? '대화 지시 → 공정 반영' : replies.length ? '대화 지시 → 상태 응답' : '대화 지시 → 반영 안 됨', {
+        obs: [...new Set(actions.map((a) => a.clause))].join(' / '),
+        dec: '추론 기반 운영 위에 운영자 지시 적용 (내장 해석기)',
+        act: results.map((x) => `${x.r.ok ? '✓' : '✗'} ${x.r.text}`).join('\n'),
+      });
+      this.history.push({ t: fmt(sim.time), who: '에이전트', text: results.map((x) => x.r.text).join(' / ') });
+    }
+    if (unknown.length) {
+      if (this.available) this.request('운영자 지시 해석 (내장 해석기로 알 수 없는 문장)', true, unknown.join(' / '));
+      else sim.log('dialog', '대화 지시 → 해석하지 못함', { obs: unknown.join(' / '), dec: 'Agent 미연결 — 내장 해석기로 알 수 없는 문장', act: `예: ${DIALOG_EXAMPLES.join(' · ')}` });
+    }
     return true;
   }
 
-  // 매 프레임 호출 — 이벤트 감지
-  update() {
-    if (!this.enabled) return;
-    const sim = this.sim;
-    if (sim.stats.failures > this.lastFailures) {
-      const down = sim.processing.filter((s) => s.state === 'DOWN').map((s) => s.name).join(', ');
-      this.lastFailures = sim.stats.failures;
-      this.request(`돌발 고장 발생: ${down || '설비'}`, true);
-    }
-    if (sim.supplyDisrupted && !this.wasDisrupted) this.request('자재 공급 차질 감지', true);
-    this.wasDisrupted = sim.supplyDisrupted;
-    for (const st of sim.processing) {
-      if (st.request || st.state === 'DOWN' || st.state === 'MAINT') continue;
-      const a = sim.assess(st);
-      const last = this.riskNotified.get(st.id) ?? -1e9;
-      if (a.risk10 > RISK_TRIGGER && sim.time - last > 180) {
-        this.riskNotified.set(st.id, sim.time);
-        this.request(`${st.name} 고장 위험 상승 (10분 고장확률 ${(a.risk10 * 100).toFixed(0)}%)`, true);
-      }
-    }
-    if (sim.time - this.lastPeriodic >= PERIOD) {
-      this.lastPeriodic = sim.time;
-      this.request('정기 점검 (5분 주기)', false);
-    }
-  }
+  // 대화 기반에서는 Claude를 주기적으로 부르지 않는다 (운영 판단은 추론 기반 에이전트)
+  update() {}
 
   snapshot() {
     const sim = this.sim, m = sim.mode, k = sim.kpi();
@@ -124,6 +116,9 @@ export class LLMController {
         };
       }),
       vehicles: sim.vehicles.map((v) => ({ id: v.id, task: v.task ?? 'idle', battery: Math.round(v.battery) })),
+      product_mix: sim.zone ? sim.line.mix : null,
+      commands: { estop_all: sim.cmd.estopAll, pstop_all: sim.cmd.pstopAll, feed_hold: sim.cmd.feedHold, evacuate: sim.cmd.evac, line_speed_pct: Math.round(sim.cmd.lineSpeed * 100),
+        cells: sim.processing.map((st) => ({ id: st.id, estop: !!st.cmd?.estop, hold: st.cmd?.hold ?? null, safe_speed: !!st.cmd?.safe, speed_pct: Math.round((st.cmd?.override ?? 1) * 100) })) },
       recent_events: sim.logs.slice(0, 8).map((l) => `[${fmt(l.t)}] ${l.title}`),
     };
   }
@@ -146,15 +141,15 @@ export class LLMController {
       if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
       this.calls++; this.costUSD += out.costUSD; this.tokensIn += out.usage.input_tokens; this.tokensOut += out.usage.output_tokens;
       for (const a of out.actions) this.apply(a);
-      for (const r of out.rejected) this.sim.log('warn', `Claude 제안 반려 · ${r.name}`, { obs: r.input.reason, dec: r.error });
+      for (const r of out.rejected) this.sim.log('warn', `Agent 제안 반려 · ${r.name}`, { obs: r.input.reason, dec: r.error });
       if (out.text) {
         this.history.push({ t: fmt(this.sim.time), who: '에이전트', text: out.text });
-        this.sim.log('llm', 'Claude 판단', { obs: trigger, dec: out.text, act: out.actions.length ? `조치 ${out.actions.length}건 실행` : '추가 조치 없음' });
+        this.sim.log('llm', 'Agent 판단', { obs: trigger, dec: out.text, act: out.actions.length ? `조치 ${out.actions.length}건 실행` : '추가 조치 없음' });
       }
       this.status = `${(out.latencyMs / 1000).toFixed(1)}초 응답 · 조치 ${out.actions.length}건`;
     } catch (e) {
       if (gen !== this.gen) return;
-      this.sim.log('alert', 'Claude 호출 실패', { obs: e.message, act: '규칙 기반 반사 계층으로 계속 운영' });
+      this.sim.log('alert', 'Agent 호출 실패', { obs: e.message, act: '추론 기반 에이전트로 계속 운영 · 지시를 더 짧게 다시 입력해 보세요' });
       this.status = `오류: ${e.message}`;
     } finally {
       if (gen === this.gen) {
@@ -172,7 +167,7 @@ export class LLMController {
     switch (name) {
       case 'schedule_maintenance': {
         if (!st || st.request || st.state === 'DOWN' || st.state === 'MAINT') {
-          sim.log('warn', `Claude 조치 미적용 · ${st?.name ?? input.station_id}`, { obs: '응답 대기 중 설비 상태가 바뀜' });
+          sim.log('warn', `Agent 조치 미적용 · ${st?.name ?? input.station_id}`, { obs: '응답 대기 중 설비 상태가 바뀜' });
           return;
         }
         level = 'plan';
@@ -199,10 +194,18 @@ export class LLMController {
       case 'expedite_supply':
         act = agent.expedite() ?? '공급 차질이 없어 적용하지 않음';
         break;
+      // 대화 지시 해석 결과: 상위 명령·혼류 비율 (내장 해석기와 같은 경로로 실행)
+      case 'issue_command': case 'set_mix': {
+        const r = applyAction(name === 'set_mix' ? { type: 'mix', mix: input.mix } : { type: 'command', code: input.code, target: input.target, arg: input.arg ?? null, clause: input.reason },
+          sim, { by: 'Agent · 대화 지시 해석', agent, onMix: this.onMix });
+        if (!r.ok) { sim.log('warn', `Agent 조치 미적용 · ${r.text}`, { dec: input.reason }); return; }
+        act = r.text;
+        break;
+      }
       default:
         return;
     }
     agent.decisions++;
-    sim.log(level, `Claude · ${act}`, { dec: input.reason });
+    sim.log(level, `Agent · ${act}`, { dec: input.reason });
   }
 }

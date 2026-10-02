@@ -252,7 +252,7 @@ export class Simulation {
     });
     // 혼류 투입 순서 (평준화): 비율 대비 누적 투입이 가장 뒤처진 제품을 먼저 투입
     this.mix = this.zone ? (ZONE_MIXES[this.line.mix] ?? ZONE_MIXES['1:1']).w : null;
-    this.releasedBy = { doortrim: 0, eaxle: 0 };
+    this.releasedBy = { doortrim: 0, eaxle: 0 }; this.mixBase = { doortrim: 0, eaxle: 0 };
     this.fgBy = { doortrim: 0, eaxle: 0 };
 
     // 투입·적재 도크는 레이아웃에 따라 달라진다 (U자형이면 적재는 뒤쪽 통로)
@@ -339,11 +339,17 @@ export class Simulation {
   }
   outFor(st, item) { return st.outs[item?.product] ?? st.outs['*']; }
   queueLen(st) { return st.ins.reduce((n, c) => n + c.items.length, 0); }
+  // 운전 중 혼류 비율 변경 (대화 지시) — 다음 투입부터 새 비율로 평준화한다
+  setMix(key) {
+    if (!this.zone || !ZONE_MIXES[key]) return false;
+    this.line = { ...this.line, mix: key }; this.mix = ZONE_MIXES[key].w; this.mixBase = { ...this.releasedBy };
+    return true;
+  }
   nextProduct() {
     let best = null, bv = Infinity;
     for (const [p, w] of Object.entries(this.mix)) {
       if (!w) continue;
-      const v = (this.releasedBy[p] + 1) / w;
+      const v = (this.releasedBy[p] - this.mixBase[p] + 1) / w;
       if (v < bv) { bv = v; best = p; }
     }
     return best;

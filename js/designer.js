@@ -59,7 +59,7 @@ export class LineDesigner {
   // Claude 연결 상태가 바뀌었을 때(키 저장·삭제) — 남아 있던 '미연결' 안내를 지우고 다시 그린다
   onLLMChange() {
     if (this.llm.available && this.note?.noLLM) {
-      this.note = { summary: 'Claude가 연결되었습니다. 요청이나 첨부 파일을 다시 보내 주세요.', applied: true };
+      this.note = { summary: 'Agent가 연결되었습니다. 요청이나 첨부 파일을 다시 보내 주세요.', applied: true };
     }
     this.render();
   }
@@ -117,7 +117,7 @@ export class LineDesigner {
 
   needKeyNote() {
     return {
-      errors: ['Claude가 연결되어 있지 않아 자연어 요청과 파일 분석을 할 수 없습니다. 아래 목록을 직접 편집하거나 API 키를 설정하세요.'],
+      errors: ['Agent가 연결되어 있지 않아 자연어 요청과 파일 분석을 할 수 없습니다. 아래 목록을 직접 편집하거나 API 키를 설정하세요.'],
       needKey: !!window.jin3d,
       noLLM: true,
     };
@@ -130,7 +130,7 @@ export class LineDesigner {
     if (!this.llm.available) { this.note = this.needKeyNote(); this.setOpen(true); return; }
     if (!text) text = '첨부 파일의 공정·레이아웃 내용을 바탕으로 라인 컨셉을 잡아 새 라인을 설계해 줘.';
     this.busy = true; this.setOpen(true);
-    $('dockStatus').innerHTML = `<span class="spin"></span>${files.length ? `첨부 ${files.length}개를 분석해 ` : ''}Claude가 공정 컨셉을 설계하는 중… “${esc(text)}”`;
+    $('dockStatus').innerHTML = `<span class="spin"></span>${files.length ? `첨부 ${files.length}개를 분석해 ` : ''}Agent가 공정 컨셉을 설계하는 중… “${esc(text)}”`;
     try {
       const attachments = files.map(({ name, kind, media_type, data, text: t, note }) => ({ name, kind, media_type, data, text: t, note }));
       const res = await fetch('/api/line', {
@@ -149,7 +149,7 @@ export class LineDesigner {
       $('dockInput').value = '';
       this.files = []; this.renderFiles();
     } catch (e) {
-      this.note = { errors: [`Claude 요청 실패: ${e.message}`] };
+      this.note = { errors: [`Agent 요청 실패: ${e.message}`] };
     } finally {
       this.busy = false;
       this.render();
@@ -172,7 +172,7 @@ export class LineDesigner {
     $('dockLineName').textContent = cur.name;
     $('dockArrow').textContent = this.open ? '▼' : '▲';
     $('lineDock').classList.toggle('open', this.open);
-    $('dockInput').placeholder = this.llm.available ? '요청 입력 또는 📎 공정도·레이아웃 파일 첨부' : 'Claude 미연결 — 펼쳐서 직접 편집하거나 API 키 설정';
+    $('dockInput').placeholder = this.llm.available ? '요청 입력 또는 📎 공정도·레이아웃 파일 첨부' : 'Agent 미연결 — 펼쳐서 직접 편집하거나 API 키 설정';
     $('dockSend').disabled = this.busy;
     if (!this.open) return;
     if (!this.busy) $('dockStatus').innerHTML = '';
@@ -227,12 +227,12 @@ export class LineDesigner {
     const allErrors = [...(n.errors ?? []), ...errors.filter((e) => !(n.errors ?? []).includes(e))];
     const allWarn = [...new Set([...(n.warnings ?? []), ...warnings])];
     $('dockSummary').innerHTML = [
-      n.summary ? `<div class="sum ${n.applied ? 'ok' : ''}">${n.source === 'claude' ? `<b>Claude${n.files?.length ? ' 컨셉' : ''}</b> · ` : ''}${esc(n.summary)}</div>` : '',
+      n.summary ? `<div class="sum ${n.applied ? 'ok' : ''}">${n.source === 'claude' ? `<b>Agent${n.files?.length ? ' 컨셉' : ''}</b> · ` : ''}${esc(n.summary)}</div>` : '',
       n.extracted?.length ? `<details class="ext" open><summary>📄 파일에서 읽은 내용 (${n.files?.length ?? 0}개 파일)</summary><ul>${n.extracted.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></details>` : '',
       diff.length ? `<ul class="diff">${diff.map((d) => `<li class="${d.kind}">${esc(d.text)}</li>`).join('')}</ul>` : (n.applied ? '' : '<div class="muted">현재 라인과 같습니다. 요청을 입력하거나 아래 목록을 편집하세요.</div>'),
       allWarn.length ? `<ul class="warn">${allWarn.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : '',
       allErrors.length ? `<ul class="err">${allErrors.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : '',
-      n.needKey ? '<button type="button" class="key-link" data-open-key>⚙ Claude API 키 설정 열기 (⌘,)</button>' : '',
+      n.needKey ? '<button type="button" class="key-link" data-open-key>⚙ Agent API 키 설정 열기 (⌘,)</button>' : '',
     ].join('');
     $('dockApply').disabled = !diff.length || errors.length > 0 || this.busy;
     $('dockApply').textContent = diff.length ? `적용 (${diff.length}건)` : '적용';
