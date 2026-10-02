@@ -375,6 +375,53 @@ function makeRobot(kind, color) {
       },
     };
   }
+  if (kind === 'ammr') {
+    // AMR 기반 양팔 로봇: 이동 플랫폼(바퀴·라이다) + 승강 몸통 + 양팔(각 6축) + 머리 카메라. 로컬 +z가 작업 쪽(통로)
+    const root = new THREE.Group();
+    put(box(0.82, 0.3, 0.64, MAT.white), 0, 0.2, 0, root);
+    put(box(0.86, 0.07, 0.68, MAT.dark), 0, 0.06, 0, root);
+    for (const [x, z] of [[-0.34, 0.24], [0.34, 0.24], [-0.34, -0.24], [0.34, -0.24]]) put(cyl(0.08, 0.08, 0.06, MAT.rubber, 12), x, 0.07, z, root).rotation.z = Math.PI / 2;
+    const led = emis(0x2aa8ff, 2.2);
+    put(box(0.84, 0.04, 0.03, led, false), 0, 0.3, 0.33, root);
+    put(cyl(0.07, 0.07, 0.06, MAT.dark, 14), 0, 0.38, 0.24, root);                          // 라이다
+    const lift = put(new THREE.Group(), 0, 0.35, -0.05, root);
+    put(box(0.2, 0.62, 0.2, MAT.steel), 0, 0.31, 0, lift);
+    put(box(0.5, 0.3, 0.3, COBOT_MAT), 0, 0.72, 0, lift);                                    // 가슴
+    put(box(0.52, 0.05, 0.31, MAT.orange), 0, 0.6, 0, lift);
+    const head = put(new THREE.Group(), 0, 0.98, 0.02, lift);
+    put(box(0.2, 0.16, 0.18, MAT.dark), 0, 0, 0, head);
+    put(box(0.16, 0.05, 0.02, emis(0x37e8ff, 2), false), 0, 0.01, 0.1, head);                 // 스테레오 카메라
+    const arms = [-1, 1].map((sd) => {
+      const a = makeArm(COBOT_MAT, 0.46);
+      put(a.root, sd * 0.33, 0.7, 0, lift); a.root.rotation.z = -sd * 0.35;                   // 어깨에서 바깥쪽으로 약간 기울여 장착
+      put(cyl(0.06, 0.06, 0.05, COBOT_JOINT), 0, 0.09, 0, a.turret);
+      return a;
+    });
+    const sideNames = ['왼팔', '오른팔'];
+    return {
+      root, kind, tip: arms[0].tip, tip2: arms[1].tip, payload: 10, dual: true,
+      jointDefs: [{ name: '몸통 승강', unit: 'mm', min: 0, max: 0.12 },
+        ...sideNames.flatMap((n) => ARM_JOINTS.map((j) => ({ ...j, name: `${n} ${j.name}` })))],
+      joints: () => [lift.position.y - 0.35, ...arms[0].joints(), ...arms[1].joints()],
+      // 작업 ↔ 대기 전환 때 자세가 튀지 않도록 목표 자세로 부드럽게 따라간다 (관절 속도·토크 값도 자연스러워짐)
+      cur: null,
+      anim(busy, t) {
+        const w = t * 1.5;
+        const target = [busy ? 0.06 + Math.sin(w * 0.5) * 0.04 : 0, busy ? Math.sin(w * 0.7) * 0.35 : 0];
+        arms.forEach((a, i) => {
+          const ph = w + i * Math.PI * 0.5, sd = i ? -1 : 1;   // 두 팔이 엇갈려 집고 놓는다
+          target.push(...(busy ? [sd * (0.3 + Math.sin(ph) * 0.25), 0.8 + Math.sin(ph * 1.3) * 0.15, 1.2 + Math.cos(ph) * 0.12, 0.7, Math.sin(ph * 0.9) * 0.3, Math.sin(ph * 0.6) * 1.4]
+            : [sd * 0.2, 0.3, 1.0, 0.5, 0, 0]));
+        });
+        this.cur = this.cur ? this.cur.map((c, i) => c + (target[i] - c) * 0.12) : target;
+        const c = this.cur;
+        lift.position.y = 0.35 + c[0];
+        head.rotation.y = c[1];
+        arms.forEach((a, i) => a.pose(...c.slice(2 + i * 6, 8 + i * 6)));
+        led.emissive.setHex(busy ? 0x3ddc84 : 0x2aa8ff);
+      },
+    };
+  }
   if (kind === 'scara') {
     const root = new THREE.Group();
     put(cyl(0.22, 0.28, 2.1, MAT.dark), 0, 1.05, 0, root);   // 퀼 하단이 AMR 위 대상물(약 1.3m) 위에서 멈추는 높이
@@ -444,7 +491,11 @@ function placeRobots(g, st) {
   for (let i = 0; i < count; i++) {
     const r = makeRobot(kind, color);
     if (kind === 'gantry') put(r.root, count === 1 ? 0 : -1.2 + (2.4 * i) / (count - 1), 0.15, 0, group);
-    else { const [x, z, yaw] = slots[i]; put(r.root, x, 0.15, z, group); r.root.rotation.y = yaw; }
+    else {
+      const [x, z, yaw] = slots[i];
+      // AMMR은 이동 플랫폼 깊이(0.64m)만큼 통로에서 조금 더 떨어져 도킹한다
+      put(r.root, x, kind === 'ammr' ? 0.06 : 0.15, kind === 'ammr' ? Math.sign(z) * 1.9 : z, group); r.root.rotation.y = yaw;
+    }
     r.phase = i * 1.3;
     r.root.traverse((o) => { o.userData.robotIdx = i; });
     robots.push(r);
@@ -761,6 +812,12 @@ export class FactoryView {
     logoTex.colorSpace = THREE.SRGBColorSpace; logoTex.anisotropy = 8;
     // 흰 글자가 블룸으로 번지지 않게 밝기를 조금 낮춘다
     put(new THREE.Mesh(new THREE.PlaneGeometry(7.4, 7.4 * 187 / 550), new THREE.MeshBasicMaterial({ map: logoTex, color: 0xcfd3d8, transparent: true, depthWrite: false })), 0, 0, 0.07, sign);
+    // 바닥 표시 — 앞쪽 AGV 충전소(x -15~-3)와 사족보행·정비 휴머노이드 대기 구역(x 6~14) 사이. 카메라 쪽에서 바로 읽히는 방향
+    const floorLogo = put(new THREE.Group(), 1.2, 0, 13.6, r);
+    const flatOn = (w, d, mat, y) => { const m = put(new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat), 0, y, 0, floorLogo); m.rotation.x = -Math.PI / 2; m.receiveShadow = true; return m; };
+    flatOn(6.6, 2.6, new THREE.MeshStandardMaterial({ color: 0x0c2048, roughness: 0.6, metalness: 0.1 }), 0.012);
+    flatOn(6.6, 0.08, MAT.accent, 0.014).position.z = 1.3;
+    flatOn(6.0, 6.0 * 187 / 550, new THREE.MeshBasicMaterial({ map: logoTex, color: 0xcfd3d8, transparent: true, depthWrite: false }), 0.016);
     // 출하 도크 도어
     for (const x of [26, 31]) {
       put(box(4, 4.5, 0.1, MAT.dark), x, 2.25, -19.8, r);

@@ -67,6 +67,7 @@ export class RobotTelemetry {
       put('CycleProgress', '작업 진행률', '%', busy ? p * 100 : 0);
       put('TcpX', 'TCP X', 'mm', this.tcp?.x); put('TcpY', 'TCP Y', 'mm', this.tcp?.y); put('TcpZ', 'TCP Z', 'mm', this.tcp?.z);
       put('TcpSpeed', 'TCP 속도', 'mm/s', this.tcp?.speed);
+      if (R.robot.tip2) { put('Tcp2X', '오른팔 TCP X', 'mm', this.tcp2?.x); put('Tcp2Y', '오른팔 TCP Y', 'mm', this.tcp2?.y); put('Tcp2Z', '오른팔 TCP Z', 'mm', this.tcp2?.z); put('Tcp2Speed', '오른팔 TCP 속도', 'mm/s', this.tcp2?.speed); }
       put('ProcessSensor', `${force.label}`, force.unit, force.value);
       put('MotorCurrentTotal', '모터 전류 합계', 'A', (this.tq ?? []).reduce((a, b) => a + b, 0) * 0.06);
       put('BaseVibrationRMS', '베이스 진동 RMS', 'mm/s', 0.6 + (100 - st.health) * 0.045 + (busy ? 0.4 : 0));
@@ -127,10 +128,17 @@ export class RobotTelemetry {
     const sim = this.view.sim;
     const q = this.joints(R);
     const dt = Math.max(1e-3, rdt);
-    if (q) {
-      const dq = this.prev ? q.map((x, i) => (x - this.prev.q[i]) / dt) : q.map(() => 0);
-      const ddq = this.prev ? dq.map((x, i) => (x - this.prev.dq[i]) / dt) : dq.map(() => 0);
-      this.prev = { q, dq: this.prev ? dq.map((x, i) => ema(this.prev.dq[i], x, 0.35)) : dq, ddq: this.prev ? ddq.map((x, i) => ema(this.prev.ddq[i], x, 0.2)) : ddq };
+    // 속도·가속도는 1/30초 이상 구간으로 계산한다 (짧고 불규칙한 프레임 간격에서 값이 튀지 않게)
+    this.accT = (this.accT ?? 0) + rdt;
+    if (q && this.prev && this.accT < 1 / 30) { this.prev.q = q; }
+    else if (q) {
+      const win = this.prev ? this.accT : dt;
+      this.accT = 0;
+      const base = this.prevQ ?? q;
+      const dq = this.prev ? q.map((x, i) => (x - base[i]) / win) : q.map(() => 0);
+      const ddq = this.prev ? dq.map((x, i) => (x - this.prev.dq[i]) / win) : dq.map(() => 0);
+      this.prevQ = q;
+      this.prev = { q, dq: this.prev ? dq.map((x, i) => ema(this.prev.dq[i], x, 0.5)) : dq, ddq: this.prev ? ddq.map((x, i) => ema(this.prev.ddq[i], x, 0.3)) : ddq };
       // 모터 온도: 부하(토크 %)에 비례해 오르고 주변 온도로 식는다 (시정수 약 3분, 시뮬레이션 시간 기준)
       const tq = this.torques(R);
       this.temp ??= tq.map(() => AMBIENT + 6);
@@ -145,6 +153,12 @@ export class RobotTelemetry {
       const sp = this.tcpPrev ? w.distanceTo(this.tcpPrev) / dt : 0;
       this.tcp = { x: rel.x * 1000, y: -rel.z * 1000, z: rel.y * 1000, speed: ema(this.tcp?.speed, sp * 1000, 0.3) };
       this.tcpPrev = w;
+      if (R.robot.tip2) {   // 양팔 로봇의 오른팔 TCP
+        const w2 = R.robot.tip2.getWorldPosition(v3()), rel2 = w2.clone().sub(base);
+        const sp2 = this.tcp2Prev ? w2.distanceTo(this.tcp2Prev) / dt : 0;
+        this.tcp2 = { x: rel2.x * 1000, y: -rel2.z * 1000, z: rel2.y * 1000, speed: ema(this.tcp2?.speed, sp2 * 1000, 0.3) };
+        this.tcp2Prev = w2;
+      }
     }
     // 이동 로봇: 실제 속도(시뮬레이션 m/s)·회전 속도
     if (R.mover) {
@@ -192,12 +206,15 @@ export class RobotTelemetry {
   torques(R) {
     const q = this.prev.q, dq = this.prev.dq, ddq = this.prev.ddq;
     const busy = R.st ? R.st.state === 'BUSY' : !!R.mover?.moving;
-    if (R.robot && R.robot.jointDefs.length === 6) {
-      const s2 = Math.sin(q[1]), s23 = Math.sin(q[1] + q[2]), s234 = Math.sin(q[1] + q[2] + q[3]);
+    // 6축 팔: 중력(어깨·팔꿈치·손목 자세) + 관성 + 마찰. 양팔 로봇은 몸통 승강축 + 팔마다 같은 식
+    const arm6 = (o) => {
+      const s2 = Math.sin(q[o + 1]), s23 = Math.sin(q[o + 1] + q[o + 2]), s234 = Math.sin(q[o + 1] + q[o + 2] + q[o + 3]);
       const pl = busy ? 1.25 : 1;
       const g = [4, 38 * Math.abs(s2) * pl + 6, 24 * Math.abs(s23) * pl + 4, 10 * Math.abs(s234) * pl + 3, 4, 2];
-      return g.map((x, i) => Math.min(100, x + Math.abs(ddq[i]) * 2.2 + Math.abs(dq[i]) * 3));
-    }
+      return g.map((x, i) => Math.min(100, x + Math.min(30, Math.abs(ddq[o + i]) * 2.2) + Math.min(20, Math.abs(dq[o + i]) * 3)));
+    };
+    if (R.robot?.dual) return [Math.min(100, 30 + Math.min(25, Math.abs(ddq[0]) * 1.2) + (busy ? 8 : 0)), ...arm6(1), ...arm6(7)];
+    if (R.robot && R.robot.jointDefs.length === 6) return arm6(0);
     // 보행 로봇(휴머노이드·사족보행)은 보행 주기가 빨라 가속 항을 작게, 체중 지지분을 기본 부하로 둔다
     if (R.kind === 'humanoid' || R.kind === 'quadruped') {
       return q.map((_, i) => Math.min(100, (R.kind === 'quadruped' && i % 2 ? 22 : 15) + Math.abs(ddq[i]) * 0.12 + Math.abs(dq[i]) * 1.6 + (R.mover?.carry ? 10 : 0)));
@@ -231,10 +248,12 @@ export class RobotTelemetry {
       const vib = 0.6 + (100 - st.health) * 0.045 + (busy ? 0.4 : 0);
       out.title = `${st.name} · ${ROBOT_LABEL[r.kind]} ${R.view ? '' : `#${this.ref.idx + 1}`}`;
       out.status = [['상태', busy ? `가동 (진행 ${(p * 100).toFixed(0)}%)` : st.state === 'DOWN' ? '설비 고장 — 정지' : st.state === 'MAINT' ? '정비 중 — 정지' : '대기'], ['정격 가반하중', `${r.payload} kg`]];
-      out.sections.push({ title: 'TCP (툴 끝점, 베이스 기준)', rows: this.tcp ? [
-        ['X / Y / Z', `${this.tcp.x.toFixed(0)} / ${this.tcp.y.toFixed(0)} / ${this.tcp.z.toFixed(0)} mm`],
-        ['TCP 속도', `${this.tcp.speed.toFixed(0)} mm/s`],
-      ] : [] });
+      const xyz = (p) => `${p.x.toFixed(0)} / ${p.y.toFixed(0)} / ${p.z.toFixed(0)} mm`;
+      out.sections.push({ title: 'TCP (툴 끝점, 베이스 기준)', rows: !this.tcp ? [] : this.tcp2 ? [
+        ['왼팔 X / Y / Z', xyz(this.tcp)], ['왼팔 TCP 속도', `${this.tcp.speed.toFixed(0)} mm/s`],
+        ['오른팔 X / Y / Z', xyz(this.tcp2)], ['오른팔 TCP 속도', `${this.tcp2.speed.toFixed(0)} mm/s`],
+      ] : [['X / Y / Z', xyz(this.tcp)], ['TCP 속도', `${this.tcp.speed.toFixed(0)} mm/s`]] });
+      if (r.dual) out.status.push(['이동 플랫폼', st.state === 'BUSY' || st.state === 'IDLE' || st.state === 'STARVED' || st.state === 'BLOCKED' ? '셀 도킹 (위치 고정)' : '셀 도킹 · 정지']);
       out.sections.push({ title: '센서', rows: [
         ['엔드이펙터', tool.tool],
         [f.label, `${f.value.toFixed(f.unit === 'N·m' ? 2 : 0)} ${f.unit}`],
@@ -312,7 +331,7 @@ export class RobotTelemetry {
   }
 }
 
-const ROBOT_LABEL = { articulated: '6축 다관절 로봇', cobot: '협동로봇', scara: 'SCARA', gantry: '갠트리' };
+const ROBOT_LABEL = { articulated: '6축 다관절 로봇', cobot: '협동로봇', scara: 'SCARA', gantry: '갠트리', ammr: 'AMR 기반 양팔 로봇 (AMMR)' };
 const HUMANOID_JOINTS = [
   { name: '왼쪽 고관절', unit: 'deg', min: -0.8, max: 0.8 },
   { name: '오른쪽 고관절', unit: 'deg', min: -0.8, max: 0.8 },

@@ -25,7 +25,7 @@ const SHIFTS = ['자동화 전환<br><small>로봇·AMR·IoT·MES</small>', '자
 
 // 비교 축 — 각 단계의 값은 시뮬레이션 모드 설정과 일치시킨다 (js/sim.js MODES)
 const ROWS = [
-  ['공정 작업', ['작업자 수작업 · 단독 설비', '양쪽 협동로봇 셀 · SCARA · 6축', '협동로봇 셀 + 폐루프 자율 보정']],
+  ['공정 작업', ['작업자 수작업 · 단독 설비', '양쪽 협동로봇 셀 · AMMR(양팔) · 6축', '협동로봇 셀 + 폐루프 자율 보정']],
   ['셀 간 물류', ['고정 컨베이어 · 지게차', `AMR ${ZONE_AMR.count}대 · AGV ${MODES.smart.vehicles}대`, `AMR ${ZONE_AMR.count}대 · AGV ${MODES.dark.vehicles}대 · 휴머노이드 부품 보충 ${MODES.dark.helpers}대`]],
   ['설비 정비', [`사후보전 — 고장 후 인지 (약 ${MODES.traditional.alarmDelay}초 지연)`, '예지정비 — IoT 임계치 · 정비원', `휴머노이드 정비 ${MODES.dark.techs}대 + 사족보행 순찰 ${MODES.dark.quadrupeds}대 선제 감지`]],
   ['품질', ['육안 검사', '비전·토크 전수 판정 · SPC 보정', '전수 판정 + 자율 재보정']],
