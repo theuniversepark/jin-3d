@@ -107,6 +107,7 @@ function buildAssets(sim, view) {
   };
   for (const v of [...sim.vehicles, ...(sim.forklifts ?? [])]) mobile(v, v.kind === 'agv' ? 'AGV' : 'Forklift', v.kind === 'agv' ? 'AGV' : '지게차', v.kind === 'agv' ? 'AGV' : 'FL',
     v.kind === 'agv' ? [f('Battery', '배터리', 'double', '%', () => v.battery), f('LoadCount', '적재 수량', 'int', 'pcs', () => v.load?.n ?? 0)] : []);
+  for (const d of sim.drones ?? []) mobile(d, 'Drone', '순찰 드론', 'DRN', [f('Altitude', '비행 고도', 'double', 'm', () => d.y), f('Battery', '배터리', 'double', '%', () => d.battery), f('FlightMode', '비행 모드', 'string', null, () => d.mode)]);
   for (const c of sim.carriers) mobile(c, 'AMR', '운반 AMR', 'AMR', [
     f('OperationState', '운행 상태', 'string', null, () => c.state),
     f('LineSegment', '라인 구간', 'string', null, () => (c.state === 'line' && c.lineInfo ? (c.lineInfo.where === 'cell' ? `cell:${c.lineInfo.station}` : `path:${c.lineInfo.from}>${c.lineInfo.to}`) : '')),

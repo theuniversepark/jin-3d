@@ -4,6 +4,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RobotTelemetry } from './telemetry.js';
 import { BELT_Y, LOC, chgLoc, FG_CAP, RAW_CAP, ST_LABEL } from './sim.js';
 import { YARD } from './shipping.js';
+import { DRONE_PAD } from './drone.js';
 import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, AMR_LANES, amrPark, ZONE_AMR, AMMR } from './line.js';
 
 // ── 헬퍼 ─────────────────────────────
@@ -299,6 +300,35 @@ function makeTruck(i) {
   });
   g.traverse((o) => { if (o.isMesh && o.material !== tarp) o.castShadow = true; });
   g.userData = { doors, tail, pallets };
+  return g;
+}
+
+// 순찰 드론 (쿼드콥터, 대각 약 1.1m): 몸체·암 4개·로터 4개·짐벌 카메라·항법등·착륙 스키드, 하방 관찰 빔
+function makeDrone() {
+  const g = new THREE.Group(), body = put(new THREE.Group(), 0, 0, 0, g);
+  const shell = std(0xe9edf2, { roughness: 0.35, metalness: 0.2 }), dark = MAT.dark;
+  put(box(0.42, 0.14, 0.52, shell), 0, 0, 0, body);
+  put(box(0.3, 0.06, 0.36, std(0x2a6fdb, { roughness: 0.4 })), 0, 0.09, 0, body);
+  const rotors = [];
+  for (const [sx, sz] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+    const arm = put(box(0.06, 0.04, 0.5, dark), sx * 0.2, 0.02, sz * 0.2, body); arm.rotation.y = Math.atan2(sx, sz);
+    put(cyl(0.05, 0.05, 0.08, dark, 10), sx * 0.38, 0.06, sz * 0.38, body);
+    const rotor = put(new THREE.Group(), sx * 0.38, 0.11, sz * 0.38, body);
+    put(mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.01, 24), new THREE.MeshBasicMaterial({ color: 0x9aa4ad, transparent: true, opacity: 0.35, depthWrite: false }), false), 0, 0, 0, rotor);
+    put(box(0.4, 0.008, 0.03, dark, false), 0, 0.005, 0, rotor);
+    rotors.push(rotor);
+  }
+  for (const sx of [-1, 1]) { put(box(0.02, 0.16, 0.02, dark), sx * 0.15, -0.14, 0.12, body); put(box(0.02, 0.16, 0.02, dark), sx * 0.15, -0.14, -0.12, body); put(box(0.03, 0.02, 0.4, dark), sx * 0.15, -0.22, 0, body); }
+  const gimbal = put(new THREE.Group(), 0, -0.12, 0.2, body);
+  put(mesh(new THREE.SphereGeometry(0.07, 14, 10), dark), 0, 0, 0, gimbal);
+  put(cyl(0.03, 0.03, 0.04, emis(0x37e8ff, 2), 10), 0, 0, 0.06, gimbal).rotation.x = Math.PI / 2;
+  const navR = put(mesh(new THREE.SphereGeometry(0.03, 8, 6), emis(0xff3030, 3), false), -0.38, 0.0, 0.38, body);
+  const navG = put(mesh(new THREE.SphereGeometry(0.03, 8, 6), emis(0x3dff8a, 3), false), 0.38, 0.0, 0.38, body);
+  const strobe = put(mesh(new THREE.SphereGeometry(0.035, 8, 6), emis(0xffffff, 0.5), false), 0, 0.13, -0.24, body);
+  // 하방 관찰 빔 (순찰 점검·이벤트 확인 중에만)
+  const beam = put(mesh(new THREE.ConeGeometry(1.6, 1, 28, 1, true), new THREE.MeshBasicMaterial({ color: 0x37e8ff, transparent: true, opacity: 0.08, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }), false), 0, -0.5, 0, g);
+  beam.visible = false;
+  g.userData = { body, rotors, beam, strobe, navR, navG };
   return g;
 }
 
@@ -920,12 +950,7 @@ export class FactoryView {
     put(box(0.3, 8, 40, MAT.wall), 38, 4, 0, r);
     for (let x = -36; x <= 36; x += 9) put(box(0.6, 8, 0.6, MAT.steel), x, 4, -19.6, r);
     put(box(76, 0.5, 0.35, MAT.accent), 0, 7.7, -19.8, r);
-    // 천장 조명
-    for (let x = -30; x <= 30; x += 10) for (const z of [-12, 0, 12]) {
-      const m = emis(0xfff6e0, 2.2);
-      this.lampMats.push(m);
-      put(box(4, 0.12, 0.5, m, false), x, 9.5, z, r);
-    }
+    // 천장 형광등 기구는 두지 않는다 — 공장 밝기는 환경광·주광·보조광(main.js LOOK)으로 단계별로 유지
     // 캠틱종합기술원 사인 — 뒷벽, 중앙 관제 화면 왼쪽 빈 칸. 로고 글자가 흰색이라 남색 백보드 위에 붙인 백라이트 사인으로 만든다
     // 벽 기둥(9m 간격, x=-18·-9) 사이에 들어가도록 폭 8m, 관제 화면과 같은 중심 높이(5.1m)
     const sign = put(new THREE.Group(), -13.5, 5.1, -19.78, r);
@@ -1015,6 +1040,16 @@ export class FactoryView {
         this.whStock.push(put(box(1.8, 0.9, 1.4, MAT.raw), x, y + 0.62, 0, rack));
       }
     }
+    // 드론 이착륙·충전 패드 (피지컬AI 단계에서만 보임)
+    this.dronePad = put(new THREE.Group(), DRONE_PAD.x, 0, DRONE_PAD.z, r);
+    const padC = document.createElement('canvas'); padC.width = padC.height = 256;
+    const pc = padC.getContext('2d'); pc.fillStyle = '#1d2a3a'; pc.beginPath(); pc.arc(128, 128, 124, 0, Math.PI * 2); pc.fill();
+    pc.strokeStyle = '#37e8ff'; pc.lineWidth = 10; pc.beginPath(); pc.arc(128, 128, 110, 0, Math.PI * 2); pc.stroke();
+    pc.fillStyle = '#ffffff'; pc.font = '900 150px sans-serif'; pc.textAlign = 'center'; pc.textBaseline = 'middle'; pc.fillText('H', 128, 136);
+    const padTex = new THREE.CanvasTexture(padC); padTex.colorSpace = THREE.SRGBColorSpace;
+    const pad = put(new THREE.Mesh(new THREE.CircleGeometry(1.1, 40), new THREE.MeshStandardMaterial({ map: padTex, roughness: 0.7 })), 0, 0.02, 0, this.dronePad); pad.rotation.x = -Math.PI / 2;
+    put(box(0.5, 0.25, 0.3, MAT.dark), 1.35, 0.125, 0, this.dronePad);   // 무선 충전기
+    this.dronePad.visible = false;
     // 충전소
     this.chargers = [];
     for (let i = 0; i < 4; i++) {
@@ -1059,7 +1094,7 @@ export class FactoryView {
     this.sim = sim;
     const mode = sim.mode.key;
     // CSS2DRenderer는 씬에서 제거된 라벨의 DOM을 지우지 않으므로 직접 제거
-    for (const v of [...this.stationViews, ...(this.vehicleViews ?? []), ...(this.techViews ?? []), ...(this.helperViews ?? []), ...(this.quadViews ?? []), ...(this.truckViews?.values() ?? [])]) {
+    for (const v of [...this.stationViews, ...(this.vehicleViews ?? []), ...(this.techViews ?? []), ...(this.helperViews ?? []), ...(this.quadViews ?? []), ...(this.droneViews ?? []), ...(this.truckViews?.values() ?? [])]) {
       const l = v.label ?? v.lbl; l.removeFromParent(); l.element.remove();
     }
     this.truckViews = new Map(); this.labelsOn = labelsOn;
@@ -1180,6 +1215,8 @@ export class FactoryView {
     };
     this.helperViews = sim.helpers.map((h) => robotView(h, makeHumanoid(0x2aa8ff), 2.4, 'helper'));
     this.quadViews = sim.quads.map((q) => robotView(q, makeQuadruped(), 1.5, 'quad'));
+    this.droneViews = (sim.drones ?? []).map((d) => robotView(d, makeDrone(), 0.7, 'drone'));
+    this.dronePad.visible = (sim.drones ?? []).length > 0;
     this.workerViews = sim.workers.map((w) => {
       const hat = { 반장: 0xffffff, 모니터링: 0x2aa8ff, 관제: 0x2aa8ff, 검사원: 0x9b59b6 }[w.role] ?? 0xf2c230;
       const g = makeWorker(hat, w.role === '모니터링' || w.role === '관제' ? std(0x2a6fdb) : MAT.hiVis);
@@ -1187,7 +1224,7 @@ export class FactoryView {
       return { v: w, g, yaw: w.heading, px: w.x, pz: w.z };
     });
     // 클릭으로 로봇을 고를 수 있게 이동 로봇 모델에 ID 표시 (사람은 제외)
-    for (const vv of [...this.vehicleViews, ...this.carrierViews, ...this.techViews, ...this.helperViews, ...this.quadViews]) {
+    for (const vv of [...this.vehicleViews, ...this.carrierViews, ...this.techViews, ...this.helperViews, ...this.quadViews, ...this.droneViews]) {
       if (vv.v.kind === 'human') continue;
       vv.g.traverse((o) => { o.userData.moverId = vv.v.id; });
     }
@@ -1293,7 +1330,7 @@ export class FactoryView {
   setLabels(on) {
     this.labelsVisible = on;
     for (const sv of this.stationViews) sv.label.visible = on;
-    for (const vv of [...(this.vehicleViews ?? []), ...(this.techViews ?? []), ...(this.helperViews ?? []), ...(this.quadViews ?? []), ...(this.truckViews?.values() ?? [])]) vv.lbl.visible = on;
+    for (const vv of [...(this.vehicleViews ?? []), ...(this.techViews ?? []), ...(this.helperViews ?? []), ...(this.quadViews ?? []), ...(this.droneViews ?? []), ...(this.truckViews?.values() ?? [])]) vv.lbl.visible = on;
     this.labelsOn = on;
   }
 
@@ -1468,6 +1505,7 @@ export class FactoryView {
     for (const tv of this.techViews) this.animatePerson(tv, rdt, t, true);
     for (const hv of this.helperViews) { this.animatePerson(hv, rdt, t, true); hv.g.userData.bin.visible = !!hv.v.carry; }
     for (const qv of this.quadViews) this.animateQuad(qv, rdt, t);
+    for (const dv of this.droneViews ?? []) this.animateDrone(dv, rdt, t);
     for (const wv of this.workerViews) this.animatePerson(wv, rdt, t, false);
 
     // IoT 데이터 패킷
@@ -1702,6 +1740,24 @@ export class FactoryView {
         break;
       }
     }
+  }
+
+  // 드론: 위치·고도, 진행 방향으로 살짝 기울기, 로터 회전, 항법등·스트로브, 점검 중 하방 관찰 빔
+  animateDrone(dv, rdt, t) {
+    const d = dv.v, g = dv.g, ud = g.userData;
+    const vx = (d.x - dv.px) / Math.max(rdt, 1e-3), vz = (d.z - dv.pz) / Math.max(rdt, 1e-3); dv.px = d.x; dv.pz = d.z;
+    g.position.set(d.x, d.y, d.z);
+    dv.yaw = lerpAngle(dv.yaw, d.heading, Math.min(1, rdt * 6)); g.rotation.y = dv.yaw;
+    const sp = Math.min(1, Math.hypot(vx, vz) / 3.4);
+    ud.body.rotation.x += (sp * 0.18 - ud.body.rotation.x) * Math.min(1, rdt * 4);   // 전진할 때 앞으로 숙인다
+    const flying = d.y > 0.3;
+    ud.body.position.y = flying ? Math.sin(t * 2.3) * 0.03 : 0;
+    ud.rotors.forEach((r, i) => (r.rotation.y += (flying ? 60 : 2) * rdt * (i % 3 ? 1 : -1)));
+    ud.strobe.material.emissiveIntensity = Math.sin(t * 7) > 0.85 ? 6 : 0.3;
+    const look = flying && (d.mode === 'event' || (d.mode === 'patrol' && d.hover > 0));
+    ud.beam.visible = look;
+    if (look) { ud.beam.scale.set(1, d.y - 0.2, 1); ud.beam.position.y = -(d.y - 0.2) / 2 - 0.1; ud.beam.material.color.setHex(d.mode === 'event' ? 0xff8a3d : 0x37e8ff); ud.beam.material.opacity = d.mode === 'event' ? 0.14 : 0.08; }
+    dv.el.innerHTML = `${d.id} · ${d.battery.toFixed(0)}%<em>${d.task ?? '대기'}</em>`;
   }
 
   // 구분 적재장 로봇 2대: 제품 양품이 하역될 때마다(goodBy 증가) 집기 → 들어 올려 옮기기 → 다음 적재 칸에 내려놓기 → 복귀

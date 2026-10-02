@@ -13,7 +13,7 @@ import { LLMController } from './llm.js';
 import { LineDesigner } from './designer.js';
 import { renderConcept } from './concept.js';
 import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
-import { RobotCamWall } from './robotcam.js';
+import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
 import { OrchView } from './orchview.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
@@ -395,8 +395,8 @@ labelRenderer.domElement.addEventListener('pointerup', (e) => {
   if (camWall.group.visible) {
     const w = ray.intersectObject(camWall.screen, false)[0];
     if (w?.uv && camWall.list?.length) {
-      const col = Math.min(2, Math.floor(w.uv.x * 3)), row = w.uv.y > 0.5 ? 0 : 1;
-      const f = camWall.list[row * 3 + col];
+      const col = Math.min(CAM_COLS - 1, Math.floor(w.uv.x * CAM_COLS)), row = w.uv.y > 0.5 ? 0 : 1;
+      const f = camWall.list[row * CAM_COLS + col];
       if (f) { view.selected = f.ref.type === 'cell' ? f.ref.stationId : null; view.selectRobot(f.ref); ui.showRobot(); robotTimer = 1; return; }
     }
   }

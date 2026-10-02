@@ -1,11 +1,12 @@
-// 로봇 비전 관제 디스플레이 (피지컬AI 단계) — 로봇에 달린 카메라 시점의 실시간 영상 6분할 + AI 추론 오버레이.
+// 로봇 비전 관제 디스플레이 (피지컬AI 단계) — 로봇·드론에 달린 카메라 시점의 실시간 영상 8분할 + AI 추론 오버레이.
 // 영상: 각 로봇 카메라 시점으로 장면을 렌더 타깃의 한 칸에 그린다(프레임마다 한 칸씩 돌아가며 갱신).
 // 오버레이: 카메라로 투영한 객체 인식 박스·신뢰도, 추론 지연, 작업 상태, 현장 이벤트·알람 배너와 하단 알람 띠.
 import * as THREE from 'three';
 import { FIELD_EVENTS, ST_LABEL, moverRadius } from './sim.js';
 import { makeAlarmFx, blinkAlarmFx, ALARM_COLOR } from './factory.js';
 
-const COLS = 3, ROWS = 2, TW = 512, TH = 256, W = COLS * TW, H = ROWS * TH;
+export const COLS = 4, ROWS = 2;
+const TW = 384, TH = 256, W = COLS * TW, H = ROWS * TH;   // 4×2 분할 (오른쪽 열: 순찰 드론 짐벌·하방 카메라)
 const DISPLAY = { x: 10.6, y: 5.1, z: -19.15, w: 12, h: 4 };   // 중앙 관제 화면(x -2, 12×4) 바로 오른쪽(테두리 사이 0.3m), 같은 높이·크기로 벽 기둥 앞에 설치
 const FONT = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
 const CLS_COLOR = { 설비: '#37a0ff', 협동로봇: '#2bd4c6', AMR: '#3ddc84', AGV: '#3ddc84', 휴머노이드: '#b89bff', 사족보행: '#f5d36b', 사람: '#ff5a5a', 누유: '#ff7a3d', 이물질: '#f5b82e', 연기: '#ff5a5a' };
@@ -74,7 +75,16 @@ export class RobotCamWall {
       }
       mover(this.carrierPick, '전방 카메라', 0.42, 0.82, 5, 0.12);
     } else mover(sim.vehicles[0], '전방 카메라', 0.45, 0.85, 5, 0.12);
-    while (out.length < COLS * ROWS && sim.vehicles[out.length - 4]) mover(sim.vehicles[out.length - 4], '전방 카메라', 0.45, 0.85, 5, 0.12);
+    // 순찰 드론: 오른쪽 열 위 — 짐벌 전방 카메라, 아래 — 하방 매핑 카메라 (점검·이벤트 확인 중에는 짐벌도 아래를 본다)
+    const d = sim.drones?.[0];
+    if (d) {
+      const drone = (label, down, fwd, ahead) => ({ ref: { type: 'mover', id: d.id }, robot: d.id, label, kind: 'drone', mover: d,
+        pose: () => { const fx = Math.sin(d.heading), fz = Math.cos(d.heading), look = d.mode === 'event' || d.hover > 0;
+          return { pos: new THREE.Vector3(d.x + fx * fwd, d.y - 0.15, d.z + fz * fwd), dir: new THREE.Vector3(fx, typeof down === 'function' ? down(look) : down, fz).normalize(), ahead }; } });
+      out.splice(3, 0, drone('짐벌 카메라', (look) => (look ? -2.2 : -0.55), 0.3, 8));
+      out.splice(7, 0, drone('하방 매핑 카메라', -12, 0.05, 6));
+    }
+    while (out.length < COLS * ROWS && sim.vehicles[out.length - 6]) mover(sim.vehicles[out.length - 6], '전방 카메라', 0.45, 0.85, 5, 0.12);
     return out.slice(0, COLS * ROWS);
   }
 
@@ -101,11 +111,14 @@ export class RobotCamWall {
       this.rt.scissor.copy(this.rt.viewport); this.rt.scissorTest = true;
       const vis = [this.group.visible, this.view.selRing?.visible];
       this.group.visible = false; if (this.view.selRing) this.view.selRing.visible = false;
+      // 드론 하방 관찰 빔은 화면 연출용이라 카메라 영상에는 넣지 않는다
+      const beams = (this.view.droneViews ?? []).map((dv) => { const b = dv.g.userData.beam, v = b.visible; b.visible = false; return [b, v]; });
       const auto = r.shadowMap.autoUpdate; r.shadowMap.autoUpdate = false;
       const prev = r.getRenderTarget();
       r.setRenderTarget(this.rt); r.render(this.scene, cam); r.setRenderTarget(prev);
       r.shadowMap.autoUpdate = auto;
       this.group.visible = vis[0]; if (this.view.selRing) this.view.selRing.visible = vis[1];
+      for (const [b, v] of beams) b.visible = v;
     }
     // 2) 오버레이 (약 8Hz)
     this.overT += rdt;

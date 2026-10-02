@@ -1,6 +1,7 @@
 // 제조 라인 시뮬레이션 엔진 — 렌더링과 분리되어 있어 헤드리스(고속 비교) 실행이 가능하다.
 import { CommandCenter } from './commands.js';
 import { TruckYard, planForklift } from './shipping.js';
+import { PatrolDrone } from './drone.js';
 import { Orchestrator } from './orchestrator.js';
 import { AMMR, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
@@ -272,6 +273,8 @@ export class Simulation {
     this.forklifts = [new Mover(m.key === 'traditional' ? '지게차-출하' : '자율 지게차', 'forklift', { x: 19.5, z: -16.5, aisle: 'B', name: '출하 지게차 대기' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
     this.forklifts[0].shipper = true; this.forklifts[0].auto = m.key !== 'traditional';
     this.yard = new TruckYard(this);
+    // 피지컬AI: 순찰 드론 (지상 교통과 높이가 달라 movers에는 넣지 않는다)
+    this.drones = m.key === 'dark' ? [new PatrolDrone(this, 0)] : [];
     this.techs = [];
     for (let i = 0; i < m.techs; i++) {
       const home = { ...LOC.TECH, x: LOC.TECH.x + i * 1.6 };
@@ -513,6 +516,7 @@ export class Simulation {
     }
     // 출하: 트럭은 건물 밖이라 계속 움직이고, 지게차는 Zone 명령(정지·감속·대피)을 따른다
     this.yard.update(dt);
+    for (const d of this.drones) d.update(dt);
     if (mdt > 0) for (const f of this.forklifts) { if (f.idle && !K.evac) planForklift(this, f); f.update(mdt); }
     if (mdt > 0) {
       for (const t of this.techs) t.update(mdt);

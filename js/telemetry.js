@@ -94,6 +94,7 @@ export class RobotTelemetry {
       put('Payload', '탑재물', null, it ? (it.scrap ? 'empty(reject)' : `${it.product ?? 'part'}#${it.id}`) : 'empty', 'string');
     }
     if (m.kind === 'humanoid') put('CarryingBin', '부품 빈 운반', null, !!m.carry, 'boolean');
+    if (m.kind === 'drone') { put('Altitude', '비행 고도', 'm', m.y); put('Battery', '배터리', '%', m.battery); put('FlightMode', '비행 모드', null, m.mode, 'string'); }
     if (m.kind === 'quadruped') {
       const st = m.scanning;
       put('InspectionTarget', '점검 대상', null, st?.id ?? '', 'string');
@@ -112,7 +113,7 @@ export class RobotTelemetry {
       const r = sv?.parts.robots?.[ref.idx];
       return r ? { kind: 'arm', robot: r, st: sv.st, obj: r.root } : null;
     }
-    const all = [...view.vehicleViews, ...view.carrierViews, ...view.techViews, ...view.helperViews, ...view.quadViews];
+    const all = [...view.vehicleViews, ...view.carrierViews, ...view.techViews, ...view.helperViews, ...view.quadViews, ...(view.droneViews ?? [])];
     const mv = all.find((x) => x.v.id === ref.id);
     if (!mv) return null;
     // 라인 위 운반 AMR은 대상물 메시(아래쪽 AMR)로 그려진다
@@ -271,7 +272,7 @@ export class RobotTelemetry {
       ] });
     } else {
       const m = R.mover;
-      const kindLabel = { agv: 'AGV', forklift: '지게차', carrier: '운반 AMR', humanoid: '휴머노이드', quadruped: '사족보행 로봇', robot: '정비로봇' }[m.kind] ?? m.kind;
+      const kindLabel = { agv: 'AGV', forklift: '지게차', carrier: '운반 AMR', humanoid: '휴머노이드', quadruped: '사족보행 로봇', robot: '정비로봇', drone: '순찰 드론' }[m.kind] ?? m.kind;
       out.title = `${m.id} · ${kindLabel}`;
       const lidar = this.lidar(m);
       const field = m.blockedOn ? [`정지 — 전방 ${m.blockedOn.id}`, 'warn'] : !m.moving ? ['정지 (대기)', ''] : lidar < 0.5 ? ['보호 필드 침범', 'bad'] : lidar < 1.5 ? ['경고 필드 — 감속', 'warn'] : ['정상', 'ok'];
@@ -283,7 +284,11 @@ export class RobotTelemetry {
         motion.push(['바퀴 속도 L / R', `${rpm(v - (w * track) / 2)} / ${rpm(v + (w * track) / 2)} rpm`]);
       }
       out.sections.push({ title: '주행', rows: motion });
-      const sens = [['라이다 최근접 장애물', `${lidar.toFixed(2)} m`], ['안전 필드', field[0], field[1]]];
+      const sens = m.kind === 'drone'
+        ? [['비행 고도', `${m.y.toFixed(2)} m`], ['배터리', `${m.battery.toFixed(0)}%${m.charging ? ' · 무선 충전 중' : ''}`, m.battery < 25 ? 'warn' : ''],
+          ['로터 속도', `${m.y > 0.3 ? (5200 + (m.speedNow ?? 0) * 260).toFixed(0) : 0} rpm`], ['짐벌 카메라', m.mode === 'event' ? '현장 이벤트 추적 (하방 −90°)' : m.hover > 0 ? '셀 점검 (하방 −70°)' : '전방 −30°'],
+          ['비행 모드', { patrol: '순찰', event: '이벤트 확인', return: '귀환', charge: '착륙·충전' }[m.mode] ?? m.mode]]
+        : [['라이다 최근접 장애물', `${lidar.toFixed(2)} m`], ['안전 필드', field[0], field[1]]];
       if (m.kind === 'agv') sens.push(['배터리', `${m.battery.toFixed(0)}%${m.charging ? ' · 충전 중' : ''}`, m.battery < 25 ? 'warn' : ''], ['적재', m.load ? `${m.load.type === 'raw' ? '자재' : '완제품'} ${m.load.n}개` : '없음']);
       if (m.kind === 'carrier') {
         const item = sim.itemOfCarrier?.(m);
