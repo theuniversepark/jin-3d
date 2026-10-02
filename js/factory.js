@@ -951,6 +951,35 @@ export class FactoryView {
       put(makeSignSprite(`출하 도크 ${i + 1}`, '#f2c230', 3.2), bx, 5.6, -19.6, r);
     }
     this.buildYard();
+    this.buildSlogans();
+  }
+
+  // 벽면 슬로건 현수막 (단계별 하나만 보임): 레거시 — 캠틱 로고와 출하 도크 사이, 자동화 — 중앙 관제 화면과 출하 도크 사이
+  // 판 크기는 글자에 맞춘다: 글자 높이 f(m) 기준으로 좌우 여백 0.9f, 위아래 여백 0.55f, 줄 간격 1.3f — 두 현수막 글자 크기가 같다
+  buildSlogans() {
+    const r = this.root, FONT = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
+    const banner = (lines, x0, x1, { bg, fg, accent, stripe }, f = 1.0) => {
+      const m = document.createElement('canvas').getContext('2d'); m.font = `900 100px ${FONT}`;
+      const tw = Math.max(...lines.map((l) => m.measureText(l).width)) / 100 * f;
+      const w = Math.min(x1 - x0, tw + 1.8 * f), h = lines.length * 1.3 * f + 1.1 * f;
+      const g = put(new THREE.Group(), (x0 + x1) / 2, 5.1, -19.12, r);
+      const px = 2048 / w, c = document.createElement('canvas'); c.width = 2048; c.height = Math.round(h * px);
+      const x = c.getContext('2d'), band = 0.16 * f * px;
+      x.fillStyle = bg; x.fillRect(0, 0, c.width, c.height);
+      x.fillStyle = accent; x.fillRect(0, 0, c.width, band); x.fillRect(0, c.height - band, c.width, band);
+      if (stripe) for (let i = -band * 2; i < c.width; i += band * 3) { x.fillStyle = stripe; x.beginPath(); x.moveTo(i, c.height - band); x.lineTo(i + band * 1.2, c.height - band); x.lineTo(i + band * 2.2, c.height); x.lineTo(i + band, c.height); x.fill(); }
+      x.font = `900 ${f * px}px ${FONT}`; x.fillStyle = fg; x.textAlign = 'center'; x.textBaseline = 'middle';
+      lines.forEach((l, i) => x.fillText(l, c.width / 2, (0.55 * f + 0.65 * f + i * 1.3 * f) * px));
+      const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+      put(box(w + 0.2, h + 0.2, 0.08, MAT.dark), 0, 0, -0.06, g);
+      put(new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 })), 0, 0, 0, g);
+      g.visible = false;
+      return g;
+    };
+    // 레거시: 숙련 기술을 강조하는 전통 공장 현수막 (흰 바탕 · 빨간 글씨, 한 줄)
+    this.sloganLegacy = banner(['우리의 숙련된 기술이 곧 회사의 경쟁력입니다!'], -8.8, 18.4, { bg: '#f4f1ea', fg: '#c8202a', accent: '#1d3f8f' });
+    // 자동화: 설비 점검·안전 수칙 현수막 (남색 바탕 · 흰 글씨 · 노랑 안전 띠, 두 줄)
+    this.sloganSmart = banner(['설비 점검은 철저하게,', '안전 수칙은 엄격하게'], 4.6, 18.4, { bg: '#123a7a', fg: '#ffffff', accent: '#f2c230', stripe: '#1b1b1b' });
   }
 
   // 건물 밖 트럭 야드 (뒷벽 바깥, 검은 외부): 아스팔트·도크 접안선·대기 자리·진출입 도로
@@ -1087,6 +1116,8 @@ export class FactoryView {
     this.iot.visible = mode !== 'traditional';
     this.server.visible = mode !== 'traditional';
     this.screen.visible = mode !== 'traditional';
+    this.sloganLegacy.visible = mode === 'traditional';
+    this.sloganSmart.visible = mode === 'smart';
 
     // 컨베이어 (경로를 따라 직선 구간별로 생성, 코너는 겹쳐서 이음). 미사용 분기는 멈춘 채 어둡게
     const idle = sim.idleLinks.map((l) => ({ from: l.from, to: l.to, path: l.path, idle: true }));
