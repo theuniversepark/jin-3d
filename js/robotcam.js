@@ -3,6 +3,7 @@
 // 오버레이: 카메라로 투영한 객체 인식 박스·신뢰도, 추론 지연, 작업 상태, 현장 이벤트·알람 배너와 하단 알람 띠.
 import * as THREE from 'three';
 import { FIELD_EVENTS, ST_LABEL, moverRadius } from './sim.js';
+import { makeAlarmFx, blinkAlarmFx, ALARM_COLOR } from './factory.js';
 
 const COLS = 3, ROWS = 2, TW = 512, TH = 256, W = COLS * TW, H = ROWS * TH;
 const DISPLAY = { x: 12.6, y: 5.1, z: -19.15, w: 12, h: 4 };   // 중앙 관제 화면(x -2, 12×4) 오른쪽, 벽 기둥 앞에 설치
@@ -35,7 +36,7 @@ export class RobotCamWall {
     this.sim = sim; this.view = view;
     this.on = sim.mode.key === 'dark';
     this.group.visible = this.on;
-    for (const m of this.evMeshes.values()) this.evGroup.remove(m);
+    for (const m of this.evMeshes.values()) this.evGroup.remove(m, m.userData.fxRoot);
     this.evMeshes.clear();
     this.carrierPick = null;
     // 빈 화면 대신 첫 프레임부터 채우도록 렌더 타깃을 어둡게 비운다
@@ -204,7 +205,8 @@ export class RobotCamWall {
       g.fillStyle = '#7ff3ff'; g.font = `12px ${FONT}`; const info = `AI 추론 ${lat}ms · 객체 ${n} · ${simClock}`;
       g.fillText(info, x0 + TW - g.measureText(info).width - 8, y0 + 15);
       // 칸 바닥: 로봇 작업
-      const task = f.mover ? f.mover.task ?? '대기' : (f.station ? `${f.station.name} ${ST_LABEL[f.station.state] ?? ''} · 양팔 피킹·분류` : '');
+      const au = f.station?.ammr?.[f.ref.idx];
+      const task = f.mover ? f.mover.task ?? '대기' : (f.station ? `${f.station.name} ${ST_LABEL[f.station.state] ?? ''} · ${au && au.phase !== 'work' ? '부품 선반 왕복 (보충)' : '양팔 작업'} · 빈 ${au?.bin ?? '-'}/10` : '');
       const fy = y0 + TH - 20 - (row === ROWS - 1 ? 30 : 0);   // 아래 줄은 하단 알람 띠 위로
       g.fillStyle = 'rgba(5,8,12,0.6)'; g.fillRect(x0, fy, TW, 20);
       g.fillStyle = '#cfe6f0'; g.font = `12px ${FONT}`; g.fillText(`작업: ${task}`.slice(0, 48), x0 + 8, fy + 14);
@@ -239,11 +241,21 @@ export class RobotCamWall {
   syncEvents(rdt) {
     const evs = (this.sim.fieldEvents ?? []).filter((e) => !e.cleared);
     const live = new Set(evs.map((e) => e.id));
-    for (const [id, m] of this.evMeshes) if (!live.has(id)) { this.evGroup.remove(m); this.evMeshes.delete(id); }
+    for (const [id, m] of this.evMeshes) if (!live.has(id)) { this.evGroup.remove(m, m.userData.fxRoot); this.evMeshes.delete(id); }
     for (const ev of evs) {
       let m = this.evMeshes.get(ev.id);
-      if (!m) { m = makeEventMesh(ev.type); m.position.set(ev.x, 0, ev.z); this.evGroup.add(m); this.evMeshes.set(ev.id, m); }
+      if (!m) {
+        m = makeEventMesh(ev.type); m.position.set(ev.x, 0, ev.z); this.evGroup.add(m); this.evMeshes.set(ev.id, m);
+        // 현장 이벤트 경보: 바닥 구역·경광등·빛기둥 + 퍼지는 파문 + 떠 있는 경고 표지 (해결되면 이벤트와 함께 사라짐)
+        const color = ev.severity === 'alarm' ? ALARM_COLOR.fault : ALARM_COLOR.event;
+        m.userData.alarm = makeAlarmFx(4.4, 4.4, 7); m.userData.color = color;
+        m.userData.fx = makeEventFx(ev, color);
+        const fx = new THREE.Group(); fx.position.copy(m.position); fx.add(m.userData.alarm, m.userData.fx);
+        this.evGroup.add(fx); m.userData.fxRoot = fx;
+      }
       m.userData.tick?.(rdt, this.t);
+      blinkAlarmFx(m.userData.alarm, true, m.userData.color, this.t);
+      m.userData.fx.userData.tick(this.t);
     }
   }
 
@@ -263,6 +275,35 @@ export class RobotCamWall {
     }
     return null;
   }
+}
+
+// 현장 이벤트 위치 강조: 바깥으로 퍼지는 파문 3겹 + 설비에 가려지지 않는 경고 표지 (0.9초 주기로 깜빡임)
+const REDUCED = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+function makeEventFx(ev, color) {
+  const g = new THREE.Group();
+  const rings = [0, 1, 2].map((i) => {
+    const r = new THREE.Mesh(new THREE.RingGeometry(0.88, 1, 48), new THREE.MeshBasicMaterial({ color, transparent: true, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
+    r.rotation.x = -Math.PI / 2; r.position.y = 0.04 + i * 0.002; r.userData.ph = i / 3; g.add(r); return r;
+  });
+  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+  const x = c.getContext('2d'), hex = '#' + color.toString(16).padStart(6, '0');
+  x.fillStyle = 'rgba(12,14,18,0.88)'; x.beginPath(); x.roundRect(4, 4, 504, 120, 26); x.fill();
+  x.lineWidth = 8; x.strokeStyle = hex; x.stroke();
+  x.fillStyle = hex; x.font = `800 58px ${FONT}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(`${ev.severity === 'alarm' ? '⛔' : '⚠'} ${ev.label}`, 256, 68);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, toneMapped: false }));
+  tag.scale.set(6, 1.5, 1); tag.position.y = 8.6; tag.renderOrder = 10; g.add(tag);
+  g.userData.tick = (t) => {
+    const on = REDUCED || Math.sin(t * Math.PI * 2 / 0.9) > 0;
+    tag.material.opacity = on ? 1 : 0.35;
+    tag.position.y = 8.6 + (REDUCED ? 0 : Math.sin(t * 2.4) * 0.15);
+    for (const r of rings) {
+      const k = REDUCED ? 0.6 : (t / 1.8 + r.userData.ph) % 1;
+      r.scale.setScalar(1 + k * 4.2); r.material.opacity = 0.75 * (1 - k);
+    }
+  };
+  return g;
 }
 
 function makeEventMesh(type) {

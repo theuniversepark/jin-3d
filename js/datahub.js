@@ -76,6 +76,10 @@ function buildAssets(sim, view) {
       r.jointDefs.forEach((jd, j) => fields.push(f(`Joint${j + 1}`, jd.name, 'double', jd.unit === 'deg' ? 'deg' : 'mm', () => r.joints()[j] * (jd.unit === 'deg' ? DEG : 1000))));
       const tcp = () => { const w = r.tip.getWorldPosition(r.tip.position.clone()), b = r.root.getWorldPosition(r.root.position.clone()); return { x: (w.x - b.x) * 1000, y: -(w.z - b.z) * 1000, z: (w.y - b.y) * 1000 }; };
       fields.push(f('TcpX', 'TCP X', 'double', 'mm', () => tcp().x), f('TcpY', 'TCP Y', 'double', 'mm', () => tcp().y), f('TcpZ', 'TCP Z', 'double', 'mm', () => tcp().z));
+      if (r.kind === 'ammr') fields.push(   // AMMR 이동 플랫폼·부품 빈
+        f('PartsBin', '로봇 부품 빈', 'int', 'pcs', () => st.ammr?.[i]?.bin ?? null),
+        f('PlatformPhase', '이동 플랫폼 상태', 'string', null, () => st.ammr?.[i]?.phase ?? ''),
+        f('RackTrips', '부품 선반 왕복', 'int', 'count', () => st.ammr?.[i]?.trips ?? 0));
       if (r.tip2) {   // 양팔 로봇(AMMR)의 오른팔 TCP
         const tcp2 = () => { const w = r.tip2.getWorldPosition(r.tip2.position.clone()), b = r.root.getWorldPosition(r.root.position.clone()); return { x: (w.x - b.x) * 1000, y: -(w.z - b.z) * 1000, z: (w.y - b.y) * 1000 }; };
         fields.push(f('Tcp2X', '오른팔 TCP X', 'double', 'mm', () => tcp2().x), f('Tcp2Y', '오른팔 TCP Y', 'double', 'mm', () => tcp2().y), f('Tcp2Z', '오른팔 TCP Z', 'double', 'mm', () => tcp2().z));

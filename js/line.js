@@ -94,15 +94,17 @@ export const amrPark = (i) => ({ x: -36.4 + i * 1.4, z: AMR_LANES.park, aisle: '
 export const amrDockVia = (p) => [{ x: p.x, z: AMR_LANES.out }, { x: AMR_LANES.dockX, z: AMR_LANES.out }, { x: AMR_LANES.dockX, z: 0 }];
 export const amrReturnVia = (from, slot) => [{ x: AMR_LANES.retX, z: from.z }, { x: AMR_LANES.retX, z: AMR_LANES.ret }, { x: slot.x, z: AMR_LANES.ret }];
 export const AMR_DOCK = { ...ZONE_SRC, aisle: 'F', name: 'AMR 적재 위치' };
-export const FG_ZONE_CAP = 24;   // 구분 적재장의 제품별 구역 용량
+export const FG_ZONE_CAP = 24;
+// AMMR 부품 보충: 셀 양쪽의 부품 선반(셀 중심에서 3.75m, AMMR 작업 위치에서 약 1m)을 오가며 로봇 부품 빈을 채운다
+export const AMMR = { bin: 10, reorder: 2, rackZ: 3.75, pickZ: 2.95, slotZ: 1.9, turn: 1.0, drive: 1.3, pick: 5 };   // 구분 적재장의 제품별 구역 용량
 
 const ZONE_RECIPES = [
-  { id: 'SORT', robot: { kind: 'ammr', count: 2 }, cycle: 7, task: 'AMMR 양팔로 비전 인식 부품 종류(도어트림/e-axle) 판별·분류·키팅' },
+  { id: 'SORT', robot: { kind: 'ammr', count: 2 }, cycle: 7, task: 'AMMR 양팔로 부품 판별·분류·키팅, 부족하면 옆 부품 선반에서 보충' },
   { id: 'DT_ASSY', robot: { kind: 'cobot', count: 4 }, cycle: 14, task: '양쪽 협동로봇이 패널에 암레스트·스피커그릴·스위치 조립, 클립 압입' },
   { id: 'DT_FAST', robot: { kind: 'cobot', count: 2 }, cycle: 14, task: '스크류 자동 체결, 토크·각도 전수 판정' },
   { id: 'EA_ASSY', robot: { kind: 'cobot', count: 4 }, cycle: 16, task: '양쪽 협동로봇이 베어링 압입·로터·감속기어 삽입, 하우징 결합' },
   { id: 'EA_FAST', robot: { kind: 'articulated', count: 1 }, cycle: 12, task: '하우징 볼트 다축 너트러너 체결, 토크·각도 전수 판정' },
-  { id: 'PACK', robot: { kind: 'cobot', count: 2 }, cycle: 8, task: '제품별 포장 (도어트림 트레이·e-axle 크레이트), 라벨 부착' },
+  { id: 'PACK', robot: { kind: 'ammr', count: 2 }, cycle: 8, task: 'AMMR 양팔로 제품별 포장·라벨, 포장재 부족 시 옆 선반에서 보충' },
 ];
 
 export function zoneLine(mix = '1:1') {

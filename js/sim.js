@@ -1,5 +1,6 @@
 // 제조 라인 시뮬레이션 엔진 — 렌더링과 분리되어 있어 헤드리스(고속 비교) 실행이 가능하다.
-import { DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
+import { Orchestrator } from './orchestrator.js';
+import { AMMR, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
 export function mulberry32(a) {
   return function () {
@@ -52,7 +53,7 @@ export const FIELD_EVENTS = {
 
 export const ST_LABEL = {
   IDLE: '대기', BUSY: '가동', STARVED: '자재대기', BLOCKED: '배출대기',
-  DOWN: '고장', MAINT: '정비중', HOLD: '투입보류', FULL: '적재만재', OFF: '미사용', NOAMR: 'AMR대기', NOPARTS: '부품결품',
+  DOWN: '고장', MAINT: '정비중', HOLD: '투입보류', FULL: '적재만재', OFF: '미사용', NOAMR: 'AMR대기', NOPARTS: '부품결품', REFILL: '부품보충중',
 };
 
 export const BELT_Y = 0.9;
@@ -210,6 +211,7 @@ export class Simulation {
     this.releaseTimer = 0; this.releaseHold = false; this.releaseInterval = m.releaseInterval;
     this.powerKW = 0;
     this.requests = [];
+    this.orch = new Orchestrator(this);   // 공장 오케스트레이터 (인시던트 보고·판단·명령)
 
     this.line = opts.line ?? DEFAULT_LINE;
     const defs = buildStationDefs(this.line, modeKey);
@@ -277,6 +279,11 @@ export class Simulation {
       this.quads.push(q);
     }
     if (m.partsCap) for (const st of this.processing) { st.parts = m.partsCap; st.partsReq = null; }
+    // AMMR 셀: 로봇마다 부품 빈을 들고 작업하다 부족하면 옆 부품 선반을 다녀온다 (레거시 단계는 사람이 대신 작업)
+    for (const st of this.processing) {
+      if (st.def.robot.kind !== 'ammr' || modeKey === 'traditional') continue;
+      st.ammr = Array.from({ length: st.def.robot.count }, (_, i) => ({ i, side: i % 2 ? 1 : -1, bin: AMMR.bin - (i % 2) * 4, phase: 'work', t: 0, pos: 0, turn: 0, carry: false, trips: 0 }));
+    }
     this.workers = [];
     this.setupWorkers();
     // 정밀조립Zone: 조립 대상물을 싣고 셀 사이를 오가는 AMR (컨베이어 대신)
@@ -497,6 +504,10 @@ export class Simulation {
       w.update(dt);
     }
     this.updateFieldEvents();
+    this.orch.update();
+    // 자재 공급이 재개되면 공급 차질 인시던트를 닫는다
+    const sup = this.orch.find('supply');
+    if (sup && !this.supplyDisrupted) { this.orch.step(sup, 'exec', 'act', `창고 출고 재개 · 자재 운송 정상화 (투입구 재고 ${this.rawStock}개)`); this.orch.close(sup, '공급 정상화 확인 · 인시던트 종료'); }
     this.accountEnergy(dt);
     this.stats.wipInt += this.wip() * dt;
     if (this.time - this.lastHist >= 20) {
@@ -554,8 +565,51 @@ export class Simulation {
     return 0.00008 + 0.02 * Math.pow(Math.max(0, (60 - st.health) / 60), 2);
   }
 
+  // ── AMMR: 작업 ↔ 부품 선반 왕복 ─────────────────
+  // phase: work → turnOut → driveOut → pick(선반 재고가 없으면 waitRack) → turnIn → driveIn → work
+  ammrWorking(st) { return st.ammr.filter((u) => u.phase === 'work' && u.bin > 0).length; }
+  updateAMMR(st, dt) {
+    const halted = st.state === 'DOWN' || st.state === 'MAINT';
+    for (const u of st.ammr) {
+      u.t += dt;
+      if (u.phase === 'work') {
+        const others = st.ammr.some((o) => o !== u && o.phase === 'work' && o.bin > 0);
+        if (!halted && (u.bin <= 0 || (u.bin <= AMMR.reorder && (others || st.ammr.length === 1)))) { u.phase = 'turnOut'; u.t = 0; }
+      } else if (u.phase === 'turnOut') { u.turn = Math.min(1, u.t / AMMR.turn); if (u.t >= AMMR.turn) { u.phase = 'driveOut'; u.t = 0; } }
+      else if (u.phase === 'driveOut') { u.pos = Math.min(1, u.t / AMMR.drive); if (u.t >= AMMR.drive) { u.phase = 'pick'; u.t = 0; } }
+      else if (u.phase === 'pick' || u.phase === 'waitRack') {
+        if (st.parts != null && st.parts <= 0) {   // 선반이 비었으면 보충(휴머노이드)을 기다린다
+          if (u.phase !== 'waitRack') {
+            this.log('warn', `${st.name} AMMR #${u.i + 1} 선반 재고 없음`, { obs: '부품 선반 비어 있음 — 보충 대기', act: st.partsReq ? '보충 휴머노이드 배정됨' : '보충 요청' });
+            const o = this.orch;
+            if (!o.find(`rack:${st.id}`)) {
+              const inc = o.open('parts', `rack:${st.id}`, `${st.name} 부품 선반 결품`, `${st.name} AMMR #${u.i + 1}`);
+              o.step(inc, 'field', 'detect', `AMMR #${u.i + 1} 선반 재고 0 감지`);
+              o.step(inc, 'cell', 'self', '셀 자체 조치: 다른 AMMR로 작업 지속 · 선반 앞 대기');
+              o.later(0.5, () => o.step(inc, 'cell', 'report', '상위 보고: 선반 보충 필요'));
+              o.later(o.latency, () => { o.step(inc, 'orch', 'decide', `판단(${o.name}): 선반 보충 우선 배정`); o.step(inc, 'orch', 'command', '명령: 부품 보충 휴머노이드 선반 보충'); });
+            }
+          }
+          u.phase = 'waitRack'; u.t = 0; continue;
+        }
+        if (u.phase === 'waitRack') { u.phase = 'pick'; u.t = 0; }
+        if (u.t >= AMMR.pick) {
+          const take = Math.min(AMMR.bin - u.bin, st.parts ?? Infinity);
+          u.bin += take; u.carry = true; u.trips++;
+          if (st.parts != null) {
+            st.parts -= take;
+            if (st.parts <= this.mode.partsReorder && !st.partsReq) { st.partsReq = { st, helper: null }; this.partsReq.push(st.partsReq); }
+          }
+          u.phase = 'turnIn'; u.t = 0;
+        }
+      } else if (u.phase === 'turnIn') { u.turn = Math.max(0, 1 - u.t / AMMR.turn); if (u.t >= AMMR.turn) { u.phase = 'driveIn'; u.t = 0; } }
+      else if (u.phase === 'driveIn') { u.pos = Math.max(0, 1 - u.t / AMMR.drive); if (u.t >= AMMR.drive) { u.phase = 'work'; u.t = 0; u.carry = false; } }
+    }
+  }
+
   updateStation(st, dt) {
     const m = this.mode;
+    if (st.ammr) this.updateAMMR(st, dt);
     if (st.state === 'DOWN' || st.state === 'MAINT') {
       if (st.state === 'DOWN') st.c.down += dt; else st.c.maint += dt;
       if (st.techOnSite) {
@@ -565,7 +619,7 @@ export class Simulation {
       st.ema += (0 - st.ema) * Math.min(1, dt / 90);
       return;
     }
-    if (st.parts === 0 && !st.item) { st.state = 'NOPARTS'; st.c.starved += dt; st.starvedFor += dt; st.ema += (0 - st.ema) * Math.min(1, dt / 90); return; }
+    if (st.parts === 0 && !st.item && !st.ammr) { st.state = 'NOPARTS'; st.c.starved += dt; st.starvedFor += dt; st.ema += (0 - st.ema) * Math.min(1, dt / 90); return; }
     let inC = null;
     // AMR 운반: 앞서 나간 AMR이 셀 중앙에서 충분히(AMR 간격 이상) 빠져나간 뒤에 다음 AMR을 받는다
     const cleared = !this.useAMR || Object.values(st.outs).every((c) => !c.items.length || c.items[c.items.length - 1].s >= c.spacing + 0.4);
@@ -581,9 +635,13 @@ export class Simulation {
       st.state = 'STARVED'; st.c.starved += dt; st.starvedFor += dt;
     } else {
       st.starvedFor = 0; st.itemT += dt;
+      // AMMR 셀: 부품을 가지러 간 로봇만큼 작업 능력이 줄고, 모두 자리를 비우면 멈춘다
+      const n = st.ammr?.length, nw = st.ammr ? this.ammrWorking(st) : 0;
+      if (!st.done && st.ammr && nw === 0) { st.state = 'REFILL'; st.c.starved += dt; st.ema += (0 - st.ema) * Math.min(1, dt / 90); return; }
       if (!st.done) {
         st.state = 'BUSY'; st.c.busy += dt; st.powerSave = false;
-        st.progress += dt / st.cycleTime;
+        const cap = st.ammr ? (1 + PARALLEL_GAIN * (nw - 1)) / (1 + PARALLEL_GAIN * (n - 1)) : 1;
+        st.progress += (dt / st.cycleTime) * cap;
         if (this.rand() < this.hazard(st) * dt) { this.fail(st); return; }
         if (st.progress >= 1) { st.progress = 1; st.done = true; this.completeCycle(st); }
       }
@@ -603,7 +661,12 @@ export class Simulation {
     const m = this.mode, it = st.item;
     if (it.scrap) return;   // 빈 AMR(불량 배출 후)은 작업 없이 통과
     st.c.processed++;
-    if (st.parts != null) {
+    if (st.ammr) {   // 작업 중인 AMMR이 번갈아 한 개씩 쓴다 (두 팔 로봇이 교대로 집어 조립)
+      const ws = st.ammr.filter((k) => k.phase === 'work' && k.bin > 0);
+      st.ammrRR = ((st.ammrRR ?? -1) + 1) % Math.max(1, st.ammr.length);
+      const u = ws.find((k) => k.i >= st.ammrRR) ?? ws[0];
+      if (u) { u.bin--; st.ammrRR = u.i; }
+    } else if (st.parts != null) {
       st.parts = Math.max(0, st.parts - 1);
       if (st.parts <= m.partsReorder && !st.partsReq) { st.partsReq = { st, helper: null }; this.partsReq.push(st.partsReq); }
     }
@@ -642,8 +705,20 @@ export class Simulation {
     st.state = 'DOWN';
     st.repairRemaining = st.repairTotal = m.repairTime * (0.7 + this.rand() * 0.6);
     st.c.fails++; this.stats.failures++;
-    if (st.request) { st.request.kind = 'repair'; }
-    else this.requestTech(st, 'repair', m.alarmDelay);
+    // 인시던트: 현장 감지 → 셀 자체 조치 → 상위 보고 → (판단 지연 후) 판단·명령 → 정비 출동
+    const o = this.orch, who = m.techKind === 'humanoid' ? '정비 휴머노이드' : '정비원';
+    const inc = o.open('equipment', `fail:${st.id}`, `${st.name} 설비 고장`, st.name);
+    o.step(inc, 'field', 'detect', m.agentActive ? `IoT 알람 — 건강도 ${st.health.toFixed(0)}%, 진동·전류 이상, 가동 정지` : `설비 정지 — 작업자가 이상을 발견하기까지 약 ${m.alarmDelay}초`);
+    o.step(inc, 'cell', 'self', m.agentActive ? '셀 자체 조치: 비상 정지 · 작업물 보류 · 자가 진단 → 재가동 불가' : '셀 자체 조치 없음 (수동 설비)');
+    const pending = !!st.request;
+    if (pending) st.request.kind = 'repair';
+    else if (!m.agentActive) this.requestTech(st, 'repair', m.alarmDelay + 5);   // 레거시: 발견 지연 → 반장 판단 후 정비반 호출
+    o.later(m.agentActive ? 0.5 : m.alarmDelay, () => o.step(inc, 'cell', 'report', `${m.agentActive ? '상위 보고' : '작업자 → 반장 보고'}: 고장 · 예상 수리 ${Math.round(st.repairTotal)}초 · 하류 셀 자재대기 예상`));
+    o.later(m.agentActive ? o.latency : m.alarmDelay + 5, () => {
+      o.step(inc, 'orch', 'decide', `판단(${o.name}): 영향 분석 — 긴급수리 우선, 대기 중 투입 조정`);
+      o.step(inc, 'orch', 'command', pending ? `명령: 진행 중이던 정비를 긴급수리로 전환` : `명령: ${who} 긴급수리 출동`);
+      if (m.agentActive && !st.request && st.state === 'DOWN') this.requestTech(st, 'repair', 0);
+    });
     this.emit('fail', { st });
     if (m.agentActive) {
       this.log('alert', `${st.name} 돌발 고장`, {
@@ -675,6 +750,9 @@ export class Simulation {
   selfCalibrate(st) {
     if (st.request || st.state === 'DOWN' || st.state === 'MAINT') return false;
     st.request = { st, kind: 'cal', self: true };
+    const o = this.orch, inc = o.open('quality', `cal:${st.id}`, `${st.name} 공정 편차`, st.name, { cellResolved: true });
+    o.step(inc, 'field', 'detect', `SPC 공정능력 Cpk 저하 감지 (드리프트 ${(st.drift * 100).toFixed(0)}%)`);
+    o.step(inc, 'cell', 'self', '셀 자체 조치: 폐루프 자율 보정 (10초) — 상위 보고 불필요');
     st.state = 'MAINT'; st.maintKind = 'cal'; st.techOnSite = true;
     st.repairRemaining = st.repairTotal = 10;
     return true;
@@ -692,6 +770,7 @@ export class Simulation {
       }
       if (!best) continue;
       req.tech = best;
+      if (req.kind === 'repair') this.orch.step(this.orch.find(`fail:${st.id}`), 'exec', 'act', `${best.id} 배정 · 출동`);
       const kindLabel = { repair: '긴급수리', pm: '예지정비', cal: '재보정' }[req.kind];
       best.setTask(`${kindLabel} → ${st.name}`, [
         { go: svcLoc(st) },
@@ -704,6 +783,7 @@ export class Simulation {
 
   techArrive(req) {
     const st = req.st, m = this.mode;
+    if (req.kind === 'repair') this.orch.step(this.orch.find(`fail:${st.id}`), 'exec', 'act', `${req.tech?.id ?? '정비'} 현장 도착 · 수리 시작`);
     st.techOnSite = true;
     if (st.state !== 'DOWN') {
       st.state = 'MAINT'; st.maintKind = req.kind;
@@ -713,6 +793,9 @@ export class Simulation {
 
   finishRepair(st) {
     const kind = st.state === 'DOWN' ? 'repair' : st.maintKind;
+    const o = this.orch;
+    if (kind === 'repair') { const inc = o.find(`fail:${st.id}`); o.step(inc, 'exec', 'act', `수리 완료 — 건강도 회복`); o.later(0.5, () => o.close(inc, '복구 확인 · 생산 재개 · 인시던트 종료')); }
+    else if (kind === 'cal' && st.request?.self) { const inc = o.find(`cal:${st.id}`); o.step(inc, 'cell', 'act', '자율 보정 완료 — 드리프트 0'); o.step(inc, 'orch', 'notify', '결과 통보 수신 (상위 조치 불필요)'); o.close(inc, '셀 자체 해결 · 종료'); }
     if (kind === 'repair') { st.health = 90 + this.rand() * 10; st.drift = 0; }
     else if (kind === 'pm') { st.health = 100; st.drift = 0; this.stats.pm++; }
     else { st.drift = 0; st.health = Math.min(100, st.health + 4); this.stats.cal++; }
@@ -734,9 +817,10 @@ export class Simulation {
       h.setTask(`부품 보충 → ${st.name}`, [
         { go: h.pick },
         { wait: 4, done: () => { h.carry = true; } },
-        { go: localLoc(st.def, -1.0, SVC_Z, st.name) },
+        { go: st.ammr ? localLoc(st.def, -2.4, AMMR.rackZ, `${st.name} 부품 선반`) : localLoc(st.def, -1.0, SVC_Z, st.name) },   // AMMR 셀은 부품 선반 옆
         { wait: 5, done: () => {
           h.carry = false; st.parts = this.mode.partsCap; st.partsReq = null;
+          { const inc = this.orch.find(`rack:${st.id}`); this.orch.step(inc, 'exec', 'act', `${h.id} 선반 보충 완료 (${this.mode.partsCap}개)`); this.orch.close(inc, '선반 재고 회복 · 인시던트 종료'); }
           this.partsReq = this.partsReq.filter((r) => r !== req);
           this.stats.refills = (this.stats.refills ?? 0) + 1;
         } },
@@ -789,23 +873,31 @@ export class Simulation {
   detectFieldEvent(ev, by, conf) {
     if (ev.detected || ev.cleared) return;
     ev.detected = true; ev.detectedBy = by; ev.conf = conf; ev.tDetect = this.time;
+    const o = this.orch, inc = o.open('field', `ev:${ev.id}`, `현장 이벤트 · ${FIELD_EVENTS[ev.type].label}`, by);
+    ev.inc = inc;
+    o.step(inc, 'field', 'detect', `${by} 카메라 AI 추론 — ${FIELD_EVENTS[ev.type].cls} 신뢰도 ${conf.toFixed(2)}`);
+    o.step(inc, 'cell', 'self', ev.type === 'intrusion' ? '자체 조치: 주변 로봇 협동 감속 · 접근 금지 구역 표시' : '자체 조치: 감지 로봇 감속·우회 · 해당 구역 표시');
+    o.later(0.5, () => o.step(inc, 'cell', 'report', `상위 보고: ${FIELD_EVENTS[ev.type].label} · 위치 x ${ev.x.toFixed(1)}, z ${ev.z.toFixed(1)}`));
     const E = FIELD_EVENTS[ev.type], where = `x ${ev.x.toFixed(1)} · z ${ev.z.toFixed(1)}`;
     const near = this.processing.reduce((b, st) => (Math.hypot(st.x - ev.x, st.z - ev.z) < Math.hypot(b.x - ev.x, b.z - ev.z) ? st : b), this.processing[0]);
     const loc = { x: ev.x, z: ev.z + (ev.z >= 0 ? 1.0 : -1.0), aisle: ev.z >= 0 ? 'F' : 'B', name: E.label };
     let act = '';
+    const dispatch = () => {
     if (E.response === 'clean') {
       const h = [...this.helpers, ...this.techs].filter((k) => k.kind === 'humanoid').sort((a, b) => (b.idle - a.idle) || (Math.hypot(a.x - ev.x, a.z - ev.z) - Math.hypot(b.x - ev.x, b.z - ev.z)))[0];
       if (h) {
         const resume = h.idle ? [] : h.steps;   // 하던 일은 처리 후 이어서
-        h.setTask(`${E.task} → ${near.name} 앞`, [{ go: loc }, { wait: 8, done: () => { ev.cleared = true; ev.tClear = this.time; this.log('ok', `${E.label} 처리 완료`, { obs: `${h.id}가 ${E.task} 완료`, act: '구역 정상화' }); } }, ...resume, ...(resume.length ? [] : [{ go: h.home }])]);
+        h.setTask(`${E.task} → ${near.name} 앞`, [{ go: loc }, { do: () => o.step(inc, 'exec', 'act', `${h.id} 현장 도착 · ${E.task} 시작`) },
+          { wait: 8, done: () => { ev.cleared = true; ev.tClear = this.time; this.log('ok', `${E.label} 처리 완료`, { obs: `${h.id}가 ${E.task} 완료`, act: '구역 정상화' }); o.step(inc, 'exec', 'act', `${E.task} 완료`); o.close(inc, '구역 정상화 확인 · 인시던트 종료'); } }, ...resume, ...(resume.length ? [] : [{ go: h.home }])]);
         ev.responder = h.id; act = `${h.id} 출동 — ${E.task} (작업 중이던 일은 처리 후 재개)`;
       }
     } else if (E.response === 'inspect') {
       const q = this.quads.slice().sort((a, b) => Math.hypot(a.x - ev.x, a.z - ev.z) - Math.hypot(b.x - ev.x, b.z - ev.z))[0];
       if (q) {
-        q.setTask(`${E.task} → ${near.name} 부근`, [{ go: loc }, { do: () => { q.scanning = near; } }, { wait: 6, done: () => {
+        q.setTask(`${E.task} → ${near.name} 부근`, [{ go: loc }, { do: () => { q.scanning = near; o.step(inc, 'exec', 'act', `${q.id} 현장 도착 · 열화상·가스 센서 점검`); } }, { wait: 6, done: () => {
           q.scanning = null; ev.cleared = true; ev.tClear = this.time;
           this.log('ok', `${E.label} 확인 — 이상 없음`, { obs: `${q.id} 열화상·가스 센서 점검: 발열·연소 흔적 없음 (스팀 오인 추정)`, act: '알람 해제' });
+          o.step(inc, 'exec', 'act', '점검 결과: 발열·연소 흔적 없음 (스팀 오인)'); o.close(inc, '오탐 확인 · 알람 해제 · 인시던트 종료');
         } }]);
         ev.responder = q.id; act = `${q.id} 출동 — 열화상·가스 센서 정밀 점검`;
       }
@@ -813,16 +905,25 @@ export class Simulation {
       ev.until = this.time + 60;
       act = '주변 로봇 협동 감속·접근 금지 구역 설정, 원격 관제 요원 호출';
     }
+    o.step(inc, 'orch', 'decide', `판단(${o.name}): ${E.response === 'clean' ? '작업 경로 안전 위협 — 즉시 제거' : E.response === 'inspect' ? '화재 초기 징후 가능성 — 근접 확인' : '무인 구역 사람 진입 — 안전 우선'}`);
+    o.step(inc, 'orch', 'command', `명령: ${act || '대응 자원 없음 — 원격 관제 호출'}`);
+    if (E.response === 'safety') o.step(inc, 'exec', 'act', '구역 로봇 협동 감속 · 원격 관제 요원 확인 중');
+    this.log('alert', `오케스트레이터 명령 · ${E.label}`, { obs: `${by} 보고 수신`, dec: `${o.name} 판단`, act });
+    };
+    o.later(o.latency, dispatch);
     this.log('alert', `AI 비전 감지 · ${E.label}`, {
       obs: `${by} 카메라 영상 추론 — ${E.cls} 신뢰도 ${conf.toFixed(2)} · ${near.name} 부근 (${where})`,
-      dec: E.response === 'clean' ? '작업 경로 안전 위협 — 즉시 제거' : E.response === 'inspect' ? '화재 초기 징후 가능성 — 근접 확인' : '무인 구역 사람 진입 — 안전 우선',
-      act,
+      dec: '셀·로봇 자체 조치 후 공장 오케스트레이터에 보고',
+      act: `오케스트레이터 판단 대기 (약 ${o.latency}초)`,
     });
   }
   updateFieldEvents() {
     if (!this.fieldEvents?.length) return;
     for (const ev of this.fieldEvents) {
-      if (!ev.cleared && ev.until && this.time >= ev.until) { ev.cleared = true; ev.tClear = this.time; this.log('ok', `${ev.label} 해소`, { obs: '진입자 구역 이탈 확인', act: '로봇 정상 속도 복귀' }); }
+      if (!ev.cleared && ev.until && this.time >= ev.until) {
+        ev.cleared = true; ev.tClear = this.time; this.log('ok', `${ev.label} 해소`, { obs: '진입자 구역 이탈 확인', act: '로봇 정상 속도 복귀' });
+        this.orch.step(ev.inc, 'exec', 'act', '진입자 구역 이탈 확인 · 로봇 정상 속도 복귀'); this.orch.close(ev.inc, '안전 확인 · 인시던트 종료');
+      }
       if (!ev.cleared && !ev.detected && this.time - ev.t0 > 600) ev.cleared = true;   // 10분 동안 아무도 못 보면 정리
     }
     this.fieldEvents = this.fieldEvents.filter((e) => !e.cleared || this.time - e.tClear < 2);
@@ -857,7 +958,25 @@ export class Simulation {
   }
   dispatchCharge(v) { v.setTask('충전', [{ go: v.home }, { charge: true }]); }
 
-  disruptSupply(sec) { this.supplyDisruptedUntil = Math.max(this.supplyDisruptedUntil, this.time + sec); }
+  disruptSupply(sec) {
+    this.supplyDisruptedUntil = Math.max(this.supplyDisruptedUntil, this.time + sec);
+    const o = this.orch;
+    if (o.find('supply')) return;
+    const inc = o.open('supply', 'supply', '자재 공급 차질', '자재창고');
+    o.step(inc, 'field', 'detect', `창고 출고 중단 감지 (WMS) — 복구 예상 ${Math.round(sec / 60)}분`);
+    o.step(inc, 'cell', 'self', `투입 스테이션 자체 조치: 버퍼 재고 ${this.rawStock}개로 투입 유지`);
+    o.later(0.5, () => o.step(inc, 'cell', 'report', `상위 보고: 재고 소진 예상 ${Math.round(this.rawStock * this.releaseInterval / 60)}분 · 라인 정지 위험`));
+    if (!this.mode.agentActive) o.later(o.latency, () => { o.step(inc, 'orch', 'decide', '판단(작업반장): 대체 자재 수배 필요'); o.step(inc, 'orch', 'command', '명령: 구매 담당 전화 수배 · 지게차 대기'); });
+  }
+  // 운영 에이전트가 공급 차질에 대응했을 때 (판단·명령 단계로 기록)
+  supplyCommand(act) {
+    const o = this.orch, inc = o.find('supply'); if (!inc) return;
+    o.later(Math.max(0, o.latency - 0.5), () => {
+      o.step(inc, 'orch', 'decide', `판단(${o.name}): 공급 복구 전 재고 소진 — 라인 정지 회피 필요`);
+      o.step(inc, 'orch', 'command', `명령: ${act ?? 'SCM 대체 발주 · AGV 우선 배차'}`);
+      o.step(inc, 'exec', 'act', 'AGV 자재 운송 우선 배차 · 투입 간격 조정');
+    });
+  }
   get supplyDisrupted() { return this.time < this.supplyDisruptedUntil; }
 
   // ── 에너지 ─────────────────────────────

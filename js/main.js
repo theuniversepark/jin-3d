@@ -14,6 +14,7 @@ import { LineDesigner } from './designer.js';
 import { renderConcept } from './concept.js';
 import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
 import { RobotCamWall } from './robotcam.js';
+import { OrchView } from './orchview.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
 // ── 렌더러 ─────────────────────────────
@@ -33,29 +34,12 @@ host.appendChild(labelRenderer.domElement);
 
 const scene = new THREE.Scene();
 
-// ── 카메라: 3D 원근 / 2.5D 아이소메트릭 ─────────────────
+// ── 카메라: 3D 원근 ─────────────────
 const target = new THREE.Vector3(1, 0, 1);
 const persp = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 400);
 persp.position.set(-4, 40, 52);
-const isoSize = 26;
-const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -200, 400);
-const isoDir = new THREE.Vector3(1, Math.SQRT2 * 0.82, 1).normalize();
-ortho.position.copy(isoDir.clone().multiplyScalar(80));
-function fitOrtho() {
-  const a = innerWidth / innerHeight;
-  ortho.left = -isoSize * a; ortho.right = isoSize * a; ortho.top = isoSize; ortho.bottom = -isoSize;
-  ortho.updateProjectionMatrix();
-}
-fitOrtho();
-
 const ctlP = new OrbitControls(persp, labelRenderer.domElement);
 ctlP.target.copy(target); ctlP.enableDamping = true; ctlP.maxPolarAngle = Math.PI * 0.47; ctlP.minDistance = 8; ctlP.maxDistance = 120;
-const ctlO = new OrbitControls(ortho, labelRenderer.domElement);
-ctlO.target.copy(target); ctlO.enableDamping = true;
-const isoPolar = Math.acos(isoDir.y);
-ctlO.minPolarAngle = ctlO.maxPolarAngle = isoPolar;
-ctlO.minZoom = 0.6; ctlO.maxZoom = 5;
-ctlO.enabled = false;
 labelRenderer.domElement.style.pointerEvents = 'auto';
 let camera = persp, controls = ctlP;
 
@@ -85,6 +69,7 @@ composer.addPass(new OutputPass());
 const view = new FactoryView(scene);
 const hub = new DataHub();
 const camWall = new RobotCamWall(scene, renderer);   // 로봇 비전 관제 디스플레이 (피지컬AI 단계)
+const orchView = new OrchView(document.getElementById('orchPanel'), document.getElementById('orchBadge'));   // 오케스트레이터 인시던트 흐름도
 const ui = new UI();
 const llm = new LLMController();
 ui.llm = llm;
@@ -96,7 +81,8 @@ const SEED = 20261001;
 // 공정 라인 구성 — 정밀조립Zone 두 시나리오(도어트림·e-axle)와 사용자 라인을 각각 저장해 다음 실행 때도 유지
 // v4: 정밀조립Zone이 혼류(분기·합류) 구조로 바뀌어 이전 Zone 레시피는 버리고 사용자 라인만 옮긴다
 // v5: 부품분류셀 기본 로봇이 SCARA → AMMR(AMR 기반 양팔 로봇)로 바뀌어 이전 Zone 레시피는 버린다
-const LINES_KEY = 'jin3d.lines.v5', OLD_KEYS = ['jin3d.lines.v4', 'jin3d.lines.v3', 'jin3d.lines.v2'], OLD_LINE_KEY = 'jin3d.line.v1';
+// v6: 포장셀 기본 로봇도 AMMR로 바뀌어 이전 Zone 레시피는 버린다
+const LINES_KEY = 'jin3d.lines.v6', OLD_KEYS = ['jin3d.lines.v5', 'jin3d.lines.v4', 'jin3d.lines.v3', 'jin3d.lines.v2'], OLD_LINE_KEY = 'jin3d.line.v1';
 const LINE_SLOTS = ['zone', 'custom'];
 const slotDefault = (k) => (k === 'custom' ? cloneLine(DEFAULT_LINE) : zoneLine());
 function loadLines() {
@@ -158,6 +144,7 @@ function start(key) {
   view.selected = null;
   hub.reset(sim, view);
   camWall.setup(sim, view);
+  orchView.attach(sim);
   applyLook();
   llm.attach(sim, agent);
   ui.reset(sim, agent);
@@ -244,18 +231,6 @@ document.getElementById('modeSeg').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
   segOn(e.currentTarget, b); start(b.dataset.mode);
 });
-document.getElementById('viewSeg').addEventListener('click', (e) => {
-  const b = e.target.closest('button'); if (!b) return;
-  segOn(e.currentTarget, b);
-  const iso = b.dataset.view === 'iso';
-  const tgt = controls.target.clone();
-  camera = iso ? ortho : persp; controls.enabled = false;
-  controls = iso ? ctlO : ctlP; controls.enabled = true;
-  controls.target.copy(tgt);
-  if (iso) ortho.position.copy(tgt).add(isoDir.clone().multiplyScalar(80));
-  controls.update();
-  renderPass.camera = camera;
-});
 document.getElementById('speedSeg').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
   segOn(e.currentTarget, b); speed = +b.dataset.speed;
@@ -265,14 +240,15 @@ playBtn.addEventListener('click', () => { running = !running; playBtn.textConten
 document.getElementById('btnFault').addEventListener('click', () => {
   const cands = sim.processing.filter((s) => s.state !== 'DOWN' && s.state !== 'MAINT');
   const st = cands[Math.floor(Math.random() * cands.length)];
-  if (st) { sim.log('warn', `[시나리오] ${st.name} 고장 주입`, {}); sim.injectFault(st); }
+  if (st) { sim.log('warn', `[시나리오] ${st.name} 고장 주입`, {}); sim.injectFault(st); orchView.show('equipment'); }
 });
+document.getElementById('btnOrch').addEventListener('click', () => orchView.toggle());
 document.getElementById('btnEvent').addEventListener('click', () => {
   const ev = camWall.injectRandom();
-  if (ev) sim.log('warn', `[시나리오] 현장 이벤트 발생 · ${ev.label}`, { obs: '아직 아무도 인지하지 못한 상태 — 로봇 카메라 영상의 AI 추론으로 감지되면 자율 대응합니다' });
+  if (ev) { sim.log('warn', `[시나리오] 현장 이벤트 발생 · ${ev.label}`, { obs: '아직 아무도 인지하지 못한 상태 — 로봇 카메라 영상의 AI 추론으로 감지되면 자율 대응합니다' }); orchView.show('field'); }
 });
 document.getElementById('btnSupply').addEventListener('click', () => {
-  sim.disruptSupply(600);
+  sim.disruptSupply(600); orchView.show('supply');
   sim.log('warn', '[시나리오] 자재 창고 출고 10분 중단', { obs: '협력사 납품 지연 상황 재현' });
 });
 document.getElementById('btnLabels').addEventListener('click', (e) => {
@@ -435,7 +411,6 @@ addEventListener('resize', () => {
   labelRenderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
   persp.aspect = innerWidth / innerHeight; persp.updateProjectionMatrix();
-  fitOrtho();
 });
 
 // ── 로봇 텔레메트리 패널 위치: 선택한 로봇이 패널에 가려지면 반대쪽(왼쪽 ↔ 오른쪽)으로 옮긴다 ─────────────────
@@ -461,6 +436,21 @@ function placeRobotPanel() {
   if (!hit(rects[other]) || dist(rects[other]) > dist(rects[now])) detailEl.classList.toggle('side-right', other === 'right');
 }
 
+// ── 하단 시나리오 버튼 경보: 고장·공급 차질·현장 이벤트가 진행 중이면 해당 버튼이 깜빡이고 건수를 보여 준다 ─────────────────
+const alarmBtns = { fault: document.getElementById('btnFault'), supply: document.getElementById('btnSupply'), event: document.getElementById('btnEvent') };
+function updateAlarmButtons() {
+  const n = {
+    fault: sim.processing.filter((st) => st.state === 'DOWN').length,
+    supply: sim.supplyDisrupted ? 1 : 0,
+    event: (sim.fieldEvents ?? []).filter((e) => !e.cleared).length,
+  };
+  for (const [k, b] of Object.entries(alarmBtns)) {
+    b.classList.toggle(`alarm-${k}`, n[k] > 0);
+    if (n[k] > 0) b.dataset.count = k === 'supply' ? `${Math.ceil((sim.supplyDisruptedUntil - sim.time) / 60)}분` : `${n[k]}건`;
+    else delete b.dataset.count;
+  }
+}
+
 // ── 루프 ─────────────────────────────
 const clock = new THREE.Clock();
 let uiTimer = 0, screenTimer = 0, robotTimer = 0;
@@ -480,7 +470,7 @@ function frame() {
   view.update(rdt, running, speed);
   controls.update();
   uiTimer += rdt; screenTimer += rdt;
-  if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
+  if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); updateAlarmButtons(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
   robotTimer += rdt;
   if (view.telemetry && robotTimer > 0.12) { robotTimer = 0; ui.renderRobot(view.telemetry.snapshot(), hub.robotCounts(view.telemetry)); }
   if (view.telemetry && ui.robotMode) placeRobotPanel();
@@ -539,4 +529,4 @@ if (bridge?.isApp) {
   document.getElementById('keyForm').addEventListener('submit', async (e) => { e.preventDefault(); afterChange(await bridge.setApiKey(input.value)); });
   document.getElementById('keyClear').addEventListener('click', async () => afterChange(await bridge.clearApiKey()));
 }
-window.__twin = { get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, persp, ctlP, llm };
+window.__twin = { get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };

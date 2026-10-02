@@ -172,6 +172,7 @@ export class FactoryAgent {
     if (s.supplyDisrupted && this.disruptHandled < s.supplyDisruptedUntil) {
       const remain = s.supplyDisruptedUntil - s.time;
       const act = this.expedite();
+      s.supplyCommand?.(act);   // 오케스트레이터 판단·명령 단계로 기록
       this.decide('alert', '자재 공급 차질 감지', {
         obs: `창고 출고 중단 — 복구까지 ${fmtMin(remain)} 예상`,
         dec: 'SCM 연계로 대체 공급처 확보 가능, 라인 정지 회피 필요',

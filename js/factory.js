@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RobotTelemetry } from './telemetry.js';
 import { BELT_Y, LOC, chgLoc, FG_CAP, RAW_CAP, ST_LABEL } from './sim.js';
-import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, AMR_LANES, amrPark, ZONE_AMR } from './line.js';
+import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, AMR_LANES, amrPark, ZONE_AMR, AMMR } from './line.js';
 
 // ── 헬퍼 ─────────────────────────────
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.1, ...o });
@@ -325,6 +325,33 @@ function makeMaintBot() {
   return g;
 }
 
+// ── 경보 표시 (설비 고장·공급 차질·현장 이벤트): 바닥 테두리 + 경광등 + 빛기둥, 깜빡임은 update에서 ─────────────────
+export function makeAlarmFx(w, d, h = 4.2) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false });
+  const t = 0.16;
+  for (const [x, z, sx, sz] of [[0, -d / 2, w, t], [0, d / 2, w, t], [-w / 2, 0, t, d], [w / 2, 0, t, d]]) {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(sx, sz), mat); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.03, z); g.add(m);
+  }
+  const fill = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.12, depthWrite: false, toneMapped: false }));
+  fill.rotation.x = -Math.PI / 2; fill.position.y = 0.025; g.add(fill);
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.28, 16, 12), mat); beacon.position.y = h + 0.6; g.add(beacon);
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.45, h, 16, 1, true), new THREE.MeshBasicMaterial({ color: 0xff3030, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, toneMapped: false }));
+  beam.position.y = h / 2; g.add(beam);
+  g.userData = { mats: [mat, fill.material, beam.material], base: [0.9, 0.12, 0.18], beacon };
+  g.visible = false;
+  return g;
+}
+// color: 경보 색, t: 시간 — 0.9초 주기로 깜빡인다 (동작 줄이기 설정이면 고정 표시)
+const REDUCED_MOTION = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+export function blinkAlarmFx(g, on, color, t) {
+  g.visible = on; if (!on) return;
+  const k = REDUCED_MOTION ? 1 : 0.35 + 0.65 * (Math.sin(t * Math.PI * 2 / 0.9) > 0 ? 1 : 0.15);
+  g.userData.mats.forEach((m, i) => { m.color.setHex(color); m.opacity = g.userData.base[i] * k; });
+  g.userData.beacon.scale.setScalar(REDUCED_MOTION ? 1 : 0.85 + 0.3 * k);
+}
+export const ALARM_COLOR = { fault: 0xff3030, supply: 0xff8a1f, event: 0xffc21f };
+
 // ── 공정 설비 ─────────────────────────────
 function stationBase(g, len = 4.2, depth = 3.6) {
   put(box(len, 0.15, depth, MAT.dark), 0, 0.075, 0, g);
@@ -384,6 +411,7 @@ function makeRobot(kind, color) {
     const led = emis(0x2aa8ff, 2.2);
     put(box(0.84, 0.04, 0.03, led, false), 0, 0.3, 0.33, root);
     put(cyl(0.07, 0.07, 0.06, MAT.dark, 14), 0, 0.38, 0.24, root);                          // 라이다
+    const bin = put(box(0.36, 0.18, 0.26, std(0x2f6fd6)), 0, 0.44, -0.2, root); bin.visible = false;   // 선반에서 가져오는 부품 빈
     const lift = put(new THREE.Group(), 0, 0.35, -0.05, root);
     put(box(0.2, 0.62, 0.2, MAT.steel), 0, 0.31, 0, lift);
     put(box(0.5, 0.3, 0.3, COBOT_MAT), 0, 0.72, 0, lift);                                    // 가슴
@@ -399,7 +427,7 @@ function makeRobot(kind, color) {
     });
     const sideNames = ['왼팔', '오른팔'];
     return {
-      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, payload: 10, dual: true,
+      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, bin, payload: 10, dual: true,
       jointDefs: [{ name: '몸통 승강', unit: 'mm', min: 0, max: 0.12 },
         ...sideNames.flatMap((n) => ARM_JOINTS.map((j) => ({ ...j, name: `${n} ${j.name}` })))],
       joints: () => [lift.position.y - 0.35, ...arms[0].joints(), ...arms[1].joints()],
@@ -494,13 +522,27 @@ function placeRobots(g, st) {
     else {
       const [x, z, yaw] = slots[i];
       // AMMR은 이동 플랫폼 깊이(0.64m)만큼 통로에서 조금 더 떨어져 도킹한다
-      put(r.root, x, kind === 'ammr' ? 0.06 : 0.15, kind === 'ammr' ? Math.sign(z) * 1.9 : z, group); r.root.rotation.y = yaw;
+      put(r.root, x, kind === 'ammr' ? 0.06 : 0.15, kind === 'ammr' ? Math.sign(z) * AMMR.slotZ : z, group); r.root.rotation.y = yaw;
+      r.slot = { x, z: kind === 'ammr' ? Math.sign(z) * AMMR.slotZ : z, yaw, side: Math.sign(z) };
     }
     r.phase = i * 1.3;
     r.root.traverse((o) => { o.userData.robotIdx = i; });
     robots.push(r);
   }
-  return { group, robots };
+  // AMMR 셀: 로봇이 오가는 부품 선반 (양쪽, 작업 위치에서 약 1m 바깥) — 앞면이 셀을 향한다
+  const racks = [];
+  if (kind === 'ammr') for (const side of [...new Set(robots.map((r) => r.slot.side))]) {
+    const x = robots.find((r) => r.slot.side === side).slot.x;
+    const rk = put(new THREE.Group(), x, 0.06, side * AMMR.rackZ, group); rk.rotation.y = side > 0 ? Math.PI : 0;
+    for (const [px, pz] of [[-0.7, -0.24], [0.7, -0.24], [-0.7, 0.24], [0.7, 0.24]]) put(box(0.06, 1.75, 0.06, MAT.accent), px, 0.88, pz, rk);
+    const bins = [];
+    [0.32, 0.92, 1.52].forEach((y) => {
+      put(box(1.46, 0.04, 0.52, MAT.steel), 0, y, 0, rk);
+      [0x2f6fd6, 0x3ddc84, 0xf5b82e, 0xd23b3b].forEach((c, k) => bins.push(put(box(0.3, 0.2, 0.36, std(c)), -0.51 + k * 0.34, y + 0.12, 0.02, rk)));
+    });
+    racks.push({ side, group: rk, bins });
+  }
+  return { group, robots, racks };
 }
 
 // ── 공정 설비 (유형별) ─────────────────
@@ -827,6 +869,8 @@ export class FactoryView {
 
   buildAreas() {
     const r = this.root;
+    // 자재 공급 차질 경보: 자재창고 랙 주변
+    this.whAlarm = put(makeAlarmFx(12.4, 4.6, 5.2), -26, 0, -16.5, r);
     // 자재 창고 랙
     const rack = new THREE.Group(); put(rack, -26, 0, -16.5, r);
     for (const x of [-5, -2.5, 0, 2.5, 5]) for (const z of [-1, 1]) put(box(0.12, 5, 0.12, MAT.accent), x, 2.5, z, rack);
@@ -888,7 +932,7 @@ export class FactoryView {
     for (const v of [...this.stationViews, ...(this.vehicleViews ?? []), ...(this.techViews ?? []), ...(this.helperViews ?? []), ...(this.quadViews ?? [])]) {
       const l = v.label ?? v.lbl; l.removeFromParent(); l.element.remove();
     }
-    for (const sv of this.stationViews) this.root.remove(sv.group);
+    for (const sv of this.stationViews) { this.root.remove(sv.group); if (sv.alarm) this.root.remove(sv.alarm); }
     for (const c of this.convGroups ?? []) this.root.remove(c);
     if (this.zoneDeco) { this.root.remove(this.zoneDeco); this.zoneDeco = null; }
     this.dyn.clear();
@@ -903,8 +947,8 @@ export class FactoryView {
       if (sim.useAMR) cellBase(g, st.type === 'source' || st.type === 'sink' ? 3.6 : 4.6);
       else this.conveyorTex.push(stationBase(g, st.type === 'source' || st.type === 'sink' ? 3.6 : 4.2).map);
       const parts = BUILDERS[st.type](g, st, sim);
-      const { group: robotGroup, robots } = placeRobots(g, st);
-      parts.robots = robots;
+      const { group: robotGroup, robots, racks } = placeRobots(g, st);
+      parts.robots = robots; parts.racks = racks;
       const light = put(makeStackLight(), -1.9, 0.15, -1.6, g);
       g.traverse((o) => { o.userData.stationId = st.id; });
       g.userData.stationId = st.id;
@@ -932,7 +976,10 @@ export class FactoryView {
       const pulse = put(new THREE.Mesh(new THREE.RingGeometry(0.2, 0.26, 24), ringM), sp.x, 3.2, sp.z, this.iot);
       pulse.lookAt(sp.x, 10, sp.z);
       this.root.add(g);
-      this.stationViews.push({ st, group: g, parts, light, label, el, sensor, pulse, ringM, sensorMat, phase: Math.random() * 6 });
+      // 설비 고장(·투입구는 공급 차질) 경보 — 셀 바닥 크기에 맞춘 테두리와 경광등
+      const alarm = makeAlarmFx(st.type === 'source' || st.type === 'sink' ? 4.2 : 5.4, 5.4, 4.6);
+      this.root.add(alarm); alarm.position.set(st.x, 0, st.z);
+      this.stationViews.push({ st, group: g, parts, light, label, el, sensor, pulse, ringM, sensorMat, alarm, phase: Math.random() * 6 });
     }
     if (isZone(sim.line)) this.buildZoneDeco(sim);
     this.iot.visible = mode !== 'traditional';
@@ -1230,6 +1277,13 @@ export class FactoryView {
 
     const dts = simRunning ? rdt * simSpeed : 0;
     for (const sv of this.stationViews) this.animateStation(sv, t, rdt, dts);
+    // 경보 깜빡임: 고장 설비(빨강), 공급 차질 시 자재창고·투입구(주황) — 해결되면 꺼진다
+    for (const sv of this.stationViews) {
+      const kind = sv.st.state === 'DOWN' ? 'fault' : sv.st.type === 'source' && sim.supplyDisrupted ? 'supply' : null;
+      blinkAlarmFx(sv.alarm, !!kind, ALARM_COLOR[kind] ?? 0, t);
+      sv.el.classList.toggle('alarm-fault', kind === 'fault'); sv.el.classList.toggle('alarm-supply', kind === 'supply');
+    }
+    blinkAlarmFx(this.whAlarm, sim.supplyDisrupted, ALARM_COLOR.supply, t);
 
     // 불량 배출 연출
     for (let i = this.flyers.length - 1; i >= 0; i--) {
@@ -1389,6 +1443,19 @@ export class FactoryView {
     sv.light.userData.set(st.state, t);
     const p = st.progress ?? 0;
     if (parts.robots) for (const r of parts.robots) r.anim(busy, t + r.phase, p);
+    // AMMR: 작업 위치 ↔ 부품 선반 왕복 (회전 → 주행 → 양팔 피킹 → 회전 → 복귀)
+    if (st.ammr && parts.robots) parts.robots.forEach((r, i) => {
+      const u = st.ammr[i]; if (!u || !r.slot) return;
+      const e = u.pos * u.pos * (3 - 2 * u.pos);
+      r.root.position.z = r.slot.z + (r.slot.side * AMMR.pickZ - r.slot.z) * e;
+      r.root.rotation.y = r.slot.yaw + u.turn * Math.PI;
+      if (u.phase !== 'work') r.anim(u.phase === 'pick', t + r.phase, p);
+      r.bin.visible = u.carry || u.phase === 'pick';
+    });
+    if (parts.racks?.length) {
+      const frac = st.parts != null ? st.parts / (this.sim.mode.partsCap || 40) : 1;
+      for (const rk of parts.racks) rk.bins.forEach((b, k) => (b.visible = k < Math.ceil(frac * rk.bins.length)));
+    }
     if (st.standby) {
       if (parts.scan) parts.scan.visible = false;
       if (parts.stack) parts.stack.forEach((b) => (b.visible = false));

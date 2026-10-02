@@ -3,6 +3,8 @@
 // 관절값과 위치는 화면에 그려지는 모델 값 그대로이고, 센서값은 움직임·부하·설비 상태로 계산한 시뮬레이션 값이다.
 import * as THREE from 'three';
 import { moverRadius } from './sim.js';
+import { AMMR } from './line.js';
+const AMMR_PHASE = { work: '작업 위치 (셀 도킹)', turnOut: '부품 선반 쪽으로 회전', driveOut: '부품 선반으로 주행', pick: '선반에서 양팔 피킹', waitRack: '선반 재고 대기', turnIn: '셀 쪽으로 회전', driveIn: '작업 위치로 복귀 주행' };
 
 const DEG = 180 / Math.PI;
 const HIST = 120;              // 차트에 남기는 샘플 수 (0.1초 간격 → 12초)
@@ -71,6 +73,8 @@ export class RobotTelemetry {
       put('ProcessSensor', `${force.label}`, force.unit, force.value);
       put('MotorCurrentTotal', '모터 전류 합계', 'A', (this.tq ?? []).reduce((a, b) => a + b, 0) * 0.06);
       put('BaseVibrationRMS', '베이스 진동 RMS', 'mm/s', 0.6 + (100 - st.health) * 0.045 + (busy ? 0.4 : 0));
+      const au = R.robot.dual ? st.ammr?.[this.ref.idx] : null;
+      if (au) { put('PartsBin', '로봇 부품 빈', 'pcs', au.bin, 'int'); put('PlatformPhase', '이동 플랫폼 상태', null, au.phase, 'string'); put('PlatformOffset', '작업 위치에서 이동 거리', 'm', au.pos * (AMMR.pickZ - AMMR.slotZ)); put('RackStock', '부품 선반 재고', 'pcs', st.parts ?? null, 'int'); }
       if (R.robot.kind === 'cobot') put('NearestMoverDistance', '최근접 이동체 거리 (안전 감시)', 'm', this.nearestMover(R.robot.root.getWorldPosition(v3())));
       return out;
     }
@@ -253,7 +257,11 @@ export class RobotTelemetry {
         ['왼팔 X / Y / Z', xyz(this.tcp)], ['왼팔 TCP 속도', `${this.tcp.speed.toFixed(0)} mm/s`],
         ['오른팔 X / Y / Z', xyz(this.tcp2)], ['오른팔 TCP 속도', `${this.tcp2.speed.toFixed(0)} mm/s`],
       ] : [['X / Y / Z', xyz(this.tcp)], ['TCP 속도', `${this.tcp.speed.toFixed(0)} mm/s`]] });
-      if (r.dual) out.status.push(['이동 플랫폼', st.state === 'BUSY' || st.state === 'IDLE' || st.state === 'STARVED' || st.state === 'BLOCKED' ? '셀 도킹 (위치 고정)' : '셀 도킹 · 정지']);
+      const u = r.dual ? st.ammr?.[this.ref.idx] : null;
+      if (u) out.status.push(['이동 플랫폼', AMMR_PHASE[u.phase] ?? u.phase, u.phase === 'waitRack' ? 'warn' : u.phase === 'work' ? '' : 'ok'],
+        ['로봇 부품 빈', `${u.bin} / ${AMMR.bin}개${u.bin <= AMMR.reorder ? ' · 보충 필요' : ''}`, u.bin <= AMMR.reorder ? 'warn' : ''],
+        ['부품 선반 재고', st.parts != null ? `${st.parts}개` : '충분 (상시 보충)'], ['선반 왕복', `${u.trips}회`]);
+      else if (r.dual) out.status.push(['이동 플랫폼', '셀 도킹 (위치 고정)']);
       out.sections.push({ title: '센서', rows: [
         ['엔드이펙터', tool.tool],
         [f.label, `${f.value.toFixed(f.unit === 'N·m' ? 2 : 0)} ${f.unit}`],
