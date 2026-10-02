@@ -117,6 +117,7 @@ export class UI {
     let msg;
     if (!sim.mode.agentActive) msg = '레거시 공장은 데이터 수집이 없어 LLM 에이전트를 쓸 수 없습니다';
     else if (!llm.available) msg = window.JIN3D_SHARED ? '공유 페이지에서는 Claude 연동을 쓸 수 없어 규칙 기반 에이전트로 운영합니다'
+      : window.JIN3D_NO_SERVER ? '웹 버전에서는 Claude 연동을 쓸 수 없어 규칙 기반 에이전트로 운영합니다 (맥 앱·npm start에서 사용)'
       : window.jin3d ? 'Claude 사용 불가 — ⚙ 설정(⌘,)에서 API 키를 입력하세요' : 'Claude 사용 불가 — npm start로 실행하고 ANTHROPIC_API_KEY를 설정하세요';
     else if (!llm.enabled) msg = `${llm.model} 연결 가능`;
     else msg = `${llm.inFlight ? '' : '대기 · '}${llm.status || '준비'} · 호출 ${llm.calls}회 · 약 $${llm.costUSD.toFixed(3)}`;

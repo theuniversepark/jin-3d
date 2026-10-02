@@ -12,6 +12,12 @@ npm run app         # 패키징 없이 개발용으로 바로 실행
 - 내장 서버는 127.0.0.1의 임의 포트에서만 열립니다.
 - 개발자 서명이 없는 ad-hoc 서명 앱입니다. 이 Mac에서 직접 빌드한 앱은 바로 열립니다. 다른 Mac으로 옮기면 처음 한 번은 Finder에서 우클릭 → 열기가 필요합니다.
 
+## 웹 버전 (GitHub Pages)
+설치 없이 브라우저에서 바로 실행: **https://theuniversepark.github.io/jin-3d/**
+- `main` 브랜치 루트를 그대로 서비스합니다(`.nojekyll`). 푸시하면 1~2분 뒤 반영됩니다.
+- 서버가 없으므로 Claude 연동(운영 에이전트·자연어 공정 설계)과 MQTT 발행은 쓸 수 없고, 규칙 기반 에이전트로 운영합니다(`*.github.io`에서 열면 자동으로 이 모드).
+- 3D 운영, 단계 전환, 로봇 텔레메트리, 데이터 수집, 파일 저장(JSON·XML·RDF·CSV·AutomationML, 로봇별 AASX 등)은 모두 됩니다.
+
 ## 브라우저로 실행
 ```bash
 cd /Users/jin/Projects/3d

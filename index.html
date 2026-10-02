@@ -161,6 +161,10 @@
 
   <div class="hint" id="hint">설비를 클릭하면 상세 정보 · 드래그 회전 · 휠 확대</div>
 
+  <script>
+    // GitHub Pages 같은 정적 호스팅: 서버(Claude·MQTT)가 없으므로 호출하지 않는다. 파일 저장은 그대로 된다.
+    if (/\.github\.io$/.test(location.hostname)) window.JIN3D_NO_SERVER = true;
+  </script>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>
