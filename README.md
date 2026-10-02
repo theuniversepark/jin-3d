@@ -1,5 +1,7 @@
 # Jin-3D — 레거시 → 자동화 → 피지컬AI 자율공장 시뮬레이터
 
+**▶ 웹 버전 바로 실행: https://theuniversepark.github.io/jin-3d/** (설치 없이 브라우저에서 실행 · Claude 연동과 MQTT 발행은 맥 앱 또는 `npm start`에서)
+
 웹 브라우저에서 실행되는 3D/2.5D 공장 시뮬레이션 에이전트입니다.
 
 ## 맥 앱 (Jin-3D.app)
