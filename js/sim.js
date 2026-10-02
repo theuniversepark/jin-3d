@@ -42,6 +42,14 @@ export const MODES = {
   },
 };
 
+// 현장 이벤트 (피지컬AI 단계: 로봇 카메라 영상의 AI 추론으로 감지 → 자율 대응)
+export const FIELD_EVENTS = {
+  leak:      { label: '바닥 누유', cls: '누유', severity: 'alarm', response: 'clean', task: '누유 흡착·세척' },
+  debris:    { label: '바닥 이물질', cls: '이물질', severity: 'warn', response: 'clean', task: '이물질 수거' },
+  intrusion: { label: '안전구역 무단 진입', cls: '사람', severity: 'alarm', response: 'safety', task: '' },
+  smoke:     { label: '연기 의심', cls: '연기', severity: 'alarm', response: 'inspect', task: '열화상 정밀 점검' },
+};
+
 export const ST_LABEL = {
   IDLE: '대기', BUSY: '가동', STARVED: '자재대기', BLOCKED: '배출대기',
   DOWN: '고장', MAINT: '정비중', HOLD: '투입보류', FULL: '적재만재', OFF: '미사용', NOAMR: 'AMR대기', NOPARTS: '부품결품',
@@ -148,7 +156,7 @@ export class Mover {
     return true;
   }
   get idle() { return this.steps.length === 0; }
-  setTask(name, steps) { this.task = name; this.steps = steps; }
+  setTask(name, steps) { this.task = name; this.steps = steps; this.path = null; this.detourPts = 0; }   // 이동 중 재지시되면 새 경로로
   update(dt) {
     this.moving = false; this.charging = false;
     const st = this.steps[0];
@@ -488,6 +496,7 @@ export class Simulation {
       if (w.patrol && w.idle) w.setTask('순찰', [{ go: w.patrol[0], via: [] }, { wait: 5 }, { go: w.patrol[1], via: [] }, { wait: 5 }]);
       w.update(dt);
     }
+    this.updateFieldEvents();
     this.accountEnergy(dt);
     this.stats.wipInt += this.wip() * dt;
     if (this.time - this.lastHist >= 20) {
@@ -766,6 +775,57 @@ export class Simulation {
     } else if (st.drift > 0.15 && !st.def.inspect) {
       if (this.selfCalibrate(st)) this.log('plan', `${q.id} 순찰 · ${st.name} 미세 편차`, { obs: `치수·토크 편차 드리프트 ${(st.drift * 100).toFixed(0)}%`, act: '셀 자율 재보정' });
     }
+  }
+
+  // ── 현장 이벤트: 발생 → 로봇 카메라 AI 감지 → 자율 대응 ─────────────────
+  injectFieldEvent(type, x, z) {
+    const E = FIELD_EVENTS[type]; if (!E) return null;
+    this.fieldEvents ??= []; this.fieldSeq = (this.fieldSeq ?? 0) + 1;
+    const ev = { id: this.fieldSeq, type, label: E.label, cls: E.cls, severity: E.severity, x, z, t0: this.time, detected: false, cleared: false };
+    this.fieldEvents.push(ev);
+    return ev;
+  }
+  // 로봇 카메라 영상에서 처음 인식했을 때 (by: 이동체·로봇 이름, conf: 추론 신뢰도)
+  detectFieldEvent(ev, by, conf) {
+    if (ev.detected || ev.cleared) return;
+    ev.detected = true; ev.detectedBy = by; ev.conf = conf; ev.tDetect = this.time;
+    const E = FIELD_EVENTS[ev.type], where = `x ${ev.x.toFixed(1)} · z ${ev.z.toFixed(1)}`;
+    const near = this.processing.reduce((b, st) => (Math.hypot(st.x - ev.x, st.z - ev.z) < Math.hypot(b.x - ev.x, b.z - ev.z) ? st : b), this.processing[0]);
+    const loc = { x: ev.x, z: ev.z + (ev.z >= 0 ? 1.0 : -1.0), aisle: ev.z >= 0 ? 'F' : 'B', name: E.label };
+    let act = '';
+    if (E.response === 'clean') {
+      const h = [...this.helpers, ...this.techs].filter((k) => k.kind === 'humanoid').sort((a, b) => (b.idle - a.idle) || (Math.hypot(a.x - ev.x, a.z - ev.z) - Math.hypot(b.x - ev.x, b.z - ev.z)))[0];
+      if (h) {
+        const resume = h.idle ? [] : h.steps;   // 하던 일은 처리 후 이어서
+        h.setTask(`${E.task} → ${near.name} 앞`, [{ go: loc }, { wait: 8, done: () => { ev.cleared = true; ev.tClear = this.time; this.log('ok', `${E.label} 처리 완료`, { obs: `${h.id}가 ${E.task} 완료`, act: '구역 정상화' }); } }, ...resume, ...(resume.length ? [] : [{ go: h.home }])]);
+        ev.responder = h.id; act = `${h.id} 출동 — ${E.task} (작업 중이던 일은 처리 후 재개)`;
+      }
+    } else if (E.response === 'inspect') {
+      const q = this.quads.slice().sort((a, b) => Math.hypot(a.x - ev.x, a.z - ev.z) - Math.hypot(b.x - ev.x, b.z - ev.z))[0];
+      if (q) {
+        q.setTask(`${E.task} → ${near.name} 부근`, [{ go: loc }, { do: () => { q.scanning = near; } }, { wait: 6, done: () => {
+          q.scanning = null; ev.cleared = true; ev.tClear = this.time;
+          this.log('ok', `${E.label} 확인 — 이상 없음`, { obs: `${q.id} 열화상·가스 센서 점검: 발열·연소 흔적 없음 (스팀 오인 추정)`, act: '알람 해제' });
+        } }]);
+        ev.responder = q.id; act = `${q.id} 출동 — 열화상·가스 센서 정밀 점검`;
+      }
+    } else {
+      ev.until = this.time + 60;
+      act = '주변 로봇 협동 감속·접근 금지 구역 설정, 원격 관제 요원 호출';
+    }
+    this.log('alert', `AI 비전 감지 · ${E.label}`, {
+      obs: `${by} 카메라 영상 추론 — ${E.cls} 신뢰도 ${conf.toFixed(2)} · ${near.name} 부근 (${where})`,
+      dec: E.response === 'clean' ? '작업 경로 안전 위협 — 즉시 제거' : E.response === 'inspect' ? '화재 초기 징후 가능성 — 근접 확인' : '무인 구역 사람 진입 — 안전 우선',
+      act,
+    });
+  }
+  updateFieldEvents() {
+    if (!this.fieldEvents?.length) return;
+    for (const ev of this.fieldEvents) {
+      if (!ev.cleared && ev.until && this.time >= ev.until) { ev.cleared = true; ev.tClear = this.time; this.log('ok', `${ev.label} 해소`, { obs: '진입자 구역 이탈 확인', act: '로봇 정상 속도 복귀' }); }
+      if (!ev.cleared && !ev.detected && this.time - ev.t0 > 600) ev.cleared = true;   // 10분 동안 아무도 못 보면 정리
+    }
+    this.fieldEvents = this.fieldEvents.filter((e) => !e.cleared || this.time - e.tClear < 2);
   }
 
   // ── 물류 작업 ─────────────────────────────

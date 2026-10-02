@@ -13,6 +13,7 @@ import { LLMController } from './llm.js';
 import { LineDesigner } from './designer.js';
 import { renderConcept } from './concept.js';
 import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
+import { RobotCamWall } from './robotcam.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
 // ── 렌더러 ─────────────────────────────
@@ -83,6 +84,7 @@ composer.addPass(new OutputPass());
 // ── 시뮬레이션 ─────────────────────────────
 const view = new FactoryView(scene);
 const hub = new DataHub();
+const camWall = new RobotCamWall(scene, renderer);   // 로봇 비전 관제 디스플레이 (피지컬AI 단계)
 const ui = new UI();
 const llm = new LLMController();
 ui.llm = llm;
@@ -155,6 +157,7 @@ function start(key) {
   view.setup(sim, labelsOn, changedIds);
   view.selected = null;
   hub.reset(sim, view);
+  camWall.setup(sim, view);
   applyLook();
   llm.attach(sim, agent);
   ui.reset(sim, agent);
@@ -263,6 +266,10 @@ document.getElementById('btnFault').addEventListener('click', () => {
   const cands = sim.processing.filter((s) => s.state !== 'DOWN' && s.state !== 'MAINT');
   const st = cands[Math.floor(Math.random() * cands.length)];
   if (st) { sim.log('warn', `[시나리오] ${st.name} 고장 주입`, {}); sim.injectFault(st); }
+});
+document.getElementById('btnEvent').addEventListener('click', () => {
+  const ev = camWall.injectRandom();
+  if (ev) sim.log('warn', `[시나리오] 현장 이벤트 발생 · ${ev.label}`, { obs: '아직 아무도 인지하지 못한 상태 — 로봇 카메라 영상의 AI 추론으로 감지되면 자율 대응합니다' });
 });
 document.getElementById('btnSupply').addEventListener('click', () => {
   sim.disruptSupply(600);
@@ -386,6 +393,15 @@ labelRenderer.domElement.addEventListener('pointerup', (e) => {
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
   ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
+  // 로봇 비전 관제 화면의 영상 칸을 누르면 그 로봇을 선택한다
+  if (camWall.group.visible) {
+    const w = ray.intersectObject(camWall.screen, false)[0];
+    if (w?.uv && camWall.list?.length) {
+      const col = Math.min(2, Math.floor(w.uv.x * 3)), row = w.uv.y > 0.5 ? 0 : 1;
+      const f = camWall.list[row * 3 + col];
+      if (f) { view.selected = f.ref.type === 'cell' ? f.ref.stationId : null; view.selectRobot(f.ref); ui.showRobot(); robotTimer = 1; return; }
+    }
+  }
   // 로봇(셀 로봇·AMR·AGV·휴머노이드·사족보행)을 누르면 관절·센서 텔레메트리, 설비를 누르면 설비 상세
   const hit = view.pick(ray.intersectObjects(view.pickTargets(), true));
   if (hit && hit.type !== 'station') {
@@ -469,6 +485,7 @@ function frame() {
   if (view.telemetry && robotTimer > 0.12) { robotTimer = 0; ui.renderRobot(view.telemetry.snapshot(), hub.robotCounts(view.telemetry)); }
   if (view.telemetry && ui.robotMode) placeRobotPanel();
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought); }
+  camWall.update(rdt);
   composer.render();
   labelRenderer.render(scene, camera);
   requestAnimationFrame(frame);
@@ -522,4 +539,4 @@ if (bridge?.isApp) {
   document.getElementById('keyForm').addEventListener('submit', async (e) => { e.preventDefault(); afterChange(await bridge.setApiKey(input.value)); });
   document.getElementById('keyClear').addEventListener('click', async () => afterChange(await bridge.clearApiKey()));
 }
-window.__twin = { get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, persp, ctlP, llm };
+window.__twin = { get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, persp, ctlP, llm };

@@ -399,7 +399,7 @@ function makeRobot(kind, color) {
     });
     const sideNames = ['왼팔', '오른팔'];
     return {
-      root, kind, tip: arms[0].tip, tip2: arms[1].tip, payload: 10, dual: true,
+      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, payload: 10, dual: true,
       jointDefs: [{ name: '몸통 승강', unit: 'mm', min: 0, max: 0.12 },
         ...sideNames.flatMap((n) => ARM_JOINTS.map((j) => ({ ...j, name: `${n} ${j.name}` })))],
       joints: () => [lift.position.y - 0.35, ...arms[0].joints(), ...arms[1].joints()],
