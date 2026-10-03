@@ -2227,6 +2227,10 @@ export class FactoryView {
     area(-28.8, -18.6, -20.6, -11.4, AMBER, '📦 물류존', agv ? '자재창고 · AGV 자재 상차 · 부품 랙 피킹' : '자재창고 · 지게차 자재 상차 · 부품 랙', -24.7, -12.2, 6.4);
     // 입고 지게차 전용 영역: 입고 도크 ↔ 창고 랙 왼쪽 입고 칸 ↔ 대기 — 뒤쪽 통로·세로 통로와 떨어져 있어 로봇 이동 경로와 겹치지 않는다
     { const Z = INBOUND.zone; area(Z.x0, Z.z0, Z.x1, Z.z1, GREEN, `🚚 입고 ${sim.mode.key === 'dark' ? '자율 ' : ''}지게차 전용`, '로봇 통행 금지 · 도크 ↔ 창고 입고 칸', (Z.x0 + Z.x1) / 2, Z.z1 - 0.6, 5.6); }
+    // 입고 지게차 주차 칸 (대기 자리, 도크 쪽을 향해 반듯이 주차)
+    { const rc = sim.forklifts?.find((f) => f.receiver); if (rc) { const hx = rc.home.x, hz = rc.home.z, pl = new THREE.MeshBasicMaterial({ color: 0xf2f5f8 });
+      for (const sd of [-1, 1]) flat(2.9, 0.1, pl, hx - 0.15, hz + sd * 0.9, 0.02);   // 동쪽(선반 쪽) 끝선, 서쪽으로 들어온다
+      flat(0.1, 1.9, pl, hx + 1.3, hz, 0.02); } }
     // 물류 대기: 부품 보충 휴머노이드 (피지컬AI)
     if (sim.helpers?.length) area(-20.2, -13.6, -16.2, -11.4, GREEN, '물류 대기', '부품 보충 휴머노이드', -18.2, -11.95, 3.8);
     // 물류 대기: AGV(레거시는 지게차) 대기·충전 — 충전 패드 4칸과 충전 기둥

@@ -1,7 +1,7 @@
 // 제조 라인 시뮬레이션 엔진 — 렌더링과 분리되어 있어 헤드리스(고속 비교) 실행이 가능하다.
 import { CommandCenter } from './commands.js';
 import { TruckYard, planForklift } from './shipping.js';
-import { InboundYard, planReceiver, WH } from './receiving.js';
+import { InboundYard, planReceiver, WH, INBOUND } from './receiving.js';
 import { PatrolDrone } from './drone.js';
 import { VLAPipeline } from './vla.js';
 import { AIOSPipeline } from './aios.js';
@@ -283,8 +283,8 @@ export class Simulation {
     this.forklifts = [new Mover(m.key === 'dark' ? '자율 지게차' : '출하 지게차 (유인)', 'forklift', { x: 19.5, z: -16.5, aisle: 'B', name: '출하 지게차 대기' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
     this.forklifts[0].shipper = true; this.forklifts[0].auto = m.key === 'dark';
     // 입고 지게차: 입고 도크(왼쪽 벽)에 접안한 공급사 트럭에서 팔레트를 내려 자재창고 랙에 넣는다 (피지컬AI만 자율)
-    const rcv = new Mover(m.key === 'dark' ? '입고 자율 지게차' : '입고 지게차 (유인)', 'forklift', { x: -33.4, z: -12.4, aisle: 'B', name: '입고 지게차 대기' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1);
-    rcv.receiver = true; rcv.auto = m.key === 'dark'; this.forklifts.push(rcv);
+    const rcv = new Mover(m.key === 'dark' ? '입고 자율 지게차' : '입고 지게차 (유인)', 'forklift', { ...INBOUND.park, aisle: 'B', name: '입고 지게차 대기 (선반 왼쪽)' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1);
+    rcv.receiver = true; rcv.auto = m.key === 'dark'; rcv.heading = Math.PI / 2; this.forklifts.push(rcv);   // 주차 방향: 선반 쪽(동쪽)을 향해
     this.inbound = new InboundYard(this);
     this.yard = new TruckYard(this);
     // 피지컬AI: 순찰 드론 (지상 교통과 높이가 달라 movers에는 넣지 않는다)
