@@ -8,6 +8,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 |---|---|---|---|---|
 | three.js | 0.186.1 | MIT | https://github.com/mrdoob/three.js | 3D 렌더링 전체 (`vendor/three`) |
 | └ OrbitControls · CSS2DRenderer · EffectComposer · RenderPass · UnrealBloomPass · OutputPass | (three.js `examples/jsm`) | MIT | 같은 저장소 | 시점 조작, 라벨, 발광·후처리 |
+| └ WebGLRenderTarget · readRenderTargetPixels | (three.js 코어) | MIT | 같은 저장소 | 로봇 카메라 영상(관제 디스플레이 8분할, 로봇 정보 창 실시간 영상) |
 | Electron | 44.5.1 | MIT | https://github.com/electron/electron | Mac 앱 셸 (Jin-3D.app) |
 | @electron/packager | 20.3.0 | BSD-2-Clause | https://github.com/electron/packager | Mac 앱 패키징 (`npm run package`) |
 | @anthropic-ai/sdk | 0.131.0 | MIT | https://github.com/anthropics/anthropic-sdk-typescript | Agent(Claude API) 호출 서버 |
@@ -59,7 +60,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 
 ## 5. 직접 작성한 부분
 
-시뮬레이션 엔진, 운영 에이전트, 오케스트레이터, 상위 명령·지시 게이트, 대화 기반 해석기, 출하·트럭·드론, AAS·AASX·OPC UA 메시지 생성기, 3D 모델(설비·로봇·트럭·드론 등), 화면 UI는 이 저장소에서 직접 작성했습니다. 외부 3D 모델 파일이나 외부 이미지는 위 로고 외에는 쓰지 않습니다.
+시뮬레이션 엔진, 운영 에이전트, 오케스트레이터, 상위 명령·지시 게이트, 대화 기반 해석기, 출하·트럭·드론, 설비 현황판, VLA 조립 동작(역기구학), 로봇 카메라 영상(렌더 타깃), AAS·AASX·OPC UA 메시지 생성기, 3D 모델(설비·로봇·트럭·드론 등), 화면 UI는 이 저장소에서 직접 작성했습니다. 외부 3D 모델 파일이나 외부 이미지는 위 로고 외에는 쓰지 않습니다.
 
 ## 6. 유의 사항
 

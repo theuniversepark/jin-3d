@@ -504,7 +504,7 @@ function makeRobot(kind, color) {
     if (cobot) put(cyl(0.13, 0.13, 0.08, COBOT_JOINT), 0, 0.18, 0, arm.turret);
     const speed = cobot ? 1.4 : 2.2;
     return {
-      root: arm.root, kind, tip: arm.tip, jointDefs: ARM_JOINTS, joints: arm.joints, payload: cobot ? 5 : 20,
+      root: arm.root, kind, tip: arm.tip, jointDefs: ARM_JOINTS, joints: arm.joints, payload: cobot ? 5 : 20, arm, scale: cobot ? 0.72 : 1,
       anim(busy, t) {
         if (busy) {
           const w = t * speed;
@@ -538,7 +538,7 @@ function makeRobot(kind, color) {
     });
     const sideNames = ['왼팔', '오른팔'];
     return {
-      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, bin, payload: 10, dual: true,
+      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, bin, payload: 10, dual: true, arms, lift,
       jointDefs: [{ name: '몸통 승강', unit: 'mm', min: 0, max: 0.12 },
         ...sideNames.flatMap((n) => ARM_JOINTS.map((j) => ({ ...j, name: `${n} ${j.name}` })))],
       joints: () => [lift.position.y - 0.35, ...arms[0].joints(), ...arms[1].joints()],
@@ -625,7 +625,10 @@ function placeRobots(g, st) {
   const color = st.type === 'paint' ? MAT.white : MAT.orange;
   const zr = st.type === 'paint' ? 1.4 : 1.7;
   // 정밀조립Zone: AMR 통로를 사이에 두고 양쪽에서 마주 보는 배치
-  const slots = st.zone ? [[-0.75, -1.75, 0], [-0.75, 1.75, Math.PI], [0.95, -1.75, 0], [0.95, 1.75, Math.PI]]
+  // 피지컬AI VLA: 6축 로봇은 대상물에 손이 닿도록 통로 쪽으로 조금 더 다가선다 (AMR 통과 폭은 유지)
+  const vla = st.vla && (kind === 'cobot' || kind === 'articulated');
+  const zz = vla ? 1.4 : 1.75;
+  const slots = st.zone ? [[-0.75, -zz, 0], [-0.75, zz, Math.PI], [0.95, -zz, 0], [0.95, zz, Math.PI]]
     : [[-0.6, -zr, 0], [0.6, zr, Math.PI], [1.3, -zr, 0], [-1.3, zr, Math.PI]];
   for (let i = 0; i < count; i++) {
     const r = makeRobot(kind, color);
@@ -659,6 +662,24 @@ function placeRobots(g, st) {
     });
     racks.push({ side, group: rk, bins });
   }
+  // 피지컬AI VLA: 로봇마다 바로 옆(진행 방향 바깥쪽 1m)에 2단 부품 선반, 손목 카메라, 집어 든 부품
+  if (vla) robots.forEach((r) => {
+    if (!r.slot) return;
+    const dir = r.slot.x > 0 ? 1 : -1, sx = r.slot.x + dir * 1.0, sz = r.slot.z;
+    const sh = put(new THREE.Group(), sx, 0.06, sz, group);
+    for (const [px, pz] of [[-0.22, -0.27], [0.22, -0.27], [-0.22, 0.27], [0.22, 0.27]]) put(box(0.04, 0.98, 0.04, MAT.accent), px, 0.49, pz, sh);
+    const bins = [];
+    [0.48, 0.92].forEach((y) => {
+      put(box(0.5, 0.03, 0.6, MAT.steel), 0, y, 0, sh);
+      [0x2f6fd6, 0x3ddc84, 0xf5b82e, 0xd23b3b].forEach((c, k) => bins.push(put(box(0.2, 0.12, 0.24, std(c)), -0.11 + (k % 2) * 0.22, y + 0.075, -0.13 + Math.floor(k / 2) * 0.26, sh)));
+    });
+    const flange = r.tip.parent;
+    const cam = put(box(0.07, 0.05, 0.06, MAT.dark), 0.07, 0.02, 0, flange);
+    const lens = emis(0x37e8ff, 1.5); put(cyl(0.018, 0.018, 0.02, lens, 10), 0, 0.035, 0, cam);   // 손목 카메라 렌즈 (도구 방향)
+    const held = put(box(0.12, 0.08, 0.12, std(0x3ddc84)), 0, 0.06, 0, r.tip); held.visible = false;
+    r.vla = { shelf: { x: sx, y: 0.06 + 0.92 + 0.15, z: sz }, bins, held, lens, dir };
+    racks.push({ side: r.slot.side, group: sh, bins, vla: true });
+  });
   return { group, robots, racks };
 }
 
@@ -681,18 +702,19 @@ function buildAssembly(g, st, sim) {
     put(cyl(0.2, 0.2, 0.9, MAT.dark), 0, -0.6, 0, bowl);
     return { bowl };
   }
-  // 정밀조립Zone: 양쪽 로봇 바깥 끝에 부품 랙(2단 빈), 오른쪽 끝에 볼 피더
+  // 정밀조립Zone: 양쪽 로봇 바깥 끝에 부품 랙(2단 빈), 오른쪽 끝에 볼 피더 (피지컬AI VLA 셀은 로봇별 부품 선반으로 대체)
+  const feeders = [];
   for (const z of [-1.0, 1.0]) {
-    const r = put(new THREE.Group(), -1.95, 0.06, z, g);
+    const r = put(new THREE.Group(), -1.95, 0.06, z, g); feeders.push(r);
     put(box(0.55, 1.0, 0.6, MAT.steel), 0, 0.5, 0, r);
     colors.forEach((c, i) => put(box(0.24, 0.16, 0.26, std(c)), -0.13 + (i % 2) * 0.26, 0.6 + Math.floor(i / 2) * 0.3, 0, r));
   }
-  const bowl = put(cyl(0.3, 0.2, 0.3, MAT.steel), 1.95, 1.05, -1.0, g);
+  const bowl = put(cyl(0.3, 0.2, 0.3, MAT.steel), 1.95, 1.05, -1.0, g); feeders.push(bowl);
   put(cyl(0.12, 0.12, 0.95, MAT.dark), 0, -0.55, 0, bowl);
   // 제품 전용 라인 표시판
   const sign = put(box(0.5, 0.35, 0.05, std(ZONE_COLOR[st.def.product] ?? 0x888888, { emissive: ZONE_COLOR[st.def.product] ?? 0, emissiveIntensity: 0.5 })), 1.95, 1.6, 1.0, g);
   put(box(0.05, 0.6, 0.05, MAT.dark), 0, -0.45, 0, sign);
-  return { bowl };
+  return { bowl, feeders };
 }
 
 // 부품분류셀: 비전 카메라 브리지 + 부품 공급 트레이 + 분류 빈
@@ -740,14 +762,15 @@ function buildScrew(g) {
   const head = put(new THREE.Group(), 0.15, 2.3, 0, g);
   put(box(0.3, 0.35, 0.3, MAT.accent), 0, 0.1, 0, head);
   const bit = put(cyl(0.035, 0.05, 0.55, MAT.steel, 10), 0, -0.3, 0, head);
+  const feeders = [];
   for (const z of [-1.0, 1.0]) {
-    const f = put(box(0.45, 0.5, 0.4, MAT.white), -1.95, 0.45, z, g);
+    const f = put(box(0.45, 0.5, 0.4, MAT.white), -1.95, 0.45, z, g); feeders.push(f);
     put(cyl(0.16, 0.1, 0.18, MAT.steel), 0, 0.34, 0, f);
   }
   const ctl = put(box(0.5, 0.7, 0.35, MAT.dark), 1.95, 0.4, 1.6, g);
   const screen = emis(0x3ddc84, 1.2);
   put(box(0.36, 0.25, 0.02, screen, false), 0, 0.15, 0.18, ctl);
-  return { head, bit, screen };
+  return { head, bit, screen, feeders };
 }
 
 // 부품체결셀(e-axle): 다축 너트러너 포털 + 토크 모니터
@@ -1202,6 +1225,7 @@ export class FactoryView {
       const g = new THREE.Group(); g.position.set(st.x, 0, st.z); g.rotation.y = st.rot;
       g.scale.z = st.def.side ?? 1;
       st.zone = sim.zone;
+      st.vla = mode === 'dark';   // 피지컬AI: 카메라 기반 VLA로 선반에서 부품을 집어 조립·체결
       if (sim.useAMR) cellBase(g, st.type === 'source' || st.type === 'sink' ? 3.6 : 4.6);
       else this.conveyorTex.push(stationBase(g, st.type === 'source' || st.type === 'sink' ? 3.6 : 4.2).map);
       const parts = BUILDERS[st.type](g, st, sim);
@@ -1210,7 +1234,9 @@ export class FactoryView {
       // 셀 로봇 고유 ID 명판 (로봇 위, 라벨 버튼으로 켜고 끔)
       robots.forEach((rb, i) => { const uid = st.robotUids?.[i]; if (!uid) return; const sp = idPlate(uid); sp.position.set(0, rb.kind === 'ammr' ? 2.55 : 2.35, 0); rb.root.add(sp); this.idPlates.push(sp); sp.visible = labelsOn; });
       if (parts.arms) Object.values(parts.arms).forEach((A, i) => { const uid = sim.sinkRobotUids?.[i]; if (!uid) return; const sp = idPlate(uid); sp.position.set(0, 3.3, 0); A.arm.root.add(sp); this.idPlates.push(sp); sp.visible = labelsOn; });
-      const light = put(makeStackLight(), -1.9, 0.15, -1.6, g);
+      const vlaCell = st.vla && parts.robots?.some((r) => r.vla);
+      if (vlaCell) for (const f of parts.feeders ?? []) f.visible = false;   // 로봇별 부품 선반으로 대체
+      const light = vlaCell ? put(makeStackLight(), 0.1, 0.15, -2.1, g) : put(makeStackLight(), -1.9, 0.15, -1.6, g);
       g.traverse((o) => { o.userData.stationId = st.id; });
       g.userData.stationId = st.id;
       const autoVisible = mode !== 'traditional';
@@ -1729,7 +1755,11 @@ export class FactoryView {
     const p = st.progress ?? 0;
     // 비상정지·보호정지: 로봇이 그 자세 그대로 멈춘다
     const frozen = st.state === 'ESTOP' || st.state === 'PSTOP';
-    if (parts.robots && !frozen) for (const r of parts.robots) r.anim(busy, t + r.phase, p);
+    if (parts.robots && !frozen) parts.robots.forEach((r, i) => {
+      if (r.vla) return this.animVLA(r, st, busy, p, i);
+      r.anim(busy, t + r.phase, p);
+      if (r.kind === 'ammr' && st.vla) this.animAMMRVLA(r, st, busy, t, i);
+    });
     // AMMR: 작업 위치 ↔ 부품 선반 왕복 (회전 → 주행 → 양팔 피킹 → 회전 → 복귀)
     if (st.ammr && parts.robots) parts.robots.forEach((r, i) => {
       const u = st.ammr[i]; if (!u || !r.slot) return;
@@ -1870,6 +1900,54 @@ export class FactoryView {
     ud.beam.visible = look;
     if (look) { ud.beam.scale.set(1, d.y - 0.2, 1); ud.beam.position.y = -(d.y - 0.2) / 2 - 0.1; ud.beam.material.color.setHex(d.mode === 'event' ? 0xff8a3d : 0x37e8ff); ud.beam.material.opacity = d.mode === 'event' ? 0.14 : 0.08; }
     dv.el.innerHTML = `${d.uid ? `<i class="uid">${d.uid}</i>` : ''}${d.id} · ${d.battery.toFixed(0)}%<em>${d.task ?? '대기'}</em>`;
+  }
+
+  // 피지컬AI VLA 조립·체결 (6축 로봇): 손목 카메라로 선반 부품 인식 → 집기 → 대상물로 운반 → 조립(체결은 너트 돌림) → 선반 복귀
+  // 셀 사이클 진행률(p)에 맞춰 역기구학 키프레임을 따라간다. 로봇마다 시작을 조금씩 엇갈린다
+  animVLA(r, st, busy, p, i) {
+    const V = r.vla, s = r.scale, A = r.arm;
+    const th = r.root.rotation.y, c = Math.cos(th), sn = Math.sin(th);
+    const ik = (x, y, z) => { const dx = x - r.slot.x, dz = z - r.slot.z; return armIK(s, dx * c - dz * sn, y - 0.15, dx * sn + dz * c); };
+    const wx = r.slot.x * 0.3, wz = r.slot.z * 0.22, wy = 1.3;   // 대상물(AMR 위)에서 로봇 쪽 가장자리
+    const K = r.vlaKeys ??= {
+      shelfUp: ik(V.shelf.x, V.shelf.y + 0.32, V.shelf.z), grab: ik(V.shelf.x, V.shelf.y + 0.03, V.shelf.z),
+      workUp: ik(wx, wy + 0.35, wz), ins: ik(wx, wy + 0.04, wz),
+    };
+    let q = K.shelfUp, d = 0, e = 0, held = false, scan = false;
+    if (busy) {
+      const u = (p + i * 0.07) % 1;
+      const keys = [[0, K.shelfUp], [0.1, K.grab], [0.18, K.grab], [0.3, K.shelfUp], [0.45, K.workUp], [0.55, K.ins], [0.75, K.ins], [0.85, K.workUp], [1, K.shelfUp]];
+      const j = keys.findIndex((k) => k[0] >= u), [t0, a] = keys[Math.max(0, j - 1)], [t1, b] = keys[j];
+      const k = t1 > t0 ? (u - t0) / (t1 - t0) : 1, ease = k * k * (3 - 2 * k);
+      q = a.map((v, n) => v + (b[n] - v) * ease);
+      held = u >= 0.18 && u < 0.62;
+      scan = (u > 0.03 && u < 0.18) || (u > 0.45 && u < 0.56);   // 카메라 추론(부품 인식·조립 위치 정렬)
+      if (u >= 0.55 && u < 0.75) { const f = (u - 0.55) / 0.2; if (st.type === 'screw' || st.type === 'fasten') e = f * Math.PI * 6; else d = Math.sin(f * Math.PI * 4) * 0.12; }
+    }
+    r.vlaCur = r.vlaCur ? r.vlaCur.map((v, n) => v + (q[n] - v) * 0.35) : q.slice();
+    A.pose(r.vlaCur[0], r.vlaCur[1], r.vlaCur[2], r.vlaCur[3], d, e);
+    V.held.visible = held;
+    if (held && st.item?.product) V.held.material.color.setHex(st.item.product === 'eaxle' ? 0x9a6bff : 0xf0a030);
+    V.lens.emissiveIntensity = scan ? 4 : 1.2;
+  }
+
+  // 피지컬AI AMMR: 작업 중 두 팔이 번갈아 플랫폼 위 부품 빈에서 집어 대상물에 조립 (빈은 선반 왕복으로 채움)
+  animAMMRVLA(r, st, busy, t, i) {
+    const u0 = st.ammr?.[i]; if (!u0 || u0.phase !== 'work') return;
+    r.bin.visible = true;
+    if (!busy) return;
+    r.vlaArm ??= [null, null];
+    r.arms.forEach((a, k) => {
+      const sd = k ? -1 : 1, u = (t * 0.32 + k * 0.5 + i * 0.13) % 1;
+      const bin = [sd * 2.55, 1.05, 1.5, 0.95], work = [sd * 0.3, 0.85, 1.25, 0.75];
+      const keys = [[0, work], [0.15, bin], [0.3, bin], [0.48, work], [0.85, work], [1, work]];
+      const j = keys.findIndex((x) => x[0] >= u), [t0, a0] = keys[Math.max(0, j - 1)], [t1, b0] = keys[j];
+      const f = t1 > t0 ? (u - t0) / (t1 - t0) : 1, ease = f * f * (3 - 2 * f);
+      const q = a0.map((v, n) => v + (b0[n] - v) * ease);
+      const wig = u > 0.5 && u < 0.85 ? Math.sin(u * 40) * 0.06 : 0;
+      r.vlaArm[k] = r.vlaArm[k] ? r.vlaArm[k].map((v, n) => v + (q[n] - v) * 0.3) : q;
+      const c = r.vlaArm[k]; a.pose(c[0], c[1] + wig, c[2], c[3], 0, u > 0.5 && u < 0.85 ? (u - 0.5) * 8 : 0);
+    });
   }
 
   // 구분 적재장 로봇 2대: 제품 양품이 하역될 때마다(goodBy 증가) 집기 → 들어 올려 옮기기 → 다음 적재 칸에 내려놓기 → 복귀

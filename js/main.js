@@ -486,7 +486,7 @@ function updateAlarmButtons() {
 
 // ── 루프 ─────────────────────────────
 const clock = new THREE.Clock();
-let uiTimer = 0, screenTimer = 0, robotTimer = 0;
+let uiTimer = 0, screenTimer = 0, robotTimer = 0, camTimer = 0;
 const clockEl = document.getElementById('clock');
 function frame() {
   const rdt = Math.min(clock.getDelta(), 0.1);
@@ -506,6 +506,14 @@ function frame() {
   if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); gateView.tick(); updateAlarmButtons(); updateCmdUI(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
   robotTimer += rdt;
   if (view.telemetry && robotTimer > 0.12) { robotTimer = 0; ui.renderRobot(view.telemetry.snapshot(), hub.robotCounts(view.telemetry)); }
+  // 피지컬AI: 로봇 정보 창에 그 로봇 카메라의 실시간 영상 (약 10fps)
+  camTimer += rdt;
+  if (view.telemetry && ui.robotMode && camTimer > 0.1) {
+    camTimer = 0;
+    const box = document.getElementById('rbCamBox'), cv = document.getElementById('rbCam');
+    const shown = modeKey === 'dark' && box && cv && camWall.renderRobotView(view.telemetry.ref, cv, (() => { const t = Math.floor(sim.time) + 8 * 3600; return [t / 3600 % 24, t / 60 % 60, t % 60].map((v) => String(Math.floor(v)).padStart(2, '0')).join(':'); })());
+    if (box) box.hidden = !shown;
+  }
   if (view.telemetry && ui.robotMode) placeRobotPanel();
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought); }
   camWall.update(rdt);

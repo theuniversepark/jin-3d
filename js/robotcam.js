@@ -57,7 +57,14 @@ export class RobotCamWall {
     mover(sim.techs.find((t) => t.kind === 'humanoid'), '헤드 카메라', 1.85, 0.22);
     mover(sim.helpers[0], '헤드 카메라', 1.85, 0.22);
     mover(sim.quads[0], '전방 카메라', 0.62, 0.68, 6, 0.15);
-    mover(sim.quads[1], '전방 카메라', 0.62, 0.68, 6, 0.15);
+    // 피지컬AI VLA: 6축 로봇 손목 카메라 (도구 방향) — 없으면 사족보행 2
+    const vsv = view?.stationViews.find((x) => x.parts.robots?.some((r) => r.vla));
+    const vr = vsv?.parts.robots.find((r) => r.vla);
+    if (vr) {
+      const idx = vsv.parts.robots.indexOf(vr), up = new THREE.Vector3();
+      out.push({ ref: { type: 'cell', stationId: vsv.st.id, idx }, robot: vsv.st.robotUids?.[idx] ?? vsv.st.name, label: '손목 카메라 VLA', kind: vr.kind, station: vsv.st,
+        pose: () => { const p = vr.tip.getWorldPosition(new THREE.Vector3()); up.set(0, 1, 0).transformDirection(vr.tip.parent.matrixWorld); return { pos: p.addScaledVector(up, -0.06), dir: up.clone(), ahead: 1.2 }; } });
+    } else mover(sim.quads[1], '전방 카메라', 0.62, 0.68, 6, 0.15);
     // AMMR 머리 카메라 (부품분류셀) — 작업 영역을 내려다본다
     const sv = view?.stationViews.find((s) => s.parts.robots?.some((r) => r.kind === 'ammr'));
     const r = sv?.parts.robots.find((x) => x.kind === 'ammr');
@@ -86,6 +93,65 @@ export class RobotCamWall {
     }
     while (out.length < COLS * ROWS && sim.vehicles[out.length - 6]) mover(sim.vehicles[out.length - 6], '전방 카메라', 0.45, 0.85, 5, 0.12);
     return out.slice(0, COLS * ROWS);
+  }
+
+  // 로봇 정보 창용: 선택한 로봇의 카메라 시점 (없으면 null) — 벽 관제 영상과 같은 장착 위치
+  cameraFor(ref) {
+    const sim = this.sim, view = this.view; if (!sim || !ref) return null;
+    const front = (m, label, h, fwd, ahead, down) => ({ label, pose: () => { const fx = Math.sin(m.heading), fz = Math.cos(m.heading); return { pos: new THREE.Vector3(m.x + fx * fwd, h, m.z + fz * fwd), dir: new THREE.Vector3(fx, -down, fz).normalize(), ahead }; } });
+    if (ref.type === 'cell') {
+      const sv = view?.stationViews.find((x) => x.st.id === ref.stationId), r = sv?.parts.robots?.[ref.idx];
+      if (!r) return null;
+      if (r.vla) { const up = new THREE.Vector3(); return { label: '손목 카메라 · VLA', pose: () => { const p = r.tip.getWorldPosition(new THREE.Vector3()); up.set(0, 1, 0).transformDirection(r.tip.parent.matrixWorld); return { pos: p.addScaledVector(up, -0.06), dir: up.clone(), ahead: 1.2 }; } }; }
+      if (r.kind === 'ammr') return { label: '머리 스테레오 카메라', pose: () => { const p = r.head.getWorldPosition(new THREE.Vector3()); const d = r.root.getWorldDirection(new THREE.Vector3()); d.y = -0.75; return { pos: p, dir: d.normalize(), ahead: 3 }; } };
+      return { label: '셀 상부 카메라', pose: () => { const p = r.root.getWorldPosition(new THREE.Vector3()); const c = new THREE.Vector3(sv.st.x, 1.2, sv.st.z); return { pos: p.add(new THREE.Vector3(0, 2.6, 0)), dir: c.sub(p).normalize(), ahead: 3 }; } };
+    }
+    const m = [...sim.movers, ...(sim.drones ?? [])].find((x) => x.id === ref.id);
+    if (!m) return null;
+    if (m.kind === 'drone') return { label: '드론 짐벌 카메라', pose: () => { const fx = Math.sin(m.heading), fz = Math.cos(m.heading), look = m.mode === 'event' || m.hover > 0; return { pos: new THREE.Vector3(m.x + fx * 0.3, m.y - 0.15, m.z + fz * 0.3), dir: new THREE.Vector3(fx, look ? -2.2 : -0.55, fz).normalize(), ahead: 8 }; } };
+    if (m.kind === 'humanoid') return front(m, '헤드 카메라', 1.85, 0.22, 6, 0.28);
+    if (m.kind === 'quadruped') return front(m, '전방 카메라', 0.62, 0.68, 6, 0.15);
+    if (m.kind === 'carrier') return front(m, '전방 카메라', 0.42, 0.82, 5, 0.12);
+    if (m.kind === 'agv') return front(m, '전방 카메라', 0.45, 0.85, 5, 0.12);
+    if (m.kind === 'forklift') return front(m, m.auto ? '포크 카메라 (자율)' : '후방 카메라', 1.2, 1.4, 4, 0.35);
+    if (m.kind === 'robot') return front(m, '정비 로봇 카메라', 1.1, 0.4, 4, 0.25);
+    return null;   // 사람(작업자·정비원)은 카메라 없음
+  }
+
+  // 선택한 로봇 카메라 영상을 2D 캔버스에 그린다 (렌더 타깃 → 픽셀 읽기, 약 10fps로 호출)
+  renderRobotView(ref, canvas, clock) {
+    const f = this.cameraFor(ref); if (!f) return null;
+    const w = canvas.width, h = canvas.height, r = this.renderer;
+    if (!this.panelRT || this.panelRT.width !== w || this.panelRT.height !== h) {
+      this.panelRT?.dispose(); this.panelRT = new THREE.WebGLRenderTarget(w, h); this.panelRT.texture.colorSpace = THREE.SRGBColorSpace;
+      this.panelBuf = new Uint8Array(w * h * 4); this.panelImg = new ImageData(w, h);
+    }
+    this.panelCam ??= new THREE.PerspectiveCamera(70, w / h, 0.12, 60);
+    this.panelCam.aspect = w / h; this.setCam(this.panelCam, f);
+    const vis = [this.group.visible, this.view.selRing?.visible];
+    this.group.visible = false; if (this.view.selRing) this.view.selRing.visible = false;
+    const beams = (this.view.droneViews ?? []).map((dv) => { const b = dv.g.userData.beam, v = b.visible; b.visible = false; return [b, v]; });
+    const auto = r.shadowMap.autoUpdate; r.shadowMap.autoUpdate = false;
+    const prev = r.getRenderTarget();
+    r.setRenderTarget(this.panelRT); r.clear(); r.render(this.scene, this.panelCam);
+    r.readRenderTargetPixels(this.panelRT, 0, 0, w, h, this.panelBuf);
+    r.setRenderTarget(prev); r.shadowMap.autoUpdate = auto;
+    this.group.visible = vis[0]; if (this.view.selRing) this.view.selRing.visible = vis[1];
+    for (const [b, v] of beams) b.visible = v;
+    // 위아래 뒤집어 옮기고 HUD를 덧그린다
+    const src = this.panelBuf, dst = this.panelImg.data, row = w * 4;
+    for (let y = 0; y < h; y++) dst.set(src.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+    const g = canvas.getContext('2d'); g.putImageData(this.panelImg, 0, 0);
+    g.fillStyle = 'rgba(5,8,12,0.65)'; g.fillRect(0, 0, w, 24);
+    g.font = `700 13px ${FONT}`; g.textBaseline = 'middle';
+    g.fillStyle = Math.sin(this.t * 4) > 0 ? '#ff4d4d' : '#7a2020'; g.beginPath(); g.arc(12, 12, 5, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#e8edf2'; g.fillText(`LIVE · ${f.label}`, 24, 12);
+    g.textAlign = 'right'; g.fillStyle = '#7fb8cc'; g.fillText(clock ?? '', w - 8, 12); g.textAlign = 'left';
+    g.strokeStyle = 'rgba(55,232,255,0.55)'; g.lineWidth = 1.2;
+    const cx = w / 2, cy = h / 2 + 12;
+    g.beginPath(); g.moveTo(cx - 14, cy); g.lineTo(cx - 5, cy); g.moveTo(cx + 5, cy); g.lineTo(cx + 14, cy); g.moveTo(cx, cy - 14); g.lineTo(cx, cy - 5); g.moveTo(cx, cy + 5); g.lineTo(cx, cy + 14); g.stroke();
+    for (const [x0, y0, dx, dy] of [[8, 32, 1, 1], [w - 8, 32, -1, 1], [8, h - 8, 1, -1], [w - 8, h - 8, -1, -1]]) { g.beginPath(); g.moveTo(x0, y0 + dy * 16); g.lineTo(x0, y0); g.lineTo(x0 + dx * 16, y0); g.stroke(); }
+    return f.label;
   }
 
   setCam(cam, f) {
@@ -219,7 +285,9 @@ export class RobotCamWall {
       g.fillText(info, x0 + TW - g.measureText(info).width - 8, y0 + 15);
       // 칸 바닥: 로봇 작업
       const au = f.station?.ammr?.[f.ref.idx];
-      const task = f.mover ? f.mover.task ?? '대기' : (f.station ? `${f.station.name} ${ST_LABEL[f.station.state] ?? ''} · ${au && au.phase !== 'work' ? '부품 선반 왕복 (보충)' : '양팔 작업'} · 빈 ${au?.bin ?? '-'}/10` : '');
+      const task = f.mover ? f.mover.task ?? '대기' : !f.station ? ''
+        : f.kind === 'ammr' ? `${f.station.name} ${ST_LABEL[f.station.state] ?? ''} · ${au && au.phase !== 'work' ? '부품 선반 왕복 (보충)' : '양팔 작업'} · 빈 ${au?.bin ?? '-'}/10`
+        : `${ST_LABEL[f.station.state] ?? ''} · VLA 선반 부품 인식→집기→조립 · 선반 ${f.station.parts ?? '-'}개`;
       const fy = y0 + TH - 20 - (row === ROWS - 1 ? 30 : 0);   // 아래 줄은 하단 알람 띠 위로
       g.fillStyle = 'rgba(5,8,12,0.6)'; g.fillRect(x0, fy, TW, 20);
       g.fillStyle = '#cfe6f0'; g.font = `12px ${FONT}`; g.fillText(`작업: ${task}`.slice(0, 48), x0 + 8, fy + 14);
