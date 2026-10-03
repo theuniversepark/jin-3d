@@ -497,7 +497,7 @@ function buildCNC(g) {
 const COBOT_MAT = std(0xb9c1ca, { roughness: 0.5 });
 const COBOT_JOINT = std(0x2a7fff, { roughness: 0.35 });
 
-function makeRobot(kind, color) {
+function makeRobot(kind, color, opts = {}) {
   if (kind === 'articulated' || kind === 'cobot') {
     const cobot = kind === 'cobot';
     const arm = makeArm(cobot ? COBOT_MAT : color, cobot ? 0.72 : 1);
@@ -591,25 +591,42 @@ function makeRobot(kind, color) {
     };
   }
   if (kind === 'gantry') {
-    const root = new THREE.Group();
-    for (const z of [-1.6, 1.6]) put(box(0.14, 2.6, 0.14, MAT.yellow), 0, 1.3, z, root);
-    put(box(0.2, 0.2, 3.4, MAT.yellow), 0, 2.6, 0, root);
-    const car = put(new THREE.Group(), 0, 2.45, 0, root);
+    // 직교 3축 갠트리: 양쪽 X축 레일(고정 프레임) 위를 브리지가 주행(X) → 브리지 위 캐리지가 가로 이송(Y) → 수직 축 승강(Z)
+    const root = new THREE.Group(), xr = opts.xr ?? 1.0, L = 2 * xr + 0.7;
+    for (const z of [-1.6, 1.6]) {
+      for (const x of [-L / 2, L / 2]) put(box(0.14, 2.6, 0.14, MAT.yellow), x, 1.3, z, root);   // 기둥 4개
+      put(box(L + 0.14, 0.16, 0.16, MAT.yellow), 0, 2.68, z, root);                                // X축 레일
+      put(box(L, 0.03, 0.05, MAT.steel), 0, 2.78, z, root);                                        // 리니어 가이드
+    }
+    const bridge = put(new THREE.Group(), 0, 0, 0, root);                                          // X축 주행 브리지
+    put(box(0.22, 0.2, 3.4, MAT.yellow), 0, 2.86, 0, bridge);
+    for (const z of [-1.6, 1.6]) put(box(0.34, 0.16, 0.26, MAT.dark), 0, 2.86, z, bridge);          // 레일 위 주행 블록
+    const car = put(new THREE.Group(), 0, 2.7, 0, bridge);                                         // Y축 캐리지
     put(box(0.36, 0.26, 0.36, color), 0, 0, 0, car);
-    const rod = put(box(0.08, 1.0, 0.08, MAT.steel), 0, -0.6, 0, car);
+    const rod = put(box(0.08, 1.0, 0.08, MAT.steel), 0, -0.6, 0, car);                             // Z축
     put(box(0.34, 0.06, 0.26, MAT.dark), 0, -0.5, 0, rod);
     const tip = put(new THREE.Object3D(), 0, -0.53, 0, rod);
+    // 집기 → 들어 올림 → X·Y 이동 → 내려놓기 → 복귀 (키프레임: [진행, X, Y, Z 하강])
+    const K = [[0, -1, -0.8, 0], [0.12, -1, -0.8, 1], [0.22, -1, -0.8, 1], [0.32, -1, -0.8, 0], [0.55, 0.55, 0.7, 0], [0.65, 0.55, 0.7, 1], [0.73, 0.55, 0.7, 1], [0.82, 0.55, 0.7, 0], [1, -1, -0.8, 0]];
+    const ease = (f) => f * f * (3 - 2 * f);
     return {
       root, kind, tip, payload: 30,
       jointDefs: [
+        { name: 'X축 주행', unit: 'mm', min: -xr, max: xr },
         { name: 'Y축 이송', unit: 'mm', min: -1.2, max: 1.2 },
         { name: 'Z축 승강', unit: 'mm', min: 0, max: 0.5 },
       ],
-      joints: () => [car.position.z, -0.6 - rod.position.y],
+      joints: () => [bridge.position.x, car.position.z, -0.6 - rod.position.y],
       anim(busy, t) {
-        const w = t * 2;
-        car.position.z = busy ? Math.sin(w) * 1.1 : 0;
-        rod.position.y = busy ? -0.6 - Math.max(0, Math.cos(w * 2)) * 0.4 : -0.6;
+        let x = 0, y = 0, zd = 0;
+        if (busy) {
+          const u = (t * 0.28) % 1, k = K.findIndex((q) => q[0] >= u), a = K[Math.max(0, k - 1)], b = K[k];
+          const f = ease(b[0] > a[0] ? (u - a[0]) / (b[0] - a[0]) : 1);
+          x = (a[1] + (b[1] - a[1]) * f) * xr; y = a[2] + (b[2] - a[2]) * f; zd = a[3] + (b[3] - a[3]) * f;
+        }
+        bridge.position.x += (x - bridge.position.x) * 0.25;
+        car.position.z += (y - car.position.z) * 0.25;
+        rod.position.y += (-0.6 - zd * 0.45 - rod.position.y) * 0.3;
       },
     };
   }
@@ -630,8 +647,10 @@ function placeRobots(g, st) {
   const zz = vla ? 1.4 : 1.75;
   const slots = st.zone ? [[-0.75, -zz, 0], [-0.75, zz, Math.PI], [0.95, -zz, 0], [0.95, zz, Math.PI]]
     : [[-0.6, -zr, 0], [0.6, zr, Math.PI], [1.3, -zr, 0], [-1.3, zr, Math.PI]];
+  // 갠트리는 대수만큼 셀 길이를 나눠 X축 주행 범위를 정한다 (1대: ±1.0m)
+  const gx = count === 1 ? 1.0 : Math.max(0.3, 1.2 / (count - 1) - 0.25);
   for (let i = 0; i < count; i++) {
-    const r = makeRobot(kind, color);
+    const r = makeRobot(kind, color, kind === 'gantry' ? { xr: gx } : {});
     if (kind === 'gantry') put(r.root, count === 1 ? 0 : -1.2 + (2.4 * i) / (count - 1), 0.15, 0, group);
     else {
       const [x, z, yaw] = slots[i];
@@ -928,20 +947,24 @@ function buildSource(g) {
   for (const x of [-1.8, 1.8]) for (const z of [-1.5, 3.0]) put(box(0.12, 3.0, 0.12, MAT.yellow), x, 1.5, z, auto);
   put(box(3.8, 0.14, 0.14, MAT.yellow), 0, 3.0, -1.5, auto);
   put(box(3.8, 0.14, 0.14, MAT.yellow), 0, 3.0, 3.0, auto);
+  // 투입 갠트리 (직교 3축): X축 레일(z −1.5·3.0) 위를 브리지가 주행(X) → 캐리지가 브리지를 따라 이송(Y) → 승강축이 내려가 집기(Z)
+  for (const z of [-1.5, 3.0]) put(box(3.6, 0.03, 0.05, MAT.steel), 0, 3.09, z, auto);   // 리니어 가이드
   const bridge = put(new THREE.Group(), 0, 3.0, 0, auto);
-  put(box(0.18, 0.18, 4.6, MAT.dark), 0, 0, 0.75, bridge);
+  put(box(0.18, 0.18, 4.6, MAT.dark), 0, 0.12, 0.75, bridge);
+  for (const z of [-1.5, 3.0]) put(box(0.3, 0.14, 0.26, MAT.orange), 0, 0.14, z, bridge);   // 레일 주행 블록
   const car = put(new THREE.Group(), 0, 0, 0, bridge);
-  put(box(0.4, 0.3, 0.4, MAT.orange), 0, -0.1, 0, car);
-  put(box(0.08, 1.4, 0.08, MAT.steel), 0, -0.9, 0, car);
-  put(box(0.5, 0.08, 0.4, MAT.dark), 0, -1.6, 0, car);
-  const held = put(box(0.6, 0.35, 0.5, MAT.raw), 0, -1.85, 0, car);
+  put(box(0.4, 0.3, 0.4, MAT.orange), 0, -0.05, 0, car);
+  const lift = put(new THREE.Group(), 0, 0, 0, car);                                       // Z축 승강
+  put(box(0.08, 1.4, 0.08, MAT.steel), 0, -0.9, 0, lift);
+  put(box(0.5, 0.08, 0.4, MAT.dark), 0, -1.6, 0, lift);
+  const held = put(box(0.6, 0.35, 0.5, MAT.raw), 0, -1.85, 0, lift);
   put(box(2.6, 0.12, 2.0, MAT.pallet), 0, 0.21, 2.3, g);
   const stack = [];
   for (let i = 0; i < RAW_CAP; i++) {
     const lx = i % 4, lz = Math.floor(i / 4) % 5, ly = Math.floor(i / 20);
     stack.push(put(box(0.55, 0.32, 0.36, MAT.raw), -0.9 + lx * 0.6, 0.45 + ly * 0.34, 1.5 + lz * 0.4, g));
   }
-  return { auto, car, held, stack };
+  return { auto, bridge, car, lift, held, stack };
 }
 
 function buildSink(g, st, sim) {
@@ -1912,12 +1935,35 @@ export class FactoryView {
         break;
       }
       case 'source': {
-        const sim = this.sim;
-        const k = Math.min(1, sim.releaseTimer / sim.releaseInterval);
-        parts.car.position.z = 1.5 - 1.5 * Math.min(1, k * 1.4);
-        const raw = sim.rawStock;
-        parts.held.visible = raw > 0 && k < 0.75;
-        parts.stack.forEach((b, i) => (b.visible = i < raw));
+        // 투입 주기마다: 자재 더미 맨 위 박스 위로 X·Y 이동 → Z 하강·집기 → 상승 → 투입 위치(AMR 지그·컨베이어)로 X·Y 이동 → 하강·내려놓기
+        const sim = this.sim, raw = sim.rawStock, T = sim.releaseInterval;
+        const waiting = sim.releaseTimer >= T - 1e-6;                    // 투입 시점인데 내려놓을 곳(빈 AMR)이 없으면 들고 대기
+        const k = Math.min(1, sim.releaseTimer / T);
+        const top = parts.stack[raw - 1]?.position;
+        const pick = top ? { x: top.x, z: top.z, y: top.y } : { x: 0, z: 1.5, y: 0.45 };
+        const place = { x: 0, z: 0, y: BELT_Y + 0.18 }, UP = 2.05;     // 박스 중심 높이 기준
+        // [진행, 위치(0=투입·1=더미), 높이(0=위·1=아래), 집음]
+        const K = [[0, 0, 0, 0], [0.18, 1, 0, 0], [0.3, 1, 1, 0], [0.36, 1, 1, 1], [0.48, 1, 0, 1], [0.7, 0, 0, 1], [0.84, 0, 1, 1], [1, 0, 1, 1]];
+        let pos = 0, down = 0, hold = 0;
+        if (raw > 0 && !(st.state === 'HOLD' || st.state === 'ESTOP' || st.state === 'PSTOP')) {
+          // 빈 AMR이 적재 위치에 도착해 있어야 내려놓는다 — 아직이면 투입 위치 위에서 들고 기다린다 (컨베이어 라인은 항상 가능)
+          const ready = !sim.useAMR || sim.carriers.some((c) => c.state === 'atSrc');
+          if (waiting) { pos = 0; down = ready ? 1 : 0.72; hold = 1; }   // AMR 지그 바로 위(약 5cm)에서 대기 — AMR이 아래로 들어오면 곧바로 내려놓는다
+          else {
+            const i = K.findIndex((q) => q[0] >= k), a = K[Math.max(0, i - 1)], b = K[i];
+            const f = b[0] > a[0] ? (k - a[0]) / (b[0] - a[0]) : 1, e = f * f * (3 - 2 * f);
+            pos = a[1] + (b[1] - a[1]) * e; down = a[2] + (b[2] - a[2]) * e; hold = a[3];
+            if (!ready && pos < 0.5) down = Math.min(down, 0.72);
+          }
+        }
+        const x = place.x + (pick.x - place.x) * pos, z = place.z + (pick.z - place.z) * pos;
+        const lowY = pos > 0.5 ? pick.y : place.y, y = UP + (lowY - UP) * down;
+        const sm = Math.min(1, rdt * 14);
+        parts.bridge.position.x += (x - parts.bridge.position.x) * sm;
+        parts.car.position.z += (z - parts.car.position.z) * sm;
+        parts.lift.position.y += (y - 1.15 - parts.lift.position.y) * sm;   // 들린 박스 중심이 기본 1.15m
+        parts.held.visible = !!hold;
+        parts.stack.forEach((bx, i) => (bx.visible = i < raw - (hold ? 1 : 0)));
         break;
       }
       case 'sink': {
