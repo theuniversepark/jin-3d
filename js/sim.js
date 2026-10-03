@@ -1,6 +1,7 @@
 // 제조 라인 시뮬레이션 엔진 — 렌더링과 분리되어 있어 헤드리스(고속 비교) 실행이 가능하다.
 import { CommandCenter } from './commands.js';
 import { TruckYard, planForklift } from './shipping.js';
+import { InboundYard, planReceiver, WH } from './receiving.js';
 import { PatrolDrone } from './drone.js';
 import { VLAPipeline } from './vla.js';
 import { AIOSPipeline } from './aios.js';
@@ -69,10 +70,12 @@ export const PALLET_RAW = 20, RAW_CAP = 40, FG_CAP = 36;
 export const AISLE = { F: 9, B: -9 };
 // 사족보행 배터리 소모 (%/초): 보행 약 24분, 점검 중, 대기
 const QUAD_DRAIN = { move: 0.07, scan: 0.03, idle: 0.004 };
-const LEFT = -33, RIGHT = 35;
+const LEFT = -35.5, RIGHT = 35;   // 좌우 끝 세로 통로 — 왼쪽은 투입 스테이션 AMR 진입로(x −30.6)와 충분히 떨어지게
 export const LOC = {
   WH: { x: -26, z: -13.5, aisle: 'B', name: '자재창고' },
-  WH_PARTS: { x: -22.5, z: -13.5, aisle: 'B', name: '부품 랙' },   // 휴머노이드 부품 피킹 — AGV 팔레트 위치(x=-26)와 진입로 분리
+  WH_PARTS: { x: -22.5, z: -13.5, aisle: 'B', name: '부품 랙' },
+  WH_IN: { x: -30.2, z: -13.9, aisle: 'B', name: '자재창고 입고' },        // 입고 지게차가 팔레트를 넣는 랙 왼쪽 칸 (AGV 상차 위치 x=-26과 분리)
+  WH_PARTS_IN: { x: -30.2, z: -13.9, aisle: 'B', name: '부품 입고' },   // 휴머노이드 부품 피킹 — AGV 팔레트 위치(x=-26)와 진입로 분리
   SRC: { x: -26, z: 4.2, aisle: 'F', name: '투입구' },
   SINK: { x: 29, z: 4.2, aisle: 'F', name: '완제품 적재장' },
   TECH: { x: 12, z: 13.5, aisle: 'F', name: '정비실' },
@@ -216,6 +219,8 @@ export class Simulation {
     this.stats = { released: 0, good: 0, escaped: 0, rejected: 0, failures: 0, pm: 0, cal: 0, energy: 0, shipped: 0, wipInt: 0, supplyTrips: 0, goodBy: {} };
     this.history = []; this.lastHist = -999;
     this.rawStock = 24; this.inboundRaw = 0; this.fgStock = 0; this.safetyStock = 10;
+    // 물류존 창고 재고 — 입고 트럭이 채우고 AGV(원자재 → 자재 투입)·휴머노이드(부품 → 셀)가 꺼내 쓴다
+    this.partsTracked = !!m.partsCap; this.whRaw = 200; this.whParts = this.partsTracked ? 1200 : 0;
     this.supplyDisruptedUntil = 0;
     this.releaseTimer = 0; this.releaseHold = false; this.releaseInterval = m.releaseInterval;
     this.powerKW = 0;
@@ -277,6 +282,10 @@ export class Simulation {
     // 출하 지게차: 구분 적재장 → 뒷벽 출하 도크 → 트럭 야드 화물트럭 (레거시·자동화는 사람이 운전, 피지컬AI만 자율 지게차)
     this.forklifts = [new Mover(m.key === 'dark' ? '자율 지게차' : '출하 지게차 (유인)', 'forklift', { x: 19.5, z: -16.5, aisle: 'B', name: '출하 지게차 대기' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
     this.forklifts[0].shipper = true; this.forklifts[0].auto = m.key === 'dark';
+    // 입고 지게차: 입고 도크(왼쪽 벽)에 접안한 공급사 트럭에서 팔레트를 내려 자재창고 랙에 넣는다 (피지컬AI만 자율)
+    const rcv = new Mover(m.key === 'dark' ? '입고 자율 지게차' : '입고 지게차 (유인)', 'forklift', { x: -33.4, z: -12.4, aisle: 'B', name: '입고 지게차 대기' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1);
+    rcv.receiver = true; rcv.auto = m.key === 'dark'; this.forklifts.push(rcv);
+    this.inbound = new InboundYard(this);
     this.yard = new TruckYard(this);
     // 피지컬AI: 순찰 드론 (지상 교통과 높이가 달라 movers에는 넣지 않는다)
     this.drones = m.key === 'dark' ? [new PatrolDrone(this, 0)] : [];
@@ -340,7 +349,7 @@ export class Simulation {
     this.sinkRobotUids = this.zone ? ['RB-PL-1', 'RB-PL-2'] : [];
     this.carriers.forEach((m, i) => { m.uid = `AM-${two(i + 1)}`; });
     this.vehicles.forEach((m, i) => { m.uid = `${m.kind === 'agv' ? 'AG' : 'FL'}-${two(i + 1)}`; });
-    this.forklifts.forEach((m, i) => { m.uid = `FL-S${i + 1}`; });
+    this.forklifts.forEach((m) => { m.uid = m.receiver ? 'FL-R1' : 'FL-S1'; });
     this.techs.filter((m) => m.kind !== 'human').forEach((m, i) => { m.uid = `${m.kind === 'humanoid' ? 'HM-M' : 'MR-'}${i + 1}`; });
     this.helpers.forEach((m, i) => { m.uid = `HM-L${i + 1}`; });
     this.quads.forEach((m, i) => { m.uid = `QD-${two(i + 1)}`; });
@@ -599,7 +608,8 @@ export class Simulation {
     this.vla?.update(dt);
     this.aios?.update(dt);
     for (const d of this.drones) d.update(dt);
-    if (mdt > 0) for (const f of this.forklifts) { if (f.idle && !K.evac) planForklift(this, f); f.update(mdt); }
+    this.inbound.update(dt);   // 입고 트럭도 건물 밖이라 계속 움직인다
+    if (mdt > 0) for (const f of this.forklifts) { if (f.idle && !K.evac) (f.receiver ? planReceiver : planForklift)(this, f); f.update(mdt); }
     if (mdt > 0) {
       for (const t of this.techs) t.update(mdt);
       if (this.helpers.length) this.assignHelpers();
@@ -961,11 +971,12 @@ export class Simulation {
       const st = req.st; req.helper = h;
       h.setTask(`부품 보충 → ${st.name}`, [
         { go: h.pick },
-        { wait: 4, done: () => { h.carry = true; } },
+        { until: () => !this.partsTracked || this.whParts > 0, task: '부품 랙 재고 대기 (입고 트럭 대기)' },
+        { wait: 4, done: () => { const n = this.partsTracked ? Math.min(this.mode.partsCap - (st.parts ?? 0), this.whParts) : this.mode.partsCap; this.whParts -= this.partsTracked ? n : 0; h.carry = n; } },
         { go: st.ammr ? this.rackServiceLoc(st) : localLoc(st.def, -1.0, SVC_Z, st.name) },   // AMMR 셀은 부품 선반 옆
         { wait: 5, done: () => {
-          h.carry = false; st.parts = this.mode.partsCap; st.partsReq = null;
-          { const inc = this.orch.find(`rack:${st.id}`); this.orch.step(inc, 'exec', 'act', `${h.id} 선반 보충 완료 (${this.mode.partsCap}개)`); this.orch.close(inc, '선반 재고 회복 · 인시던트 종료'); }
+          const n = typeof h.carry === 'number' ? h.carry : this.mode.partsCap; h.carry = false; st.parts = Math.min(this.mode.partsCap, (st.parts ?? 0) + n); st.partsReq = null;
+          { const inc = this.orch.find(`rack:${st.id}`); this.orch.step(inc, 'exec', 'act', `${h.id} 선반 보충 완료 (${st.parts}개)`); this.orch.close(inc, '선반 재고 회복 · 인시던트 종료'); }
           this.partsReq = this.partsReq.filter((r) => r !== req);
           this.stats.refills = (this.stats.refills ?? 0) + 1;
         } },
@@ -1106,10 +1117,12 @@ export class Simulation {
     v.setTask('자재 공급', [
       { go: LOC.WH },
       { until: () => this.time >= this.supplyDisruptedUntil, task: '출고 대기 (공급 차질)' },
-      { wait: 4, done: () => { v.load = { type: 'raw', n: PALLET_RAW }; } },
+      { until: () => this.whRaw > 0, task: '창고 재고 대기 (입고 트럭 대기)' },
+      { wait: 4, done: () => { const n = Math.min(PALLET_RAW, this.whRaw); this.whRaw -= n; v.load = { type: 'raw', n }; } },
       { go: this.loc.SRC },
       { wait: 4, done: () => {
-        this.rawStock = Math.min(RAW_CAP, this.rawStock + PALLET_RAW);
+        const n = v.load?.n ?? PALLET_RAW;
+        this.rawStock = Math.min(RAW_CAP, this.rawStock + n);
         this.inboundRaw -= PALLET_RAW; v.load = null; this.stats.supplyTrips++;
       } },
     ]);
@@ -1134,7 +1147,7 @@ export class Simulation {
     const o = this.orch;
     if (o.find('supply')) return;
     const inc = o.open('supply', 'supply', '자재 공급 차질', '자재창고');
-    o.step(inc, 'field', 'detect', `창고 출고 중단 감지 (WMS) — 복구 예상 ${Math.round(sec / 60)}분`);
+    o.step(inc, 'field', 'detect', `창고 출고 중단·공급사 납품 지연 감지 (WMS) — 입고 트럭 미도착, 복구 예상 ${Math.round(sec / 60)}분`);
     o.step(inc, 'cell', 'self', `투입 스테이션 자체 조치: 버퍼 재고 ${this.rawStock}개로 투입 유지`);
     o.later(0.5, () => o.step(inc, 'cell', 'report', `상위 보고: 재고 소진 예상 ${Math.round(this.rawStock * this.releaseInterval / 60)}분 · 라인 정지 위험`));
     if (!this.mode.agentActive) o.later(o.latency, () => { o.step(inc, 'orch', 'decide', '판단(작업반장): 대체 자재 수배 필요'); o.step(inc, 'orch', 'command', '명령: 구매 담당 전화 수배 · 지게차 대기'); });

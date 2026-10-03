@@ -20,7 +20,7 @@ const SHADOW_S = 60, VERIFY_S = 600;   // 섀도 모드 60초, 배포 후 효과
 
 // 운영 정책 헤드 — 오케스트레이터가 실제로 쓰는 값 (sim.mode에 반영)
 export const HEADS = [
-  { key: 'amrStage', label: 'AMR 선행 배차', unit: '대', base: 1, desc: '투입 스테이션에 미리 불러 두는 빈 AMR 수' },
+  { key: 'amrStage', label: 'AMR 선행 배차', unit: '대', base: 1, desc: '투입 스테이션에 미리 불러 두는 빈 AMR 수 (최대 2대)' },
   { key: 'ecoWait', label: '셀 절전 진입', unit: '초', base: 25, desc: '자재대기가 이만큼 이어지면 셀 대기전력 절감' },
   { key: 'orchLatency', label: '인시던트 판단 지연', unit: '초', base: 1.5, desc: '고장·결품 보고 → 오케스트레이터 판단·명령까지' },
 ];
@@ -115,7 +115,8 @@ export class AIOSPipeline {
     const noAmr = win.reduce((a, x) => a + x.src_noamr_s, 0) / Math.max(1, dur);
     const starved = win.length ? win.reduce((a, x) => a + x.cells.reduce((b, c) => b + (c[0] === 'STARVED' ? 1 : 0), 0) / x.cells.length, 0) / win.length : 0;
     const incs = this.events.filter((e) => e.t >= (win[0]?.t ?? 0) && e.decide_s != null);
-    if (noAmr > 0.08 && cur.amrStage < 3) { cand.amrStage = cur.amrStage + 1; why.push(`투입 스테이션이 빈 AMR을 기다린 시간 ${Math.round(noAmr * 100)}% → 선행 배차 ${cand.amrStage}대`); }
+    // AMR 선행 배차는 2대까지 — 투입 진입로가 한 줄이라 3대 이상 미리 부르면 대기열·주차열 AMR끼리 교착될 수 있다 (트윈 검증 이득도 +2% 수준)
+    if (noAmr > 0.08 && cur.amrStage < 2) { cand.amrStage = cur.amrStage + 1; why.push(`투입 스테이션이 빈 AMR을 기다린 시간 ${Math.round(noAmr * 100)}% → 선행 배차 ${cand.amrStage}대`); }
     if (starved > 0.2 && cur.ecoWait > 8) { cand.ecoWait = Math.max(8, Math.round(cur.ecoWait * 0.6)); why.push(`셀 자재대기 비율 ${Math.round(starved * 100)}% → 절전 진입 ${cur.ecoWait}초 → ${cand.ecoWait}초`); }
     if (incs.length && cur.orchLatency > 0.8) { cand.orchLatency = Math.round(Math.max(0.8, cur.orchLatency - 0.35) * 100) / 100; why.push(`인시던트 ${incs.length}건 대응 패턴 학습 → 판단 지연 ${cur.orchLatency}초 → ${cand.orchLatency}초`); }
     return { cand, why, feats: { noAmr: r3(noAmr), starved: r3(starved), incidents: incs.length } };

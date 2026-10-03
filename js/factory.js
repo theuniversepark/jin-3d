@@ -4,6 +4,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RobotTelemetry } from './telemetry.js';
 import { BELT_Y, LOC, chgLoc, FG_CAP, RAW_CAP, ST_LABEL } from './sim.js';
 import { YARD } from './shipping.js';
+import { INBOUND, WH } from './receiving.js';
 import { DRONE_PAD } from './drone.js';
 import { equipmentList, STATUS_CLASS } from './assets.js';
 import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, AMR_LANES, amrPark, ZONE_AMR, AMMR, AMMR_FETCH } from './line.js';
@@ -36,6 +37,7 @@ const MAT = {
   pallet: std(0xa67c52, { roughness: 0.85 }),
   carton: std(0xc49a6c, { roughness: 0.85 }),
   raw: std(0x7d848c, { metalness: 0.5, roughness: 0.5 }),
+  partsBin: std(0x2f6fd6, { roughness: 0.6 }),   // 입고 부품 팔레트 (부품 빈)
   crate: std(0x8a78a8, { roughness: 0.8 }),   // e-axle 크레이트 (구분 적재장과 같은 색)
   machined: std(0xd0d6dc, { metalness: 0.85, roughness: 0.18 }),
   copper: std(0xc8743a, { metalness: 0.8, roughness: 0.3 }),
@@ -1042,14 +1044,25 @@ export class FactoryView {
       }
     }
     // 벽체·기둥
-    // 뒷벽: 왼쪽은 일반 벽, 출하 도크 구간(x 19~38)은 바깥 트럭 야드가 보이도록 반투명 컷어웨이
+    // 뒷벽: 출하 도크 문 2개(폭 4.6m · 높이 4.9m)만 트럭 상차용으로 열고 나머지는 외벽 (입고 도크와 같은 방식)
     put(box(57, 8, 0.3, MAT.wall), -9.5, 4, -20, r);
-    const glass = new THREE.MeshStandardMaterial({ color: 0xaec6dc, transparent: true, opacity: 0.07, roughness: 0.1, metalness: 0.2, depthWrite: false });
     const doorW = 4.6, spans = [[19, YARD.bays[0] - doorW / 2], [YARD.bays[0] + doorW / 2, YARD.bays[1] - doorW / 2], [YARD.bays[1] + doorW / 2, 38]];
-    for (const [a, b] of spans) put(mesh(new THREE.BoxGeometry(b - a, 8, 0.12), glass, false), (a + b) / 2, 4, -20, r);
-    for (const bx of YARD.bays) put(mesh(new THREE.BoxGeometry(doorW, 8 - 4.9, 0.12), glass, false), bx, 4.9 + (8 - 4.9) / 2, -20, r);
+    for (const [a, b] of spans) put(box(b - a, 8, 0.3, MAT.wall), (a + b) / 2, 4, -20, r);
+    for (const bx of YARD.bays) put(box(doorW, 8 - 4.9, 0.3, MAT.wall), bx, 4.9 + (8 - 4.9) / 2, -20, r);
     put(box(19, 0.3, 0.32, MAT.steel), 28.5, 0.15, -20, r);
-    put(box(0.3, 8, 40, MAT.wall), -38, 4, 0, r);
+    // 왼쪽 벽: 입고 도크 문(z −16.8~−12.2, 높이 4.9m)만 트럭 하차용으로 열고 나머지는 외벽
+    { const dz0 = INBOUND.dockZ - 2.3, dz1 = INBOUND.dockZ + 2.3;
+      put(box(0.3, 8, dz0 + 20, MAT.wall), -38, 4, (-20 + dz0) / 2, r);
+      put(box(0.3, 8, 20 - dz1, MAT.wall), -38, 4, (dz1 + 20) / 2, r);
+      put(box(0.3, 8 - 4.9, 4.6, MAT.wall), -38, 4.9 + (8 - 4.9) / 2, INBOUND.dockZ, r);
+      put(box(0.32, 0.3, 14, MAT.steel), -38, 0.15, -13, r);
+      // 입고 도크: 말아 올린 셔터·문틀·도크 레벨러·범퍼·표지
+      put(cyl(0.32, 0.32, 4.6, MAT.dark, 16), -37.85, 4.75, INBOUND.dockZ, r).rotation.x = Math.PI / 2;
+      put(box(0.14, 0.25, 4.8, MAT.yellow), -37.75, 4.6, INBOUND.dockZ, r);
+      for (const sd of [-1, 1]) put(box(0.2, 4.6, 0.18, MAT.yellow), -37.8, 2.3, INBOUND.dockZ + sd * 2.35, r);
+      put(box(1.4, 0.08, 2.6, MAT.steel), -37.2, 0.04, INBOUND.dockZ, r);
+      for (const sd of [-1, 1]) put(box(0.25, 0.5, 0.35, MAT.rubber), -38.3, 1.0, INBOUND.dockZ + sd * 1.15, r);
+      put(makeSignSprite('입고 도크', '#3ddc84', 3.2), -37.6, 5.6, INBOUND.dockZ, r); }
     put(box(0.3, 8, 40, MAT.wall), 38, 4, 0, r);
     for (let x = -36; x <= 36; x += 9) put(box(0.6, 8, 0.6, MAT.steel), x, 4, -19.6, r);
     put(box(76, 0.5, 0.35, MAT.accent), 0, 7.7, -19.8, r);
@@ -1080,7 +1093,65 @@ export class FactoryView {
     }
     this.buildYard();
     this.buildSlogans();
+    this.buildFacadeSigns();
     this.buildBoard();
+  }
+
+  // 물류 선반 재고 현황판 — 원자재·부품 재고 막대(재주문점 표시), 입고 순환 상태, 입고·출고 누적
+  drawWhBoard() {
+    const sim = this.sim, ib = sim.inbound, B = this.whBoard; if (!B || !ib) return;
+    const raw = sim.whRaw, parts = sim.partsTracked ? sim.whParts : null, d = ib.docked, moving = ib.trucks.find((t) => t.state !== 'dock' && t.state !== 'depart'), ord = ib.orders[0];
+    const status = d ? ['🚚 ' + d.id + ' 하차 중 · 남은 팔레트 ' + d.pallets.length, '#3ddc84'] : moving ? ['🚚 ' + moving.id + ' 입차 중 (' + ({ arrive: '진입', wait: '대기', toDock: '후진 접안' })[moving.state] + ')', '#37e8ff']
+      : ord ? [sim.supplyDisrupted ? '⛔ 발주됨 · 공급사 납품 지연 (공급 차질)' : `📝 발주됨 · ${Math.max(0, Math.ceil(ord.due - sim.time))}초 뒤 트럭 출발`, sim.supplyDisrupted ? '#ff8a1f' : '#f5b82e'] : ['✅ 재고 충분 · 배달로 줄어드는 중', '#8fb3c9'];
+    const key = [raw, parts, status[0], ib.stats.trucks, sim.stats.supplyTrips, sim.stats.refills].join('|');
+    if (key === B.key) return; B.key = key;
+    const c = B.cv.getContext('2d'), W = B.cv.width, H = B.cv.height, F = '"Apple SD Gothic Neo", "Noto Sans KR", sans-serif';
+    c.fillStyle = '#04121f'; c.fillRect(0, 0, W, H);
+    c.fillStyle = '#e8eef4'; c.font = `800 46px ${F}`; c.textBaseline = 'middle'; c.fillText('📦 물류 선반 재고 · 입고 순환', 36, 46);
+    const bar = (y, label, v, cap, reorder, unit, col) => {
+      c.font = `700 36px ${F}`; c.fillStyle = '#c9d2dc'; c.fillText(label, 36, y);
+      const x0 = 210, w = 900, h = 40, f = Math.max(0, Math.min(1, v / cap));
+      c.fillStyle = '#16232f'; c.fillRect(x0, y - h / 2, w, h);
+      c.fillStyle = v <= reorder ? '#ff8a1f' : col; c.fillRect(x0, y - h / 2, w * f, h);
+      for (let k = 1; k < WH.slots; k++) { c.fillStyle = '#04121f'; c.fillRect(x0 + (w * k) / WH.slots - 2, y - h / 2, 4, h); }   // 선반 칸 구분
+      c.fillStyle = '#ffffff'; c.fillRect(x0 + w * (reorder / cap) - 2, y - h / 2 - 8, 4, h + 16);                          // 재주문점
+      c.font = `700 34px ${F}`; c.fillStyle = '#e8eef4'; c.fillText(`${v.toLocaleString('ko-KR')} / ${cap.toLocaleString('ko-KR')}${unit}`, x0 + w + 24, y);
+    };
+    bar(128, '원자재', raw, WH.rawCap, WH.rawReorder, '박스', '#9aa4ae');
+    if (parts != null) bar(196, '부품', parts, WH.partsCap, WH.partsReorder, '개', '#3d8bff');
+    else { c.font = `600 32px ${F}`; c.fillStyle = '#8fb3c9'; c.fillText('부품   셀 부품은 작업자가 보충 (재고 추적은 피지컬AI)', 36, 196); }
+    c.font = `800 38px ${F}`; c.fillStyle = status[1]; c.fillText(status[0], 36, 276);
+    c.font = `600 30px ${F}`; c.fillStyle = '#8fb3c9';
+    c.fillText(`입고 완료 트럭 ${ib.stats.trucks}대 · AGV 출고 ${sim.stats.supplyTrips ?? 0}회${sim.partsTracked ? ` · 부품 보충 출고 ${sim.stats.refills ?? 0}회` : ''} · 흰 선 = 재주문점(이하면 트럭 발주)`, 36, 350);
+    B.tex.needsUpdate = true;
+  }
+
+  // 건물 외벽 3면(뒷벽·왼쪽 벽·오른쪽 벽 바깥) 건물 사인 — "피지컬AI 실증 메타팩토리"
+  // 남색 백보드 + 흰 글자 + 하늘색 띠. 벽 바깥 0.2m에 붙이고 바깥을 향한다 (앞면은 열려 있어 사인 없음)
+  buildFacadeSigns() {
+    const TEXT = '피지컬AI 실증 메타팩토리';
+    const make = (w, h) => {
+      const c = document.createElement('canvas'); c.width = 2048; c.height = Math.round(2048 * h / w);
+      const g = c.getContext('2d');
+      g.fillStyle = '#0c2048'; g.fillRect(0, 0, c.width, c.height);
+      g.fillStyle = '#37e8ff'; g.fillRect(0, c.height - c.height * 0.07, c.width, c.height * 0.07);
+      let fs = c.height * 0.62; const F = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
+      g.font = `800 ${fs}px ${F}`;
+      while (g.measureText(TEXT).width > c.width * 0.9) { fs *= 0.95; g.font = `800 ${fs}px ${F}`; }
+      g.fillStyle = '#ffffff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(TEXT, c.width / 2, c.height * 0.47);
+      const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, color: 0xdfe4ea }));
+      return m;
+    };
+    const Y = 5.7, H = 2.3;
+    // 뒷벽 바깥 가운데 (x 0, 출하 도크 문 위쪽을 피한 폭) — 바깥(−z)을 향함
+    const back = put(make(26, H), 0, Y, -20.2, this.root); back.rotation.y = Math.PI;
+    // 왼쪽 벽 바깥 가운데 (z 0, 입고 도크 문 z −16.8~−12.2를 비켜 폭 22m) — 바깥(−x)을 향함
+    const left = put(make(22, H), -38.2, Y, 0, this.root); left.rotation.y = -Math.PI / 2;
+    // 오른쪽 벽 바깥 — 바깥(+x)을 향함
+    const right = put(make(26, H), 38.2, Y, 0, this.root); right.rotation.y = Math.PI / 2;
+    this.facadeSigns = [back, left, right];
   }
 
   // 오른쪽 벽 설비 현황 전광판 — 모든 설비·로봇의 고유 ID·이름·현재 상태 (1초마다 갱신)
@@ -1172,6 +1243,18 @@ export class FactoryView {
     for (let x = 16; x < 116; x += 4) flat(2, 0.15, white, x, YARD.roadZ, 0.02);
     for (const bx of YARD.bays) for (const sd of [-1, 1]) flat(0.15, 12, line, bx + sd * 1.7, -26.4, 0.02);
     for (const sd of [-1, 1]) for (let z = -21; z > -33; z -= 1.6) flat(0.12, 0.8, white, YARD.waitX + sd * 1.6, z, 0.02);
+    // 입고 트럭 야드 (왼쪽 벽 바깥): 바닥, 남북 도로(북행 입차·남행 출차), 서쪽 진입로, 도크 앞 정차선, 표시
+    flat(42, 42, std(0x2b3036, { roughness: 0.95 }), -59, -24, -0.01);   // 서쪽으로 돌아 도크 중심선에 서는 공간까지
+    flat(9, 36, std(0x24282d, { roughness: 0.95 }), INBOUND.roadX, -24, 0.0);
+    flat(108, 7, std(0x24282d, { roughness: 0.95 }), -47, INBOUND.roadZ, 0.0);
+    for (let x = -100; x < 7; x += 4) flat(2, 0.15, white, x, INBOUND.roadZ, 0.02);
+    for (let z = -38; z < -6; z += 4) flat(0.15, 2, white, INBOUND.roadX, z, 0.02);
+    for (const sd of [-1, 1]) flat(12, 0.15, line, -44.2, INBOUND.dockZ + sd * 1.7, 0.02);
+    { const c2 = document.createElement('canvas'); c2.width = 1024; c2.height = 128;
+      const g2 = c2.getContext('2d'); g2.fillStyle = 'rgba(61,220,132,0.95)'; g2.font = '700 64px "Apple SD Gothic Neo", "Noto Sans KR", sans-serif'; g2.textAlign = 'center'; g2.textBaseline = 'middle';
+      g2.fillText('입고 트럭 야드 · 입고 도크', 512, 64);
+      const t2 = new THREE.CanvasTexture(c2); t2.colorSpace = THREE.SRGBColorSpace;
+      const m2 = flat(14, 1.75, new THREE.MeshBasicMaterial({ map: t2, transparent: true, depthWrite: false }), -47, -21.5, 0.03); m2.rotation.z = 0; }
     const tx = document.createElement('canvas'); tx.width = 1024; tx.height = 128;
     const c = tx.getContext('2d'); c.fillStyle = 'rgba(242,194,48,0.95)'; c.font = '700 64px "Apple SD Gothic Neo", "Noto Sans KR", sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
     c.fillText('출하 트럭 야드 · 도크 1 · 대기 · 도크 2', 512, 64);
@@ -1183,18 +1266,37 @@ export class FactoryView {
     const r = this.root;
     // 자재 공급 차질 경보: 자재창고 랙 주변
     this.whAlarm = put(makeAlarmFx(12.4, 4.6, 5.2), -26, 0, -16.5, r);
-    // 자재 창고 랙
+    // 물류 선반(자재창고 랙): 왼쪽 2열 × 3단 = 원자재 6칸, 오른쪽 2열 × 3단 = 부품 6칸 (한 칸 = 입고 팔레트 1개)
+    // 원자재 칸은 박스 2단(20박스씩 = AGV 1회분), 부품 칸은 부품 빈 6개(40개씩) — 재고만큼 차고 배달할수록 줄어든다
     const rack = new THREE.Group(); put(rack, -26, 0, -16.5, r);
-    this.whStock = []; this.whOut = false;
+    this.whRawSlots = []; this.whPartSlots = []; this.whOut = false;
     this.whSign = put(makeSignSprite('⛔ 출고 중단 · 공급 차질', '#ff8a1f', 7.5), -26, 7.4, -15.5, r); this.whSign.visible = false;
     for (const x of [-5, -2.5, 0, 2.5, 5]) for (const z of [-1, 1]) put(box(0.12, 5, 0.12, MAT.accent), x, 2.5, z, rack);
     for (const y of [0.3, 1.9, 3.5]) {
       put(box(10.2, 0.1, 2.1, MAT.steel), 0, y, 0, rack);
-      for (const x of [-3.75, -1.25, 1.25, 3.75]) {
+      for (const x of [-3.75, -1.25]) {   // 원자재
         put(box(2.0, 0.12, 1.6, MAT.pallet), x, y + 0.11, 0, rack);
-        this.whStock.push(put(box(1.8, 0.9, 1.4, MAT.raw), x, y + 0.62, 0, rack));
+        const lo = put(box(1.8, 0.42, 1.4, MAT.raw), x, y + 0.38, 0, rack), hi = put(box(1.8, 0.42, 1.4, MAT.raw), x, y + 0.82, 0, rack);
+        this.whRawSlots.push({ lo, hi, y });
+      }
+      for (const x of [1.25, 3.75]) {     // 부품
+        put(box(2.0, 0.12, 1.6, MAT.pallet), x, y + 0.11, 0, rack);
+        const bins = [];
+        for (let k = 0; k < 6; k++) bins.push(put(box(0.56, 0.36, 0.62, MAT.partsBin), x - 0.62 + (k % 3) * 0.62, y + 0.37, -0.34 + Math.floor(k / 3) * 0.68, rack));
+        this.whPartSlots.push({ bins, y });
       }
     }
+    // 원자재 칸이 아래 단부터 차도록 정렬 (단 → 열)
+    this.whRawSlots.sort((a, b) => a.y - b.y); this.whPartSlots.sort((a, b) => a.y - b.y);
+    // 선반 앞 표지
+    put(makeSignSprite('원자재', '#c9d2dc', 2.2), -28.5, 5.3, -15.3, r);
+    put(makeSignSprite('부품', '#5aa9ff', 2.2), -23.5, 5.3, -15.3, r);
+    // 물류 선반 재고 현황판 (랙 위 뒷벽): 재고 막대 · 입고 순환 상태 · 입출고 횟수
+    const sc = document.createElement('canvas'); sc.width = 1536; sc.height = 420;
+    this.whBoard = { cv: sc, tex: new THREE.CanvasTexture(sc), key: '' }; this.whBoard.tex.colorSpace = THREE.SRGBColorSpace; this.whBoard.tex.anisotropy = 8;
+    const bd = put(new THREE.Group(), -26, 6.25, -19.2, r);
+    put(box(10.4, 2.95, 0.12, std(0x0b0d10, { roughness: 0.5, metalness: 0.4 })), 0, 0, -0.07, bd);
+    put(new THREE.Mesh(new THREE.PlaneGeometry(10, 2.73), new THREE.MeshBasicMaterial({ map: this.whBoard.tex, toneMapped: false })), 0, 0, 0, bd);
     // 드론 이착륙·충전 패드 (피지컬AI 단계에서만 보임)
     this.dronePad = put(new THREE.Group(), DRONE_PAD.x, 0, DRONE_PAD.z, r);
     const padC = document.createElement('canvas'); padC.width = padC.height = 256;
@@ -1645,7 +1747,17 @@ export class FactoryView {
     blinkAlarmFx(this.whAlarm, sim.supplyAlarm, ALARM_COLOR.supply, t);
     // 출고 중단 동안 창고 랙은 비어 보이고 '출고 중단' 표지가 깜빡인다
     const out = sim.supplyDisrupted;
-    if (out !== this.whOut) { this.whOut = out; this.whStock.forEach((b, i) => { b.visible = !out || i % 6 === 0; }); }
+    // 물류 선반: 원자재 칸은 20박스(AGV 1회분)마다 한 단씩, 부품 칸은 40개마다 빈 하나씩 — 입고되면 차고 배달하면 줄어든다
+    const raw = sim.whRaw ?? 0, partsOn = sim.partsTracked, parts = partsOn ? sim.whParts : WH.partsCap;
+    if (raw !== this.whRawShown) {
+      this.whRawShown = raw;
+      this.whRawSlots.forEach((sl, i) => { const n = Math.max(0, Math.min(WH.rawPallet, raw - i * WH.rawPallet)); sl.lo.visible = n > 0; sl.hi.visible = n > WH.rawPallet / 2; });
+    }
+    if (parts !== this.whPartsShown) {
+      this.whPartsShown = parts;
+      this.whPartSlots.forEach((sl, i) => { const n = Math.max(0, Math.min(WH.partsPallet, parts - i * WH.partsPallet)); const b = Math.ceil(n / (WH.partsPallet / 6)); sl.bins.forEach((x, k) => (x.visible = k < b)); });
+    }
+    this.drawWhBoard();
     this.whSign.visible = out;
     if (out) this.whSign.material.opacity = REDUCED_MOTION || Math.sin(t * Math.PI * 2 / 0.9) > 0 ? 1 : 0.35;
 
@@ -1667,8 +1779,8 @@ export class FactoryView {
       const { load, crates, led } = vv.g.userData;
       load.visible = !!v.load;
       if (v.load) {
-        const n = v.shipper ? crates.length : Math.ceil((v.load.n / (v.load.type === 'raw' ? 20 : sim.mode.vehicleCap)) * crates.length);
-        crates.forEach((c, i) => { c.visible = i < n; c.material = v.load.type === 'raw' ? MAT.raw : v.load.product === 'eaxle' ? MAT.crate : MAT.carton; });
+        const n = v.shipper || v.receiver ? crates.length : Math.ceil((v.load.n / (v.load.type === 'raw' ? 20 : sim.mode.vehicleCap)) * crates.length);
+        crates.forEach((c, i) => { c.visible = i < n; c.material = v.load.type === 'raw' ? MAT.raw : v.load.type === 'parts' ? MAT.partsBin : v.load.product === 'eaxle' ? MAT.crate : MAT.carton; });
       }
       if (led) {
         const col = v.charging ? 0x3dff8a : v.battery < 25 ? 0xff4040 : v.load ? 0xffb020 : 0x2aa8ff;
@@ -2112,7 +2224,9 @@ export class FactoryView {
     const AMBER = '245,166,35', GREEN = '61,220,132';
     const legacy = sim.mode.key === 'traditional', agv = sim.mode.vehicleKind === 'agv';
     // 물류존: 자재창고 랙 · AGV 상차 · 부품 랙 피킹
-    area(-31.6, -18.6, -20.6, -11.4, AMBER, '📦 물류존', agv ? '자재창고 · AGV 자재 상차 · 부품 랙 피킹' : '자재창고 · 지게차 자재 상차 · 부품 랙', -26.1, -12.2, 7);
+    area(-28.8, -18.6, -20.6, -11.4, AMBER, '📦 물류존', agv ? '자재창고 · AGV 자재 상차 · 부품 랙 피킹' : '자재창고 · 지게차 자재 상차 · 부품 랙', -24.7, -12.2, 6.4);
+    // 입고 지게차 전용 영역: 입고 도크 ↔ 창고 랙 왼쪽 입고 칸 ↔ 대기 — 뒤쪽 통로·세로 통로와 떨어져 있어 로봇 이동 경로와 겹치지 않는다
+    { const Z = INBOUND.zone; area(Z.x0, Z.z0, Z.x1, Z.z1, GREEN, `🚚 입고 ${sim.mode.key === 'dark' ? '자율 ' : ''}지게차 전용`, '로봇 통행 금지 · 도크 ↔ 창고 입고 칸', (Z.x0 + Z.x1) / 2, Z.z1 - 0.6, 5.6); }
     // 물류 대기: 부품 보충 휴머노이드 (피지컬AI)
     if (sim.helpers?.length) area(-20.2, -13.6, -16.2, -11.4, GREEN, '물류 대기', '부품 보충 휴머노이드', -18.2, -11.95, 3.8);
     // 물류 대기: AGV(레거시는 지게차) 대기·충전 — 충전 패드 4칸과 충전 기둥
@@ -2138,10 +2252,12 @@ export class FactoryView {
   // 화물트럭: 시뮬레이션 트럭 목록과 모델을 맞추고, 위치·방향·뒷문·적재 팔레트·라벨을 갱신한다
   updateTrucks(t, rdt) {
     const yard = this.sim.yard; if (!yard) return;
-    const live = new Set(yard.trucks.map((k) => k.id));
+    const all = [...yard.trucks, ...(this.sim.inbound?.trucks ?? [])];
+    const live = new Set(all.map((k) => k.id));
     for (const [id, tv] of this.truckViews) if (!live.has(id)) { this.dyn.remove(tv.g); tv.lbl.removeFromParent(); tv.el.remove(); this.truckViews.delete(id); }
     const STATE = { arrive: '입차', wait: '대기 · 빈 도크 기다림', toDock: '도크 후진 접안', dock: '상차', depart: '만재 출발' };
-    for (const k of yard.trucks) {
+    const IN_STATE = { arrive: '입차', wait: '대기 · 입고 도크 기다림', toDock: '입고 도크 후진 접안', dock: '하차', depart: '하차 완료 출발' };
+    for (const k of all) {
       let tv = this.truckViews.get(k.id);
       if (!tv) {
         const g = makeTruck(+k.id.split('-')[1] || 0);
@@ -2156,8 +2272,9 @@ export class FactoryView {
       const rev = k.moving && k.route[0]?.rev;
       ud.tail.forEach((m) => { m.material.emissive.setHex(rev ? 0xffffff : 0xff3030); m.material.emissiveIntensity = rev ? (Math.sin(t * 8) > 0 ? 2.5 : 0.4) : k.moving ? 1.6 : 0.8; });
       const ps = k.pallets ?? [];
-      ud.pallets.forEach((p, i) => { p.pg.visible = i < ps.length; if (i < ps.length) p.cartons.forEach((c) => (c.material = ps[i] === 'eaxle' ? MAT.crate : MAT.carton)); });
-      tv.el.innerHTML = `${k.id}<em>${STATE[k.state] ?? k.state}${k.state === 'dock' || k.state === 'depart' ? ` ${k.load}/${YARD.cap}` : ''}</em>`;
+      ud.pallets.forEach((p, i) => { p.pg.visible = i < ps.length; if (i < ps.length) p.cartons.forEach((c) => (c.material = ps[i] === 'eaxle' ? MAT.crate : ps[i] === 'raw' ? MAT.raw : ps[i] === 'parts' ? MAT.partsBin : MAT.carton)); });
+      tv.el.innerHTML = k.inbound ? `${k.id}<em>${IN_STATE[k.state] ?? k.state}${k.state !== 'depart' ? ` · 팔레트 ${ps.length} (원자재 ${ps.filter((x) => x === 'raw').length} · 부품 ${ps.filter((x) => x === 'parts').length})` : ''}</em>`
+        : `${k.id}<em>${STATE[k.state] ?? k.state}${k.state === 'dock' || k.state === 'depart' ? ` ${k.load}/${YARD.cap}` : ''}</em>`;
     }
   }
 

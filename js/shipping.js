@@ -13,7 +13,7 @@ const WAIT_Z = DOCK_Z - 2;
 const FWD = 4.2, REV = 1.8;                    // 전진·후진 속도 (m/s)
 
 // 트럭: 위치(x,z)는 차체 중심, heading은 운전석이 향하는 방향 (이동체와 같은 규약: 0 = +z)
-class Truck {
+export class Truck {
   constructor(id, x, z, heading) { Object.assign(this, { id, x, z, heading, load: 0, by: {}, state: 'arrive', route: [], bay: null }); }
   // 경로점: { x, z, rev } — rev면 후진 (차체 방향은 진행 반대)
   go(points, state) { this.route = points.map((p) => ({ ...p })); this.state = state; }

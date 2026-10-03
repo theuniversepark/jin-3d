@@ -43,7 +43,7 @@ export function equipmentList(sim, view = null) {
   for (const c of sim.carriers) mover(c, `운반 ${c.id}`, '물류', (m) => m.blockedOn ? ['진로 대기', 'idle'] : ({ line: ['운반 중', 'run'], return: ['빈차 복귀', 'run'], toSrc: ['투입 이동', 'run'], docking: ['투입 진입', 'run'], atSrc: ['적재 대기', 'idle'], park: ['대기', 'idle'] })[m.state] ?? ['대기', 'idle']);
   const vehicle = (m) => m.charging ? [`충전 ${m.battery.toFixed(0)}%`, 'charge'] : m.task ? [short(m.task), 'run'] : ['대기', 'idle'];
   for (const v of sim.vehicles) mover(v, v.kind === 'agv' ? `${v.id}` : `${v.id} (유인)`, '물류', vehicle);
-  for (const f of sim.forklifts) mover(f, f.auto ? '출하 자율 지게차' : '출하 지게차 (유인)', '물류', vehicle);
+  for (const f of sim.forklifts) mover(f, f.receiver ? (f.auto ? '입고 자율 지게차' : '입고 지게차 (유인)') : f.auto ? '출하 자율 지게차' : '출하 지게차 (유인)', '물류', vehicle);
   for (const h of sim.techs) if (h.uid) mover(h, h.kind === 'humanoid' ? `정비 휴머노이드 ${h.id.slice(-1)}` : `정비 로봇 ${h.id.slice(-1)}`, '로봇', (m) => m.task ? [short(m.task), /수리|정비|보정/.test(m.task) ? 'maint' : 'run'] : ['대기', 'idle']);
   for (const h of sim.helpers) mover(h, `물류 휴머노이드 ${h.id.slice(-1)}`, '로봇', (m) => m.task ? [short(m.task), 'run'] : ['대기', 'idle']);
   for (const q of sim.quads) mover(q, `사족보행 ${q.id.slice(-1)}`, '로봇', (m) => m.charging ? [`충전 ${m.battery.toFixed(0)}%`, 'charge'] : m.scanning ? ['점검 중', 'maint'] : m.moving ? ['순찰 이동', 'run'] : m.task ? [short(m.task), 'run'] : ['대기', 'idle']);
