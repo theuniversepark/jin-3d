@@ -15,6 +15,7 @@ import { renderConcept } from './concept.js';
 import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
 import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
 import { GateView } from './gateview.js';
+import { EpisodeRecorder, buildEpisodesZip, EP_HZ, SAMPLE } from './vla.js';
 import { OrchView } from './orchview.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
@@ -70,6 +71,8 @@ composer.addPass(new OutputPass());
 const view = new FactoryView(scene);
 const hub = new DataHub();
 const camWall = new RobotCamWall(scene, renderer);   // 로봇 비전 관제 디스플레이 (피지컬AI 단계)
+const epRec = new EpisodeRecorder(view, camWall, hub);   // VLA 에피소드 기록기 (피지컬AI 단계)
+view.epRec = epRec;
 const orchView = new OrchView(document.getElementById('orchPanel'), document.getElementById('orchBadge'));   // 오케스트레이터 인시던트 흐름도
 const ui = new UI();
 const llm = new LLMController();
@@ -154,6 +157,7 @@ function start(key) {
   view.selected = null;
   hub.reset(sim, view);
   camWall.setup(sim, view);
+  epRec.attach(sim);
   orchView.attach(sim);
   applyLook();
   llm.attach(sim, agent);
@@ -486,7 +490,7 @@ function updateAlarmButtons() {
 
 // ── 루프 ─────────────────────────────
 const clock = new THREE.Clock();
-let uiTimer = 0, screenTimer = 0, robotTimer = 0, camTimer = 0;
+let uiTimer = 0, screenTimer = 0, robotTimer = 0, camTimer = 0, vlaTimer = 0;
 const clockEl = document.getElementById('clock');
 function frame() {
   const rdt = Math.min(clock.getDelta(), 0.1);
@@ -516,6 +520,8 @@ function frame() {
   }
   if (view.telemetry && ui.robotMode) placeRobotPanel();
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought); }
+  epRec.update();
+  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); }
   camWall.update(rdt);
   composer.render();
   labelRenderer.render(scene, camera);
@@ -543,6 +549,8 @@ designer = new LineDesigner({
   },
 });
 llm.probe();
+// 에피소드 서버 저장이 가능한지 (맥 앱·npm start) — 정적 호스팅·공유 페이지는 브라우저 보관만
+if (!window.JIN3D_SHARED && !window.JIN3D_NO_SERVER) fetch('/api/status').then((r) => r.json()).then((j) => { epRec.server = !!j.episodes; }).catch(() => {});
 
 // ── 맥 앱(Jin-3D) 전용: API 키 설정 ─────────────────
 const bridge = window.jin3d;
@@ -570,4 +578,58 @@ if (bridge?.isApp) {
   document.getElementById('keyForm').addEventListener('submit', async (e) => { e.preventDefault(); afterChange(await bridge.setApiKey(input.value)); });
   document.getElementById('keyClear').addEventListener('click', async () => afterChange(await bridge.clearApiKey()));
 }
-window.__twin = { get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };
+// ── VLA 데이터·학습 파이프라인 창 ─────────────────
+const vlaModal = document.getElementById('vlaModal'), vlaBody = document.getElementById('vlaBody');
+let vlaDir = null;
+document.getElementById('btnVla').addEventListener('click', () => {
+  vlaModal.classList.remove('hidden'); renderVla(true);
+  if (epRec.server) fetch('/api/episodes').then((r) => r.json()).then((j) => { vlaDir = j; }).catch(() => {});
+});
+document.getElementById('closeVla').addEventListener('click', () => vlaModal.classList.add('hidden'));
+vlaModal.addEventListener('click', async (e) => {
+  if (e.target === vlaModal) return vlaModal.classList.add('hidden');
+  if (e.target.closest('[data-train]')) { if (!sim.vla.startTraining(true)) sim.log('info', 'VLA 학습 요청 보류', { obs: sim.vla.job ? '이미 학습·배포 진행 중' : '새 에피소드가 5개 이상 필요' }); renderVla(true); return; }
+  const b = e.target.closest('[data-dl]'); if (!b || b.disabled) return;
+  const uid = b.dataset.dl, eps = epRec.list(uid), pick = b.dataset.one ? eps.slice(-1) : eps;
+  if (!pick.length) return;
+  b.disabled = true; const old = b.textContent; b.textContent = '묶는 중…';
+  const zip = await buildEpisodesZip(uid, pick, epRec.runId);
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([zip], { type: 'application/zip' }));
+  a.download = `${uid}_${b.dataset.one ? pick[0].id : `episodes_${pick.length}`}_${epRec.runId}.zip`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  b.textContent = old; b.disabled = false;
+});
+const escV = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+function renderVla(force) {
+  if (vlaModal.classList.contains('hidden') && !force) return;
+  const P = sim.vla;
+  if (!P?.on) { vlaBody.innerHTML = '<p class="vla-note">VLA 파이프라인은 피지컬AI 단계에서만 동작합니다.</p>'; return; }
+  if (vlaBody.matches(':hover') && vlaBody.querySelector('button:hover')) return;   // 누르는 중에는 다시 그리지 않는다
+  const robots = epRec.robots(), j = P.job, last = P.jobs[0], need = 200 * (P.backoff ?? 1);
+  const okRate = P.allEps ? Math.round((P.okEps / P.allEps) * 100) : 0;
+  const recNow = epRec.rec.size, frames = robots.reduce((a, R) => a + epRec.list(R.uid).reduce((b, e) => b + e.frames.length, 0), 0);
+  const deployed = robots.filter((R) => P.versionOf(R.uid) === P.label(P.latest)).length;
+  const act = j?.phase ?? 'idle', shared = !!window.JIN3D_SHARED;
+  const stage = (ic, title, val, sub, on) => `<div class="vs ${on ? 'on' : ''}"><i>${ic}</i><b>${title}</b><span>${val}</span><small>${sub}</small></div>`;
+  const kindKo = (k) => (k === 'ammr' ? 'AMMR' : k === 'cobot' ? '협동로봇' : '6축로봇');
+  vlaBody.innerHTML = `
+    <div class="vla-flow">
+      ${stage('🤖', '1 로봇 수집', `기록 중 ${recNow}대 · 누적 ${epRec.total}개`, `VLA 로봇 ${robots.length}대 · 작업 사이클 ${SAMPLE}번에 1번`, recNow > 0)}<b class="va">›</b>
+      ${stage('🧹', '2 AI-ready 정제', `${EP_HZ}Hz · 카메라 ${frames}장`, '관절·TCP·그리퍼·작업 단계 · 지시·성공 라벨 · UTC 동기', recNow > 0)}<b class="va">›</b>
+      ${stage('🎞', '3 에피소드', `성공률 ${okRate}%`, `성공 ${P.okEps} / 전체 ${P.allEps}`, false)}<b class="va">›</b>
+      ${stage('🗄', '4 서버 저장', epRec.server ? `${epRec.uploaded}개 · ${(epRec.bytes / 1048576).toFixed(1)}MB` : '브라우저 보관', epRec.server ? escV(`…/${(vlaDir?.dir ?? 'data/episodes').split(/[\\/]/).slice(-2).join('/')}/<로봇 ID>/*.zip`) : '서버 없음 (웹·공유) — 파일로 내려받아 보관', epRec.uploaded > 0)}<b class="va">›</b>
+      ${stage('🧠', '5 VLA 학습', act === 'train' ? `에폭 ${j.epoch}/${j.epochs} · loss ${j.loss.at(-1) ?? '-'}` : `다음 학습까지 ${Math.max(0, need - P.newEps)}개`, act === 'train' ? `${j.label} 미세조정 · 에피소드 ${j.episodes}개` : `새 에피소드 ${P.newEps}개 누적`, act === 'train')}<b class="va">›</b>
+      ${stage('✅', '6 평가 게이트', j?.val != null ? `${j.val}% (이전 ${j.prevVal}%)` : last?.val != null ? `${last.label} ${last.val}%` : '-', '검증 성공률 +0.3%p 이상이면 배포', act === 'eval')}<b class="va">›</b>
+      ${stage('🚀', '7 로봇 배포', `${P.label(P.latest)} · ${deployed}/${robots.length}대`, act === 'canary' ? `카나리 ${j.canary} 모니터링` : act === 'rollout' ? `OTA ${j.rollout.length}/${j.rollout.length + j.queue.length}대` : '추론 모델 → 로봇 (OTA)', act === 'canary' || act === 'rollout')}
+    </div>
+    <div class="vla-actions"><button type="button" data-train ${j ? 'disabled' : ''}>🧠 지금 학습 시작</button><span class="vla-note">자동: 새 에피소드 ${need}개마다 학습. 학습은 시뮬레이션이고 에피소드 데이터는 실제 기록입니다. 모델 버전마다 VLA 셀 사이클 1.5%·불량 10% 개선(최대 5단계).</span></div>
+    <div class="vla-grid">
+      <div><h4>학습·배포 이력</h4><table class="vla-t"><thead><tr><th>모델</th><th>상태</th><th>에피소드</th><th>loss</th><th>검증</th><th>배포</th></tr></thead><tbody>
+        ${P.jobs.map((x) => `<tr><td><b>${x.label}</b></td><td class="p-${x.phase}">${({ train: `학습 ${x.epoch}/${x.epochs}`, eval: '평가 중', canary: '카나리', rollout: '배포 중', done: '배포 완료', rejected: '평가 미달' })[x.phase]}</td><td>${x.episodes}</td><td>${x.loss.at(-1) ?? '-'}</td><td>${x.val != null ? x.val + '%' : '-'}</td><td>${x.rollout.length}대</td></tr>`).join('')}
+        <tr><td><b>v1.0</b></td><td>기본 모델</td><td>-</td><td>-</td><td>86.0%</td><td>${robots.length}대</td></tr></tbody></table></div>
+      <div><h4>로봇별 에피소드 <small>${shared ? '공유 페이지에서는 다운로드할 수 없습니다 (맥 앱·웹 버전에서)' : '⬇ 전체 = 보관 에피소드(최근 30개), ⬇ 1개 = 최근 에피소드 — zip(메타·스텝 JSONL·카메라 JPEG)'}</small></h4>
+        <table class="vla-t"><thead><tr><th>ID</th><th>셀 · 로봇</th><th>모델</th><th>보관 / 누적</th><th>성공률</th><th>최근 지시</th><th></th></tr></thead><tbody>
+        ${robots.map((R) => { const eps = epRec.list(R.uid), st = P.robotStats.get(R.uid), le = eps.at(-1), dis = !eps.length || shared ? 'disabled' : ''; return `<tr><td><b class="uidc">${R.uid}</b></td><td>${escV(R.st.name.replace(/\s*\(.*\)$/, ''))} · ${kindKo(R.r.kind)}</td><td>${P.versionOf(R.uid)}</td><td>${eps.length} / ${st?.n ?? 0}</td><td>${st?.n ? Math.round((st.ok / st.n) * 100) + '%' : '-'}</td><td class="ins" title="${escV(le?.instruction)}">${escV(le?.instruction ?? '-')}</td><td class="dl"><button type="button" data-dl="${R.uid}" ${dis}>⬇ 전체</button><button type="button" data-dl="${R.uid}" data-one="1" ${dis}>⬇ 1개</button></td></tr>`; }).join('')}</tbody></table></div>
+    </div>`;
+}
+
+window.__twin = { epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };

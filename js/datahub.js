@@ -77,6 +77,7 @@ function buildAssets(sim, view) {
       r.jointDefs.forEach((jd, j) => fields.push(f(`Joint${j + 1}`, jd.name, 'double', jd.unit === 'deg' ? 'deg' : 'mm', () => r.joints()[j] * (jd.unit === 'deg' ? DEG : 1000))));
       const tcp = () => { const w = r.tip.getWorldPosition(r.tip.position.clone()), b = r.root.getWorldPosition(r.root.position.clone()); return { x: (w.x - b.x) * 1000, y: -(w.z - b.z) * 1000, z: (w.y - b.y) * 1000 }; };
       fields.push(f('TcpX', 'TCP X', 'double', 'mm', () => tcp().x), f('TcpY', 'TCP Y', 'double', 'mm', () => tcp().y), f('TcpZ', 'TCP Z', 'double', 'mm', () => tcp().z));
+      if (st.vlaCell) fields.push(f('VlaModelVersion', 'VLA 추론 모델', 'string', null, () => sim.vla?.versionOf(st.robotUids?.[i]) ?? ''));
       if (r.kind === 'ammr') fields.push(   // AMMR 이동 플랫폼·부품 빈
         f('PartsBin', '로봇 부품 빈', 'int', 'pcs', () => st.ammr?.[i]?.bin ?? null),
         f('PlatformPhase', '이동 플랫폼 상태', 'string', null, () => st.ammr?.[i]?.phase ?? ''),

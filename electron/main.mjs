@@ -114,6 +114,7 @@ app.whenReady().then(async () => {
     copyright: '제조공정 · 스마트팩토리 · 다크팩토리 시뮬레이션 에이전트',
   });
   try {
+    process.env.JIN3D_DATA_DIR ??= path.join(app.getPath('userData'), 'data');   // VLA 에피소드 저장 위치
     const { port } = await startServer({ port: 0, host: '127.0.0.1' });
     origin = `http://127.0.0.1:${port}`;
   } catch (e) {

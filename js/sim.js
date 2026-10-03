@@ -2,6 +2,7 @@
 import { CommandCenter } from './commands.js';
 import { TruckYard, planForklift } from './shipping.js';
 import { PatrolDrone } from './drone.js';
+import { VLAPipeline } from './vla.js';
 import { Orchestrator } from './orchestrator.js';
 import { AMMR, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
@@ -318,6 +319,9 @@ export class Simulation {
     const prio = { carrier: 5, agv: 4, forklift: 4, humanoid: 3, human: 3, robot: 3, quadruped: 1, worker: 2 };
     this.movers.forEach((m, i) => { m.prio = (prio[m.kind] ?? 1) * 100 - i; m.sense = this.sense; });
     this.assignIds();
+    // 피지컬AI: VLA 셀(6축 협동·산업용 로봇, AMMR)과 VLA 학습·배포 파이프라인
+    for (const st of this.processing) st.vlaCell = m.key === 'dark' && ['cobot', 'articulated', 'ammr'].includes(st.def.robot?.kind);
+    new VLAPipeline(this);
   }
 
   // 설비·로봇 고유 ID — 현황판·라벨·텔레메트리·데이터 연동에 같은 ID를 쓴다 (사람은 제외)
@@ -585,6 +589,7 @@ export class Simulation {
     }
     // 출하: 트럭은 건물 밖이라 계속 움직이고, 지게차는 Zone 명령(정지·감속·대피)을 따른다
     this.yard.update(dt);
+    this.vla?.update(dt);
     for (const d of this.drones) d.update(dt);
     if (mdt > 0) for (const f of this.forklifts) { if (f.idle && !K.evac) planForklift(this, f); f.update(mdt); }
     if (mdt > 0) {
@@ -739,7 +744,7 @@ export class Simulation {
       const e = inC.items.shift();
       st.itemFrom = inC.path[inC.path.length - 1];   // 들어온 경로의 끝점 (합류 대기 차로는 중심선에서 비켜 있음)
       st.item = e.item; st.progress = 0; st.done = false; st.itemT = 0;
-      const base = st.def.cycle * m.cycleMul * st.speedMul;
+      const base = st.def.cycle * m.cycleMul * st.speedMul * (this.vla?.cycleFactor(st) ?? 1);   // 배포된 VLA 모델 버전만큼 사이클 단축
       st.cycleTime = st.item.scrap ? 0.5 : Math.max(base * 0.6, base * (1 + m.cycleVar * gauss(this.rand)));
     }
     if (!st.item && cycleStop) { st.state = 'CSTOP'; st.c.stop = (st.c.stop ?? 0) + dt; }
@@ -800,7 +805,7 @@ export class Simulation {
         return;
       }
     } else {
-      const p = (m.defectBase / 4) * (st.def.defectMul ?? 1) * (1 + (100 - st.health) / 50) * (1 + st.drift * 1.5);
+      const p = (m.defectBase / 4) * (st.def.defectMul ?? 1) * (1 + (100 - st.health) / 50) * (1 + st.drift * 1.5) * (this.vla?.defectFactor(st) ?? 1);
       if (!it.defect && this.rand() < p) { it.defect = true; it.defectBy = st.id; st.c.defects++; }
     }
     if (st.def.effect === 'sort') it.sorted = true;

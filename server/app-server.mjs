@@ -15,6 +15,41 @@ const PUBLIC = ['index.html', 'css/', 'js/', 'vendor/', 'assets/'];
 
 let client = null;
 
+// VLA 에피소드 저장소 — 맥 앱은 사용자 데이터 폴더(JIN3D_DATA_DIR), CLI는 프로젝트의 data/
+const DATA_DIR = () => process.env.JIN3D_DATA_DIR || path.join(ROOT, 'data');
+const SAFE = /^[A-Za-z0-9_.-]{1,64}$/;
+function readRaw(req, limit) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', (c) => { size += c.length; if (size > limit) { reject(new Error('payload too large')); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+// POST /api/episodes?robot=RB-02-1&id=ep_000012 (본문: 에피소드 zip) → data/episodes/<robot>/<id>.zip
+async function saveEpisode(req, res, url) {
+  const robot = url.searchParams.get('robot') ?? '', id = url.searchParams.get('id') ?? '';
+  if (!SAFE.test(robot) || !SAFE.test(id)) return send(res, 400, { error: 'robot·id 형식 오류' });
+  try {
+    const buf = await readRaw(req, 8 * 1024 * 1024);
+    const dir = path.join(DATA_DIR(), 'episodes', robot);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${id}.zip`), buf);
+    return send(res, 200, { ok: true, bytes: buf.length });
+  } catch (e) { return send(res, 400, { error: e.message }); }
+}
+// GET /api/episodes → 로봇별 저장 에피소드 수·용량
+function listEpisodes(res) {
+  const base = path.join(DATA_DIR(), 'episodes'), robots = {};
+  try {
+    for (const r of fs.readdirSync(base)) {
+      const files = fs.readdirSync(path.join(base, r)).filter((f) => f.endsWith('.zip'));
+      robots[r] = { count: files.length, bytes: files.reduce((a, f) => a + fs.statSync(path.join(base, r, f)).size, 0) };
+    }
+  } catch { /* 아직 저장된 에피소드 없음 */ }
+  return send(res, 200, { dir: base, robots });
+}
+
 // 키를 바꾸면 클라이언트를 새로 만든다. 빈 값이면 환경변수(ANTHROPIC_API_KEY 등)로 되돌아간다.
 export function setApiKey(key) {
   if (key) client = new Anthropic({ apiKey: key });
@@ -85,7 +120,9 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
   await startMqtt();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    if (url.pathname === '/api/status') return send(res, 200, { llm: hasApiKey(), model: MODEL });
+    if (url.pathname === '/api/status') return send(res, 200, { llm: hasApiKey(), model: MODEL, episodes: true });
+    if (url.pathname === '/api/episodes' && req.method === 'POST') return saveEpisode(req, res, url);
+    if (url.pathname === '/api/episodes') return listEpisodes(res);
     if (url.pathname === '/api/agent' && req.method === 'POST') return handleAgent(req, res);
     if (url.pathname === '/api/line' && req.method === 'POST') return handleLine(req, res);
     // OPC UA PubSub(JSON) over MQTT — 내장 브로커로 발행

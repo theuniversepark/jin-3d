@@ -154,6 +154,30 @@ export class RobotCamWall {
     return f.label;
   }
 
+  // VLA 에피소드용 카메라 프레임: 로봇 카메라 시점을 작은 해상도로 렌더해 JPEG 바이트로 돌려준다 (비동기 인코딩)
+  captureFrame(ref, w = 160, h = 120) {
+    const f = this.cameraFor(ref); if (!f) return null;
+    const r = this.renderer;
+    if (!this.capRT || this.capRT.width !== w || this.capRT.height !== h) {
+      this.capRT?.dispose(); this.capRT = new THREE.WebGLRenderTarget(w, h); this.capRT.texture.colorSpace = THREE.SRGBColorSpace;
+      this.capBuf = new Uint8Array(w * h * 4); this.capCanvas = document.createElement('canvas'); this.capCanvas.width = w; this.capCanvas.height = h;
+    }
+    this.capCam ??= new THREE.PerspectiveCamera(70, w / h, 0.12, 60);
+    this.capCam.aspect = w / h; this.setCam(this.capCam, f);
+    const vis = [this.group.visible, this.view.selRing?.visible];
+    this.group.visible = false; if (this.view.selRing) this.view.selRing.visible = false;
+    const auto = r.shadowMap.autoUpdate; r.shadowMap.autoUpdate = false;
+    const prev = r.getRenderTarget();
+    r.setRenderTarget(this.capRT); r.clear(); r.render(this.scene, this.capCam);
+    r.readRenderTargetPixels(this.capRT, 0, 0, w, h, this.capBuf);
+    r.setRenderTarget(prev); r.shadowMap.autoUpdate = auto;
+    this.group.visible = vis[0]; if (this.view.selRing) this.view.selRing.visible = vis[1];
+    const img = new ImageData(w, h), row = w * 4;
+    for (let y = 0; y < h; y++) img.data.set(this.capBuf.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+    this.capCanvas.getContext('2d').putImageData(img, 0, 0);
+    return new Promise((res) => this.capCanvas.toBlob((b) => (b ? b.arrayBuffer().then((ab) => res(new Uint8Array(ab))) : res(null)), 'image/jpeg', 0.78));
+  }
+
   setCam(cam, f) {
     const { pos, dir, ahead } = f.pose();
     cam.position.copy(pos);

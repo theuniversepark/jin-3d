@@ -254,6 +254,7 @@ export class RobotTelemetry {
       const vib = 0.6 + (100 - st.health) * 0.045 + (busy ? 0.4 : 0);
       out.title = `${st.robotUids?.[this.ref.idx] ? `[${st.robotUids[this.ref.idx]}] ` : ''}${st.name} · ${ROBOT_LABEL[r.kind]} ${R.view ? '' : `#${this.ref.idx + 1}`}`;
       out.status = [['상태', busy ? `가동 (진행 ${(p * 100).toFixed(0)}%)` : st.state === 'DOWN' ? '설비 고장 — 정지' : st.state === 'MAINT' ? '정비 중 — 정지' : st.state === 'ESTOP' ? '비상정지 — 동력 차단' : st.state === 'PSTOP' ? '보호정지 — 자세 유지' : st.state === 'CHECK' ? '자가진단 중' : st.state === 'CSTOP' ? '사이클 정지' : '대기'], ['정격 가반하중', `${r.payload} kg`]];
+      if (st.vlaCell) { const uid = st.robotUids?.[this.ref.idx], n = this.view.epRec?.list(uid).length ?? 0, ps = this.view.sim.vla?.robotStats.get(uid); out.status.push(['VLA 추론 모델', this.view.sim.vla?.versionOf(uid) ?? 'v1.0'], ['VLA 에피소드', `보관 ${n} · 누적 ${ps?.n ?? 0}개${ps?.n ? ` · 성공률 ${Math.round((ps.ok / ps.n) * 100)}%` : ''}`]); }
       const xyz = (p) => `${p.x.toFixed(0)} / ${p.y.toFixed(0)} / ${p.z.toFixed(0)} mm`;
       out.sections.push({ title: 'TCP (툴 끝점, 베이스 기준)', rows: !this.tcp ? [] : this.tcp2 ? [
         ['왼팔 X / Y / Z', xyz(this.tcp)], ['왼팔 TCP 속도', `${this.tcp.speed.toFixed(0)} mm/s`],
