@@ -14,7 +14,7 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); font-size: 13px; }
-#viewport { position: fixed; inset: 0; }
+#viewport { position: fixed; inset: 0; background: #0d1117; }   /* GPU 컨텍스트가 사라져도 흰 화면 대신 어두운 바탕 */
 #viewport canvas { display: block; }
 button { font: inherit; color: inherit; cursor: pointer; }
 
@@ -584,3 +584,11 @@ table.rb-j .tq i { display: block; height: 100%; }
 .vla-t .uidc { color: #ffb020; font-family: Menlo, 'SF Mono', Consolas, monospace; }
 .vla-t .p-train, .vla-t .p-eval, .vla-t .p-canary, .vla-t .p-rollout { color: #b89bff; } .vla-t .p-done { color: var(--good); } .vla-t .p-rejected { color: var(--warn); }
 @media (max-width: 1100px) { .vla-grid { grid-template-columns: 1fr; } }
+
+/* GPU 컨텍스트 복구 안내 */
+#glNote { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 50; padding: 10px 16px; border-radius: 10px; background: rgba(13, 17, 23, 0.88); border: 1px solid var(--line); color: var(--ink); font-size: 13px; pointer-events: none; }
+#glNote[hidden] { display: none; }
+
+/* 상단: 피지컬AI 버튼 옆 VLA 학습 */
+.topbar .vla-top { border: 1px solid #b89bff; background: rgba(184, 155, 255, 0.16); color: #e2d6ff; font-weight: 700; padding: 6px 12px; border-radius: 10px; white-space: nowrap; }
+.topbar .vla-top:hover { background: rgba(184, 155, 255, 0.3); }

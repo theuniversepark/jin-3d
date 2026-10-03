@@ -101,9 +101,16 @@ async function createWindow() {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+  // 렌더러 프로세스가 죽어 창이 하얗게 되면 다시 불러온다
+  win.webContents.on('render-process-gone', (e, d) => { if (d.reason !== 'clean-exit' && win) win.webContents.reload(); });
   win.on('closed', () => { win = null; });
   await win.loadURL(`${origin}/index.html`);
 }
+
+// GPU 컨텍스트를 한 번 잃은 뒤에도 WebGL을 다시 만들 수 있게 (Chromium은 기본적으로 손실이 반복되면 3D API를 막는다)
+app.disableDomainBlockingFor3DAPIs();
+// GPU 프로세스가 죽으면 Chromium이 다시 띄우고, 페이지는 컨텍스트 손실 처리로 렌더러를 새로 만든다
+app.on('child-process-gone', (e, d) => { if (d.type === 'GPU') console.warn(`[Jin-3D] GPU 프로세스 종료 (${d.reason}) — 재시작`); });
 
 app.whenReady().then(async () => {
   loadStoredKey();

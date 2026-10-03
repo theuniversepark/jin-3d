@@ -21,13 +21,18 @@ import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, Z
 
 // ── 렌더러 ─────────────────────────────
 const host = document.getElementById('viewport');
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-host.appendChild(renderer.domElement);
+// 렌더러는 GPU 컨텍스트를 잃으면(화면 전환·잠자기·GPU 프로세스 재시작 등) 새로 만들 수 있게 함수로 만든다
+const makeRenderer = () => {
+  const r = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  r.setPixelRatio(Math.min(devicePixelRatio, 2));
+  r.setSize(innerWidth, innerHeight);
+  r.shadowMap.enabled = true;
+  r.shadowMap.type = THREE.PCFShadowMap;
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  return r;
+};
+let renderer = makeRenderer();
+host.prepend(renderer.domElement);
 
 const labelRenderer = new CSS2DRenderer();
 labelRenderer.setSize(innerWidth, innerHeight);
@@ -60,12 +65,18 @@ fill.position.set(30, 20, -20);
 scene.add(fill);
 
 // ── 후처리(블룸) ─────────────────────────────
-const composer = new EffectComposer(renderer);
-const renderPass = new RenderPass(scene, camera);
-composer.addPass(renderPass);
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.4, 0.5, 0.9);
-composer.addPass(bloom);
-composer.addPass(new OutputPass());
+let composer, renderPass, bloom;
+const makeComposer = () => {
+  const keep = bloom && [bloom.strength, bloom.radius, bloom.threshold];
+  composer = new EffectComposer(renderer);
+  renderPass = new RenderPass(scene, camera);
+  composer.addPass(renderPass);
+  bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.4, 0.5, 0.9);
+  if (keep) [bloom.strength, bloom.radius, bloom.threshold] = keep;
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+};
+makeComposer();
 
 // ── 시뮬레이션 ─────────────────────────────
 const view = new FactoryView(scene);
@@ -488,11 +499,62 @@ function updateAlarmButtons() {
   }
 }
 
+// ── GPU 컨텍스트 손실 복구 ─────────────────────────────
+// 다른 화면·데스크톱으로 옮겼다 돌아오거나, 잠자기·외장 모니터 전환·GPU 프로세스 재시작이 있으면
+// WebGL 컨텍스트가 사라져 3D 화면이 하얗게 비고 라벨만 남는다. 손실 동안은 GPU 작업을 멈추고
+// (시뮬레이션은 계속), 브라우저가 컨텍스트를 돌려주면 이어 그리고, 1.5초 안에 안 돌려주면 렌더러를 새로 만든다.
+const glNote = document.getElementById('glNote');
+let glLost = false, glTimer = 0, glRebuilds = 0;
+function watchContext(r) {
+  r.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    if (r !== renderer) return;
+    glLost = true; camWall.lost = true; glNote.hidden = false;
+    console.warn('[Jin-3D] WebGL 컨텍스트 손실 — 복구 대기');
+    clearTimeout(glTimer); glTimer = setTimeout(rebuildRenderer, 1500);
+  });
+  r.domElement.addEventListener('webglcontextrestored', () => {
+    if (r !== renderer) return;
+    clearTimeout(glTimer); glRecovered('복원');
+  });
+}
+function glRecovered(how) {
+  glLost = false; camWall.lost = false; glNote.hidden = true;
+  composer.setSize(innerWidth, innerHeight);
+  scene.traverse((o) => { if (o.material) for (const m of [].concat(o.material)) m.needsUpdate = true; });
+  console.info(`[Jin-3D] WebGL 컨텍스트 ${how} 완료`);
+}
+function rebuildRenderer() {
+  if (!glLost) return;
+  let r;
+  try { r = makeRenderer(); } catch (e) {   // GPU가 아직 준비 안 됨 — 잠시 뒤 다시
+    console.warn('[Jin-3D] 렌더러 재생성 실패, 재시도', e.message);
+    glTimer = setTimeout(rebuildRenderer, 2000); return;
+  }
+  const old = renderer;
+  renderer = r; watchContext(r);
+  old.domElement.replaceWith(r.domElement);
+  try { old.dispose(); } catch { /* 이미 잃은 컨텍스트 */ }
+  camWall.renderer = r; camWall.panelRT = camWall.capRT = null;
+  renderer.toneMappingExposure = old.toneMappingExposure;
+  makeComposer();
+  glRebuilds++;
+  glRecovered(`재생성(${glRebuilds}회)`);
+}
+watchContext(renderer);
+// 창이 다시 보일 때 컨텍스트가 조용히 사라져 있는 경우도 잡는다
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !glLost && renderer.getContext().isContextLost()) {
+    glLost = true; camWall.lost = true; glNote.hidden = false; rebuildRenderer();
+  }
+});
+
 // ── 루프 ─────────────────────────────
 const clock = new THREE.Clock();
 let uiTimer = 0, screenTimer = 0, robotTimer = 0, camTimer = 0, vlaTimer = 0;
 const clockEl = document.getElementById('clock');
 function frame() {
+  requestAnimationFrame(frame);   // 한 프레임에서 예외가 나도 루프는 계속
   const rdt = Math.min(clock.getDelta(), 0.1);
   if (running && !llm.holdSim) {
     let left = rdt * speed;
@@ -522,10 +584,13 @@ function frame() {
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought); }
   epRec.update();
   vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); }
-  camWall.update(rdt);
-  composer.render();
+  if (!glLost) {
+    try {
+      camWall.update(rdt);
+      composer.render();
+    } catch (e) { if (!frame.errAt || performance.now() - frame.errAt > 5000) { frame.errAt = performance.now(); console.error('[Jin-3D] 렌더 오류', e); } }
+  }
   labelRenderer.render(scene, camera);
-  requestAnimationFrame(frame);
 }
 
 start('smart');

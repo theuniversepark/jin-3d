@@ -120,6 +120,7 @@ export class RobotCamWall {
 
   // 선택한 로봇 카메라 영상을 2D 캔버스에 그린다 (렌더 타깃 → 픽셀 읽기, 약 10fps로 호출)
   renderRobotView(ref, canvas, clock) {
+    if (this.lost) return null;   // GPU 컨텍스트 복구 중
     const f = this.cameraFor(ref); if (!f) return null;
     const w = canvas.width, h = canvas.height, r = this.renderer;
     if (!this.panelRT || this.panelRT.width !== w || this.panelRT.height !== h) {
@@ -156,6 +157,7 @@ export class RobotCamWall {
 
   // VLA 에피소드용 카메라 프레임: 로봇 카메라 시점을 작은 해상도로 렌더해 JPEG 바이트로 돌려준다 (비동기 인코딩)
   captureFrame(ref, w = 160, h = 120) {
+    if (this.lost) return null;
     const f = this.cameraFor(ref); if (!f) return null;
     const r = this.renderer;
     if (!this.capRT || this.capRT.width !== w || this.capRT.height !== h) {
