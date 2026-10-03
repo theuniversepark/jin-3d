@@ -2,7 +2,7 @@
 
 **▶ 웹 버전 바로 실행: https://theuniversepark.github.io/jin-3d/** (설치 없이 브라우저에서 실행 · Claude 연동과 MQTT 발행은 맥 앱 또는 `npm start`에서)
 
-웹 브라우저에서 실행되는 3D 공장 시뮬레이션 에이전트입니다.
+웹 브라우저에서 실행되는 3D 공장 시뮬레이션 에이전트입니다. 사용한 오픈소스와 출처는 [OPEN_SOURCE.md](OPEN_SOURCE.md)를 보세요.
 
 ## 맥 앱 (Jin-3D.app)
 ```bash
@@ -238,10 +238,13 @@ AGV·지게차, 운반 AMR, 정비 인력·휴머노이드, 사족보행 로봇,
 - 파일당 텍스트 15만 자, PDF 25MB, 한 번에 10개까지 첨부할 수 있습니다. 텍스트가 길면 앞부분만 보내고 그 사실을 표시합니다.
 - 파일 분석은 Claude API 키가 필요합니다. 파일 분석 요청은 effort `high`로 실행됩니다.
 
-## 사용 라이브러리 (무료)
+## 사용 라이브러리 · 오픈소스 고지
 - **Three.js r186** (MIT): WebGL 3D 렌더링, OrbitControls, CSS2D 라벨, Bloom 후처리
 - **SheetJS 0.20.3** (Apache-2.0): 엑셀 읽기 · **mammoth 1.13** (BSD-2): 워드 본문 추출
+- **Electron** (MIT) · **@electron/packager** (BSD-2) · **@anthropic-ai/sdk** (MIT) · **aedes** (MIT) · **MQTT.js** (MIT)
   `vendor/three/`에 포함되어 있어 인터넷 없이도 실행됩니다.
+
+사용한 오픈소스 라이브러리·개발 도구·외부 사이트·참고 표준의 버전·라이선스·출처 전체 목록은 **[OPEN_SOURCE.md](OPEN_SOURCE.md)**(오픈소스 고지)에 있습니다.
 
 ## 구성
 | 파일 | 역할 |
