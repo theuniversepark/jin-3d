@@ -25,7 +25,7 @@ export const ROBOT_KINDS = {
   cobot:       { label: '협동로봇',         short: '협동',  factor: 1.25 },
   scara:       { label: 'SCARA 로봇',       short: 'SCARA', factor: 0.85 },
   // AMR 기반 양팔 로봇 (Autonomous Mobile Manipulator Robot) — 이동 플랫폼 위 양팔, 한 대가 두 팔로 동시 작업
-  ammr:        { label: 'AMR 기반 양팔 로봇 (AMMR)', short: 'AMMR', factor: 0.9 },
+  ammr:        { label: 'AMR 기반 양팔 로봇 (AMMR)', short: 'AMMR', factor: 0.9, darkOnly: true },   // 피지컬AI 단계 전용
   gantry:      { label: '갠트리 로봇',      short: '갠트리', factor: 0.9 },
 };
 
@@ -96,15 +96,17 @@ export const amrReturnVia = (from, slot) => [{ x: AMR_LANES.retX, z: from.z }, {
 export const AMR_DOCK = { ...ZONE_SRC, aisle: 'F', name: 'AMR 적재 위치' };
 export const FG_ZONE_CAP = 24;
 // AMMR 부품 보충: 셀 양쪽의 부품 선반(셀 중심에서 3.75m, AMMR 작업 위치에서 약 1m)을 오가며 로봇 부품 빈을 채운다
-export const AMMR = { bin: 10, reorder: 2, rackZ: 3.75, pickZ: 2.95, slotZ: 1.9, turn: 1.0, drive: 1.3, pick: 5 };   // 구분 적재장의 제품별 구역 용량
+export const AMMR = { rackZ: 3.75, pickZ: 2.95, slotZ: 1.9 };
+// AMMR 작업 사이클(진행률) 안의 부품 선반 왕복 구간 끝: 회전 → 주행 → 피킹 → 회전 → 복귀, 이후 작업 (place까지 부품을 들고 있음)
+export const AMMR_FETCH = { turnOut: 0.06, driveOut: 0.14, pick: 0.24, turnIn: 0.3, driveIn: 0.38, place: 0.5 };   // 구분 적재장의 제품별 구역 용량
 
 const ZONE_RECIPES = [
-  { id: 'SORT', robot: { kind: 'ammr', count: 2 }, cycle: 7, task: 'AMMR 양팔로 부품 판별·분류·키팅, 부족하면 옆 부품 선반에서 보충' },
+  { id: 'SORT', robot: { kind: 'ammr', count: 2 }, cycle: 7, task: 'AMMR 양팔로 옆 부품 선반에서 부품을 가져와 판별·분류·키팅' },
   { id: 'DT_ASSY', robot: { kind: 'cobot', count: 4 }, cycle: 14, task: '양쪽 협동로봇이 패널에 암레스트·스피커그릴·스위치 조립, 클립 압입' },
   { id: 'DT_FAST', robot: { kind: 'cobot', count: 2 }, cycle: 14, task: '스크류 자동 체결, 토크·각도 전수 판정' },
   { id: 'EA_ASSY', robot: { kind: 'cobot', count: 4 }, cycle: 16, task: '양쪽 협동로봇이 베어링 압입·로터·감속기어 삽입, 하우징 결합' },
   { id: 'EA_FAST', robot: { kind: 'articulated', count: 1 }, cycle: 12, task: '하우징 볼트 다축 너트러너 체결, 토크·각도 전수 판정' },
-  { id: 'PACK', robot: { kind: 'ammr', count: 2 }, cycle: 8, task: 'AMMR 양팔로 제품별 포장·라벨, 포장재 부족 시 옆 선반에서 보충' },
+  { id: 'PACK', robot: { kind: 'ammr', count: 2 }, cycle: 8, task: 'AMMR 양팔로 옆 선반에서 포장재를 가져와 제품별 포장·라벨' },
 ];
 
 export function zoneLine(mix = '1:1') {
@@ -139,9 +141,15 @@ export function lineEdges(line) {
 export const cloneLine = (l) => JSON.parse(JSON.stringify(l));
 
 // 실효 사이클(초, 모드 배율 적용 전). 전통 모드는 로봇 대신 같은 수의 작업자가 수작업한다.
+// AMMR(AMR 기반 양팔 로봇)은 피지컬AI 단계에서만 쓴다. 레거시·자동화 단계에서는 같은 대수의 양쪽 협동로봇 셀로 운영한다
+// (라인 설정에는 AMMR로 남겨 두어 피지컬AI 단계로 가면 다시 AMMR이 된다)
+export const AMMR_MODES = ['dark'];
+export const ammrAllowed = (modeKey) => AMMR_MODES.includes(modeKey);
+export const robotForMode = (robot, modeKey) => (robot?.kind === 'ammr' && !ammrAllowed(modeKey) ? { ...robot, kind: 'cobot' } : robot);
+const taskForMode = (s, modeKey) => (s.robot?.kind === 'ammr' && !ammrAllowed(modeKey) ? String(s.task ?? '').replace(/AMMR\s*양팔로\s*/, '양쪽 협동로봇이 ').replace(/옆\s*(부품\s*)?선반에서\s*\S+\s*가져와\s*/, '') : s.task);
 export function effCycle(s, modeKey = 'smart') {
   const n = Math.max(1, s.robot?.count ?? 0);
-  const kind = s.robot?.kind ?? 'none';
+  const kind = robotForMode(s.robot, modeKey)?.kind ?? 'none';
   const kf = modeKey === 'traditional' || kind === 'none' || !(s.robot?.count > 0) ? 1 : ROBOT_KINDS[kind].factor;
   return (s.cycle * kf) / (1 + PARALLEL_GAIN * (n - 1));
 }
@@ -318,7 +326,7 @@ export function buildStationDefs(line, modeKey) {
       name: modeKey !== 'traditional' ? s.name
         : T.effect === 'inspect' ? `${s.name.replace(/^(AI|자동|로봇)\s*/, '')} (육안)`
         : manual ? `${s.name.replace(/^(협동로봇|로봇|AI|자동)\s*/, '')} (수작업)` : s.name,
-      robot: { ...s.robot }, task: s.task, baseCycle: s.cycle, cycle: effCycle(s, modeKey),
+      robot: { ...robotForMode(s.robot, modeKey) }, task: taskForMode(s, modeKey), baseCycle: s.cycle, cycle: effCycle(s, modeKey),
       wear: T.wear, idleKW: T.idleKW, busyKW: T.busyKW, effect: T.effect, inspect: T.effect === 'inspect' || !!T.verify,
       defectMul: T.defectMul ?? 1, share: isZone(line) ? zoneShare(line, s.id) : 1, product: ZONE_CELLS[s.id] && isZone(line) ? ZONE_CELLS[s.id].product : null,
     });

@@ -64,6 +64,7 @@ function buildAssets(sim, view) {
         f('Defects', '불량 누적', 'int', 'pcs', () => st.c.defects),
         f('Failures', '고장 누적', 'int', 'count', () => st.c.fails),
         f('QueueLength', '대기열', 'int', 'pcs', () => sim.queueLen(st)),
+        ...(d.type === 'sort' || d.type === 'pack' ? [f('GateDecision', '게이트 판별 결정', 'string', null, () => (st.item && st.gate?.id === st.item.id ? st.gate.text : '')), f('GateProduct', '게이트 판별 제품', 'string', null, () => (st.item && st.gate?.id === st.item.id ? st.gate.product ?? '' : ''))] : []),
         f('PartsStock', '부품 재고', 'int', 'pcs', () => st.parts ?? null),
         f('PowerKW', '전력', 'double', 'kW', () => (st.state === 'BUSY' ? d.busyKW : st.state === 'DOWN' || st.state === 'MAINT' ? d.idleKW * 0.5 : st.powerSave ? d.idleKW * 0.3 : d.idleKW)),
       ],
@@ -78,8 +79,8 @@ function buildAssets(sim, view) {
       const tcp = () => { const w = r.tip.getWorldPosition(r.tip.position.clone()), b = r.root.getWorldPosition(r.root.position.clone()); return { x: (w.x - b.x) * 1000, y: -(w.z - b.z) * 1000, z: (w.y - b.y) * 1000 }; };
       fields.push(f('TcpX', 'TCP X', 'double', 'mm', () => tcp().x), f('TcpY', 'TCP Y', 'double', 'mm', () => tcp().y), f('TcpZ', 'TCP Z', 'double', 'mm', () => tcp().z));
       if (st.vlaCell) fields.push(f('VlaModelVersion', 'VLA 추론 모델', 'string', null, () => sim.vla?.versionOf(st.robotUids?.[i]) ?? ''));
-      if (r.kind === 'ammr') fields.push(   // AMMR 이동 플랫폼·부품 빈
-        f('PartsBin', '로봇 부품 빈', 'int', 'pcs', () => st.ammr?.[i]?.bin ?? null),
+      if (r.kind === 'ammr') fields.push(   // AMMR 이동 플랫폼·선반 부품 왕복
+        f('HoldingPart', '부품 파지', 'bool', null, () => !!st.ammr?.[i]?.carry),
         f('PlatformPhase', '이동 플랫폼 상태', 'string', null, () => st.ammr?.[i]?.phase ?? ''),
         f('RackTrips', '부품 선반 왕복', 'int', 'count', () => st.ammr?.[i]?.trips ?? 0));
       if (r.tip2) {   // 양팔 로봇(AMMR)의 오른팔 TCP

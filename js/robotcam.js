@@ -312,7 +312,7 @@ export class RobotCamWall {
       // 칸 바닥: 로봇 작업
       const au = f.station?.ammr?.[f.ref.idx];
       const task = f.mover ? f.mover.task ?? '대기' : !f.station ? ''
-        : f.kind === 'ammr' ? `${f.station.name} ${ST_LABEL[f.station.state] ?? ''} · ${au && au.phase !== 'work' ? '부품 선반 왕복 (보충)' : '양팔 작업'} · 빈 ${au?.bin ?? '-'}/10`
+        : f.kind === 'ammr' ? `${f.station.name} ${ST_LABEL[f.station.state] ?? ''} · ${au && au.phase !== 'work' ? '선반에서 부품 가져오기' : '양팔 작업'} · 선반 ${f.station.parts ?? '-'}개`
         : `${ST_LABEL[f.station.state] ?? ''} · VLA 선반 부품 인식→집기→조립 · 선반 ${f.station.parts ?? '-'}개`;
       const fy = y0 + TH - 20 - (row === ROWS - 1 ? 30 : 0);   // 아래 줄은 하단 알람 띠 위로
       g.fillStyle = 'rgba(5,8,12,0.6)'; g.fillRect(x0, fy, TW, 20);

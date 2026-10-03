@@ -24,7 +24,7 @@ export function equipmentList(sim, view = null) {
     if (st.state === 'DOWN') return add(uid, name, '셀 로봇', '고장 정지', 'fault');
     if (['ESTOP', 'PSTOP', 'CSTOP'].includes(st.state)) return add(uid, name, '셀 로봇', ST_LABEL[st.state], 'stop');
     if (st.state === 'MAINT') return add(uid, name, '셀 로봇', '정비중', 'maint');
-    if (u && u.phase !== 'work') return add(uid, name, '셀 로봇', u.phase === 'pick' ? '부품 피킹' : u.phase === 'waitRack' ? '선반 대기' : '부품 보충 이동', 'maint');
+    if (u && u.phase !== 'work') return add(uid, name, '셀 로봇', u.phase === 'pick' ? '선반 부품 피킹' : '선반 왕복', 'run');
     add(uid, name, '셀 로봇', st.state === 'BUSY' ? '작업 중' : '대기', st.state === 'BUSY' ? 'run' : 'idle');
   });
   const arms = view?.stationViews?.find((v) => v.st === sink)?.parts.arms;

@@ -5,7 +5,7 @@ import { PatrolDrone } from './drone.js';
 import { VLAPipeline } from './vla.js';
 import { AIOSPipeline } from './aios.js';
 import { Orchestrator } from './orchestrator.js';
-import { AMMR, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
+import { AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
 export function mulberry32(a) {
   return function () {
@@ -274,9 +274,9 @@ export class Simulation {
       v.battery = 60 + this.rand() * 40;
       this.vehicles.push(v);
     }
-    // 출하 지게차: 구분 적재장 → 뒷벽 출하 도크 → 트럭 야드 화물트럭 (레거시는 유인, 자동화·피지컬AI는 자율 지게차)
-    this.forklifts = [new Mover(m.key === 'traditional' ? '지게차-출하' : '자율 지게차', 'forklift', { x: 19.5, z: -16.5, aisle: 'B', name: '출하 지게차 대기' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
-    this.forklifts[0].shipper = true; this.forklifts[0].auto = m.key !== 'traditional';
+    // 출하 지게차: 구분 적재장 → 뒷벽 출하 도크 → 트럭 야드 화물트럭 (레거시·자동화는 사람이 운전, 피지컬AI만 자율 지게차)
+    this.forklifts = [new Mover(m.key === 'dark' ? '자율 지게차' : '출하 지게차 (유인)', 'forklift', { x: 19.5, z: -16.5, aisle: 'B', name: '출하 지게차 대기' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
+    this.forklifts[0].shipper = true; this.forklifts[0].auto = m.key === 'dark';
     this.yard = new TruckYard(this);
     // 피지컬AI: 순찰 드론 (지상 교통과 높이가 달라 movers에는 넣지 않는다)
     this.drones = m.key === 'dark' ? [new PatrolDrone(this, 0)] : [];
@@ -299,10 +299,10 @@ export class Simulation {
       this.quads.push(q);
     }
     if (m.partsCap) for (const st of this.processing) { st.parts = m.partsCap; st.partsReq = null; }
-    // AMMR 셀: 로봇마다 부품 빈을 들고 작업하다 부족하면 옆 부품 선반을 다녀온다 (레거시 단계는 사람이 대신 작업)
+    // AMMR 셀: 대상물 하나마다 옆 부품 선반에서 부품을 가져와 작업한다 (레거시 단계는 사람이 대신 작업)
     for (const st of this.processing) {
       if (st.def.robot.kind !== 'ammr' || modeKey === 'traditional') continue;
-      st.ammr = Array.from({ length: st.def.robot.count }, (_, i) => ({ i, side: i % 2 ? 1 : -1, bin: AMMR.bin - (i % 2) * 4, phase: 'work', t: 0, pos: 0, turn: 0, carry: false, trips: 0 }));
+      st.ammr = Array.from({ length: st.def.robot.count }, (_, i) => ({ i, side: i % 2 ? 1 : -1, phase: 'work', t: 0, pos: 0, turn: 0, carry: false, trips: 0, lastItem: null }));
       this.planAmmrRacks(st);
     }
     this.workers = [];
@@ -683,45 +683,48 @@ export class Simulation {
     return 0.00008 + 0.02 * Math.pow(Math.max(0, (60 - st.health) / 60), 2);
   }
 
-  // ── AMMR: 작업 ↔ 부품 선반 왕복 ─────────────────
-  // phase: work → turnOut → driveOut → pick(선반 재고가 없으면 waitRack) → turnIn → driveIn → work
-  ammrWorking(st) { return st.ammr.filter((u) => u.phase === 'work' && u.bin > 0).length; }
-  updateAMMR(st, dt) {
-    const halted = st.state === 'DOWN' || st.state === 'MAINT';
+  // ── 분류·포장 게이트 (혼류) ─────────────────
+  // 셀 입구의 게이트가 들어오는 대상물을 비전·ID로 판별해 결정을 내리고, 그 결정에 맞는 로봇이 주 작업을 맡는다.
+  // 분류셀: 도어트림/e-axle 판별 → 해당 제품 라인으로 분기 + 그 제품 쪽 로봇이 제품별 부품 키팅, 반대쪽 로봇은 작업물 고정·ID 태그
+  // 포장셀: 도어트림 → 트레이 포장 / e-axle → 크레이트 포장 — 그 포장재 매거진 쪽 로봇이 포장, 반대쪽 로봇은 고정·라벨
+  // 로봇 쪽: 도어트림 = +z(홀수 번째 로봇), e-axle = −z(짝수 번째 로봇). 같은 쪽 로봇이 없으면 첫 로봇이 맡는다
+  gateDecide(st) {
+    if (st.def.type !== 'sort' && st.def.type !== 'pack') return;
+    const it = st.item, n = st.def.robot?.count ?? 0, all = [...Array(n).keys()];
+    if (!it.product || it.scrap) {
+      st.gate = { id: it.id, product: null, t: this.time, text: it.scrap ? '빈 AMR — 작업 없이 통과' : '판별 완료', lead: it.scrap ? [] : all, role: null };
+      return;
+    }
+    const side = it.product === 'doortrim' ? 1 : -1, P = ZONE_PRODUCTS[it.product]?.label ?? it.product;
+    let lead = all.filter((i) => (i % 2 ? 1 : -1) === side);
+    if (!lead.length) lead = n ? [0] : [];
+    const sort = st.def.type === 'sort', tray = it.product === 'doortrim';
+    st.gate = {
+      id: it.id, product: it.product, t: this.time, lead,
+      text: sort ? `${P} → ${P} 라인 · ${P} 키트` : `${P} → ${tray ? '트레이' : '크레이트'} 포장`,
+      role: sort ? { lead: `${P} 부품 키팅`, support: '작업물 고정 · ID 태그' } : { lead: `${P} ${tray ? '트레이' : '크레이트'} 포장`, support: '작업물 고정 · 라벨' },
+    };
+    st.gateCount ??= {}; st.gateCount[it.product] = (st.gateCount[it.product] ?? 0) + 1;
+  }
+  // 게이트 결정에서 이 로봇이 주 작업을 맡는가 (게이트가 없는 셀은 모두 주 작업)
+  isLead(st, i) { return !st.gate || !st.item || st.gate.id !== st.item.id || st.gate.lead.includes(i); }
+
+  // ── AMMR: 대상물마다 부품 선반에서 부품을 가져와 작업 ─────────────────
+  // 작업 사이클 앞부분에 선반 쪽으로 회전 → 주행 → 양팔 피킹 → 셀 쪽으로 회전 → 복귀 주행, 이어서 분류·조립·체결·포장.
+  // 사이클 시간 안에 왕복이 들어 있어 처리량은 그대로이고, 부품은 대상물 하나에 한 세트씩 선반 재고에서 빠진다.
+  updateAMMR(st) {
+    const work = st.item && !st.item.scrap && !st.done && ['BUSY', 'DOWN', 'MAINT', 'ESTOP', 'PSTOP', 'CHECK', 'CSTOP'].includes(st.state);
     for (const u of st.ammr) {
-      u.t += dt;
-      if (u.phase === 'work') {
-        const others = st.ammr.some((o) => o !== u && o.phase === 'work' && o.bin > 0);
-        if (!halted && (u.bin <= 0 || (u.bin <= AMMR.reorder && (others || st.ammr.length === 1)))) { u.phase = 'turnOut'; u.t = 0; }
-      } else if (u.phase === 'turnOut') { u.turn = Math.min(1, u.t / AMMR.turn); if (u.t >= AMMR.turn) { u.phase = 'driveOut'; u.t = 0; } }
-      else if (u.phase === 'driveOut') { u.pos = Math.min(1, u.t / AMMR.drive); if (u.t >= AMMR.drive) { u.phase = 'pick'; u.t = 0; } }
-      else if (u.phase === 'pick' || u.phase === 'waitRack') {
-        if (st.parts != null && st.parts <= 0) {   // 선반이 비었으면 보충(휴머노이드)을 기다린다
-          if (u.phase !== 'waitRack') {
-            this.log('warn', `${st.name} AMMR #${u.i + 1} 선반 재고 없음`, { obs: '부품 선반 비어 있음 — 보충 대기', act: st.partsReq ? '보충 휴머노이드 배정됨' : '보충 요청' });
-            const o = this.orch;
-            if (!o.find(`rack:${st.id}`)) {
-              const inc = o.open('parts', `rack:${st.id}`, `${st.name} 부품 선반 결품`, `${st.name} AMMR #${u.i + 1}`);
-              o.step(inc, 'field', 'detect', `AMMR #${u.i + 1} 선반 재고 0 감지`);
-              o.step(inc, 'cell', 'self', '셀 자체 조치: 다른 AMMR로 작업 지속 · 선반 앞 대기');
-              o.later(0.5, () => o.step(inc, 'cell', 'report', '상위 보고: 선반 보충 필요'));
-              o.later(o.latency, () => { o.step(inc, 'orch', 'decide', `판단(${o.name}): 선반 보충 우선 배정`); o.step(inc, 'orch', 'command', '명령: 부품 보충 휴머노이드 선반 보충'); });
-            }
-          }
-          u.phase = 'waitRack'; u.t = 0; continue;
-        }
-        if (u.phase === 'waitRack') { u.phase = 'pick'; u.t = 0; }
-        if (u.t >= AMMR.pick) {
-          const take = Math.min(AMMR.bin - u.bin, st.parts ?? Infinity);
-          u.bin += take; u.carry = true; u.trips++;
-          if (st.parts != null) {
-            st.parts -= take;
-            if (st.parts <= this.mode.partsReorder && !st.partsReq) { st.partsReq = { st, helper: null }; this.partsReq.push(st.partsReq); }
-          }
-          u.phase = 'turnIn'; u.t = 0;
-        }
-      } else if (u.phase === 'turnIn') { u.turn = Math.max(0, 1 - u.t / AMMR.turn); if (u.t >= AMMR.turn) { u.phase = 'driveIn'; u.t = 0; } }
-      else if (u.phase === 'driveIn') { u.pos = Math.max(0, 1 - u.t / AMMR.drive); if (u.t >= AMMR.drive) { u.phase = 'work'; u.t = 0; u.carry = false; } }
+      if (!work || !this.isLead(st, u.i)) { if (!st.item || st.done || work) { u.phase = 'work'; u.pos = 0; u.turn = 0; u.carry = false; } continue; }   // 보조 역할은 자리에서 작업물 고정
+      const q = Math.min(1, Math.max(0, (st.progress - u.i * 0.02) / (1 - u.i * 0.02)));   // 로봇마다 조금씩 어긋나게
+      const seg = (a, b) => Math.min(1, Math.max(0, (q - a) / (b - a)));
+      if (q < AMMR_FETCH.turnOut) { u.phase = 'turnOut'; u.turn = seg(0, AMMR_FETCH.turnOut); u.pos = 0; }
+      else if (q < AMMR_FETCH.driveOut) { u.phase = 'driveOut'; u.turn = 1; u.pos = seg(AMMR_FETCH.turnOut, AMMR_FETCH.driveOut); }
+      else if (q < AMMR_FETCH.pick) { u.phase = 'pick'; u.turn = 1; u.pos = 1; if (q > (AMMR_FETCH.driveOut + AMMR_FETCH.pick) / 2) u.carry = true; }
+      else if (q < AMMR_FETCH.turnIn) { u.phase = 'turnIn'; u.turn = 1 - seg(AMMR_FETCH.pick, AMMR_FETCH.turnIn); u.pos = 1; u.carry = true; }
+      else if (q < AMMR_FETCH.driveIn) { u.phase = 'driveIn'; u.turn = 0; u.pos = 1 - seg(AMMR_FETCH.turnIn, AMMR_FETCH.driveIn); u.carry = true; }
+      else { u.phase = 'work'; u.turn = 0; u.pos = 0; u.carry = q < AMMR_FETCH.place; }
+      if (u.phase === 'pick' && u.lastItem !== st.item.id) { u.lastItem = st.item.id; u.trips++; }
     }
   }
 
@@ -732,7 +735,6 @@ export class Simulation {
     if (gate && st.state !== 'DOWN' && !(st.state === 'MAINT' && st.techOnSite)) {
       st.state = gate; st.c.stop = (st.c.stop ?? 0) + dt; st.ema += (0 - st.ema) * Math.min(1, dt / 90); return;
     }
-    if (st.ammr) this.updateAMMR(st, dt * this.cmd.speedOf(st));
     if (st.state === 'DOWN' || st.state === 'MAINT') {
       if (st.state === 'DOWN') st.c.down += dt; else st.c.maint += dt;
       if (st.techOnSite && !this.cmd.locked(st)) {   // 비상정지 중에는 수리도 멈춘다
@@ -742,7 +744,8 @@ export class Simulation {
       st.ema += (0 - st.ema) * Math.min(1, dt / 90);
       return;
     }
-    if (st.parts === 0 && !st.item && !st.ammr) { st.state = 'NOPARTS'; st.c.starved += dt; st.starvedFor += dt; st.ema += (0 - st.ema) * Math.min(1, dt / 90); return; }
+    if (st.parts === 0 && !st.item && st.ammr) this.rackEmpty(st);
+    if (st.parts === 0 && !st.item) { st.state = 'NOPARTS'; st.c.starved += dt; st.starvedFor += dt; st.ema += (0 - st.ema) * Math.min(1, dt / 90); return; }
     let inC = null;
     // AMR 운반: 앞서 나간 AMR이 셀 중앙에서 충분히(AMR 간격 이상) 빠져나간 뒤에 다음 AMR을 받는다
     const cleared = !this.useAMR || Object.values(st.outs).every((c) => !c.items.length || c.items[c.items.length - 1].s >= c.spacing + 0.4);
@@ -752,6 +755,7 @@ export class Simulation {
       const e = inC.items.shift();
       st.itemFrom = inC.path[inC.path.length - 1];   // 들어온 경로의 끝점 (합류 대기 차로는 중심선에서 비켜 있음)
       st.item = e.item; st.progress = 0; st.done = false; st.itemT = 0;
+      this.gateDecide(st);
       const base = st.def.cycle * m.cycleMul * st.speedMul * (this.vla?.cycleFactor(st) ?? 1);   // 배포된 VLA 모델 버전만큼 사이클 단축
       st.cycleTime = st.item.scrap ? 0.5 : Math.max(base * 0.6, base * (1 + m.cycleVar * gauss(this.rand)));
     }
@@ -760,13 +764,9 @@ export class Simulation {
       st.state = 'STARVED'; st.c.starved += dt; st.starvedFor += dt;
     } else {
       st.starvedFor = 0; st.itemT += dt;
-      // AMMR 셀: 부품을 가지러 간 로봇만큼 작업 능력이 줄고, 모두 자리를 비우면 멈춘다
-      const n = st.ammr?.length, nw = st.ammr ? this.ammrWorking(st) : 0;
-      if (!st.done && st.ammr && nw === 0) { st.state = 'REFILL'; st.c.starved += dt; st.ema += (0 - st.ema) * Math.min(1, dt / 90); return; }
       if (!st.done) {
         st.state = 'BUSY'; st.c.busy += dt; st.powerSave = false;
-        const cap = st.ammr ? (1 + PARALLEL_GAIN * (nw - 1)) / (1 + PARALLEL_GAIN * (n - 1)) : 1;
-        st.progress += (dt / st.cycleTime) * cap * this.cmd.speedOf(st);
+        st.progress += (dt / st.cycleTime) * this.cmd.speedOf(st);
         if (this.rand() < this.hazard(st) * dt) { this.fail(st); return; }
         if (st.progress >= 1) { st.progress = 1; st.done = true; this.completeCycle(st); }
       }
@@ -779,19 +779,27 @@ export class Simulation {
         } else { st.state = 'BLOCKED'; st.c.blocked += dt; }
       }
     }
+    if (st.ammr) this.updateAMMR(st);
     st.ema += ((st.state === 'BUSY' ? 1 : 0) - st.ema) * Math.min(1, dt / 90);
+  }
+
+  // AMMR 셀 부품 선반이 비었을 때: 경고 + 오케스트레이터 인시던트 (보충 휴머노이드가 채우면 닫힌다)
+  rackEmpty(st) {
+    const o = this.orch;
+    if (o.find(`rack:${st.id}`)) return;
+    this.log('warn', `${st.name} 부품 선반 재고 없음`, { obs: 'AMMR이 가져갈 부품이 없음 — 보충 대기', act: st.partsReq ? '보충 휴머노이드 배정됨' : '보충 요청' });
+    const inc = o.open('parts', `rack:${st.id}`, `${st.name} 부품 선반 결품`, `${st.name} AMMR`);
+    o.step(inc, 'field', 'detect', 'AMMR 선반 카메라: 선반 재고 0 감지');
+    o.step(inc, 'cell', 'self', '셀 자체 조치: 새 대상물 받지 않음 · 선반 앞 대기');
+    o.later(0.5, () => o.step(inc, 'cell', 'report', '상위 보고: 선반 보충 필요'));
+    o.later(o.latency, () => { o.step(inc, 'orch', 'decide', `판단(${o.name}): 선반 보충 우선 배정`); o.step(inc, 'orch', 'command', '명령: 부품 보충 휴머노이드 선반 보충'); });
   }
 
   completeCycle(st) {
     const m = this.mode, it = st.item;
     if (it.scrap) return;   // 빈 AMR(불량 배출 후)은 작업 없이 통과
     st.c.processed++;
-    if (st.ammr) {   // 작업 중인 AMMR이 번갈아 한 개씩 쓴다 (두 팔 로봇이 교대로 집어 조립)
-      const ws = st.ammr.filter((k) => k.phase === 'work' && k.bin > 0);
-      st.ammrRR = ((st.ammrRR ?? -1) + 1) % Math.max(1, st.ammr.length);
-      const u = ws.find((k) => k.i >= st.ammrRR) ?? ws[0];
-      if (u) { u.bin--; st.ammrRR = u.i; }
-    } else if (st.parts != null) {
+    if (st.parts != null) {   // 대상물 하나에 부품 한 세트 (AMMR 셀은 로봇이 선반에서 가져간 만큼)
       st.parts = Math.max(0, st.parts - 1);
       if (st.parts <= m.partsReorder && !st.partsReq) { st.partsReq = { st, helper: null }; this.partsReq.push(st.partsReq); }
     }

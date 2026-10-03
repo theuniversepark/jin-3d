@@ -143,7 +143,8 @@ export class AIOSPipeline {
   twinWork(j) {
     const T = j.twin, t0 = performance.now();
     if (t0 - (this.winStart ?? 0) > 16) { this.winStart = t0; this.used = 0; }   // 화면 프레임(16ms)당 6ms까지만
-    while (T.i < T.runs.length && this.used < 6) {
+    const budget = this.sim.quiet ? Infinity : 6;   // 헤드리스(비교·시험)는 한 번에 끝까지 — 결과가 실행 속도와 무관하게 같도록
+    while (T.i < T.runs.length && this.used < budget) {
       const r = T.runs[T.i], a = performance.now();
       for (let n = 0; n < 300 && r.sim.time < TWIN_S - 1e-6; n++) { r.sim.step(0.1); r.agent.update(0.1); T.steps++; }
       if (r.sim.time >= TWIN_S - 1e-6) { const k = r.sim.kpi(); r.res = { good: k.good, kwh: k.energy, fails: k.failures }; r.sim = r.agent = null; T.i++; }

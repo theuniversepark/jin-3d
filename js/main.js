@@ -172,12 +172,13 @@ function start(key) {
   camWall.setup(sim, view);
   epRec.attach(sim);
   orchView.attach(sim);
+  if (typeof designer !== 'undefined' && designer) designer.render();   // AMMR 선택 가능 여부가 단계마다 다르다
   applyLook();
   llm.attach(sim, agent);
   ui.reset(sim, agent);
   ui.hideDetail();
   sim.log('info', `${MODES[key].label} 시뮬레이션 시작`, {
-    obs: key === 'traditional' ? '작업자 중심 수동 운영, 고정 컨베이어·지게차, 사후보전 체계' : key === 'smart' ? '양쪽 협동로봇 셀·AMR 운반, IoT·MES 연결, 현장 인원 4명' : '무인 운영 — 휴머노이드 4대(정비 2·부품 보충 2), 사족보행 순찰 2대, AMR·AGV, 고효율 LED 조명',
+    obs: key === 'traditional' ? '작업자 중심 수동 운영, 고정 컨베이어·지게차, 사후보전 체계' : key === 'smart' ? `양쪽 협동로봇 셀·AMR 운반, IoT·MES 연결, 현장 인원 ${sim.peopleOnSite()}명 (출하 지게차 운전 포함)` : '무인 운영 — 휴머노이드 4대(정비 2·부품 보충 2), 사족보행 순찰 2대, AMR·AGV, 고효율 LED 조명',
   });
   renderZoneCard();
 }
@@ -601,6 +602,7 @@ frame();
 designer = new LineDesigner({
   llm,
   getLine: () => currentLine,
+  getMode: () => modeKey,
   onApply(line, diff, { warnings, request, files }) {
     currentLine = lines[lineSlot] = line;
     saveLines();

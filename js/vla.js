@@ -18,10 +18,13 @@ const two = (n, w = 6) => String(n).padStart(w, '0');
 
 // VLA 6축 로봇의 작업 단계 (factory.animVLA 키프레임과 같은 구간)
 function phaseOf(u) { return u < 0.1 ? 'approach' : u < 0.3 ? 'grasp' : u < 0.55 ? 'transport' : u < 0.75 ? 'insert' : 'retract'; }
-function instruction(st, kind, product, color) {
+// AMMR: 부품 선반 왕복 → 양팔 작업 단계를 VLA 단계 이름으로
+const ammrPhase = (a) => (!a ? 'assemble' : a.phase === 'turnOut' || a.phase === 'driveOut' ? 'approach' : a.phase === 'pick' ? 'grasp' : a.phase === 'turnIn' || a.phase === 'driveIn' ? 'transport' : a.carry ? 'insert' : 'assemble');
+function instruction(st, kind, product, color, lead = true) {
+  if (!lead) return `${st.type === 'pack' ? '포장' : '분류'} 게이트 결정에 따라 작업물을 양팔로 잡아 고정하고 ${st.type === 'pack' ? '라벨을 붙여라' : 'ID 태그를 달아라'} (보조)`;
   const prod = product === 'eaxle' ? 'e-axle' : product === 'doortrim' ? '도어트림' : '제품';
   const verb = st.type === 'screw' || st.type === 'fasten' ? '체결' : st.type === 'sort' ? '분류' : st.type === 'pack' ? '포장' : '조립';
-  return kind === 'ammr' ? `양팔로 부품 빈에서 부품을 집어 ${prod}에 ${verb}하라` : `선반의 ${color} 부품을 집어 AMR 위 ${prod}에 ${verb}하라`;
+  return kind === 'ammr' ? `옆 선반으로 이동해 양팔로 부품을 집어 와 ${prod}에 ${verb}하라` : `선반의 ${color} 부품을 집어 AMR 위 ${prod}에 ${verb}하라`;
 }
 
 // ── 에피소드 기록기 (3D 화면 쪽: 관절값·카메라는 화면 모델에서 읽는다) ─────────────────
@@ -57,7 +60,7 @@ export class EpisodeRecorder {
         if (k % SAMPLE) continue;
         const color = ['파란', '초록', '노란', '빨간'][(st.c.processed + i) % 4];
         rec = { id: `ep_${two(++this.seq)}`, uid, robot: r, idx: i, st, kind: r.kind, item: st.item.id, product: st.item.product ?? null,
-          t0: t, iso0: this.hub.iso(t), steps: [], frames: [], lastSample: -1, lastPhase: null, instruction: instruction(st, r.kind, st.item.product, color),
+          t0: t, iso0: this.hub.iso(t), steps: [], frames: [], lastSample: -1, lastPhase: null, instruction: instruction(st, r.kind, st.item.product, color, this.sim.isLead(st, i)),
           model: sim.vla?.versionOf(uid) ?? 'v1.0' };
         this.rec.set(uid, rec);
       }
@@ -69,8 +72,8 @@ export class EpisodeRecorder {
         const q = r.joints().map((v, k) => Math.round(v * (r.jointDefs?.[k]?.unit === 'mm' ? 1000 : 1e4)) / (r.jointDefs?.[k]?.unit === 'mm' ? 1 : 1e4));
         const b = r.root.getWorldPosition(r.root.position.clone()), w = r.tip.getWorldPosition(r.tip.position.clone());
         const tcp = [Math.round((w.x - b.x) * 1000), Math.round(-(w.z - b.z) * 1000), Math.round((w.y - b.y) * 1000)];
-        const phase = r.vla ? phaseOf(u) : 'assemble';
-        const grip = r.vla ? (r.vla.held.visible ? 1 : 0) : 1;
+        const phase = r.vla ? phaseOf(u) : ammrPhase(st.ammr?.[i]);
+        const grip = r.vla ? (r.vla.held.visible ? 1 : 0) : st.ammr?.[i]?.carry ? 1 : 0;
         const step = { i: rec.steps.length, t: Math.round((t - rec.t0) * 1000) / 1000, ts: this.hub.iso(t), state: q, tcp_mm: tcp, gripper: grip, phase, frame: null };
         if (phase !== rec.lastPhase || rec.steps.length - (rec.lastFrameStep ?? -99) >= EP_HZ) {   // 단계가 바뀌거나 1초마다 카메라 프레임
           const fname = `frame_${two(rec.frames.length, 3)}.jpg`; step.frame = fname; rec.lastPhase = phase; rec.lastFrameStep = rec.steps.length;

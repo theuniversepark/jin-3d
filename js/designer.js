@@ -1,6 +1,6 @@
 // 공정 설계 도크 (오른쪽 하단) — 자연어 요청(Claude) 또는 직접 편집으로 라인 초안을 만들고,
 // 변경 내역·예상 지표를 확인한 뒤 적용한다.
-import { STATION_TYPES, ROBOT_KINDS, LAYOUTS, MAX_STATIONS, MAX_ROBOTS, cloneLine, normalizeLine, diffLines, lineMetrics, effCycle, defaultLineFor, isZone, layoutLabel, ZONE_CELLS, ZONE_NAME } from './line.js';
+import { STATION_TYPES, ROBOT_KINDS, LAYOUTS, MAX_STATIONS, MAX_ROBOTS, cloneLine, normalizeLine, diffLines, lineMetrics, effCycle, defaultLineFor, isZone, layoutLabel, ZONE_CELLS, ZONE_NAME, ammrAllowed, robotForMode } from './line.js';
 import { prepareFile, ACCEPT } from './attachments.js';
 
 const $ = (id) => document.getElementById(id);
@@ -8,7 +8,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const opts = (obj, sel) => Object.entries(obj).map(([k, v]) => `<option value="${k}"${k === sel ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
 
 export class LineDesigner {
-  constructor({ llm, getLine, onApply }) {
+  constructor({ llm, getLine, getMode, onApply }) {
+    this.getMode = getMode ?? (() => 'smart');
     this.llm = llm; this.getLine = getLine; this.onApply = onApply;
     this.open = false; this.busy = false;
     this.note = null;   // { summary, warnings, errors, source }
@@ -92,7 +93,8 @@ export class LineDesigner {
       s.cycle = T.cycle;
       if (!s.name || s.name === prevDefault.label) s.name = T.label;
     }
-    else if (f === 'kind') { s.robot.kind = el.value; s.robot.count = el.value === 'none' ? 0 : Math.max(1, s.robot.count); }
+    else if (f === 'kind') { if (ROBOT_KINDS[el.value]?.darkOnly && !ammrAllowed(this.getMode())) { this.render(); return; }
+      s.robot.kind = el.value; s.robot.count = el.value === 'none' ? 0 : Math.max(1, s.robot.count); }
     else if (f === 'count') s.robot.count = Math.max(0, Math.min(MAX_ROBOTS, Math.round(+el.value || 0)));
     else if (f === 'cycle') s.cycle = +el.value;
     if (rerender || ['type', 'kind', 'count'].includes(f)) this.render(); else this.renderPreview();
@@ -184,6 +186,9 @@ export class LineDesigner {
       : Object.entries(LAYOUTS).map(([k, v]) => `<option value="${k}"${k === (this.draft.layout ?? 'straight') ? ' selected' : ''}>${esc(v.label)}</option>`).join('');
     $('lineLayout').disabled = zone;
     const changed = new Map(diffLines(cur, normalizeLine(this.draft).line).filter((d) => d.id).map((d) => [d.id, d.kind]));
+    const mode = this.getMode(), ammrOk = ammrAllowed(mode);
+    // AMMR은 피지컬AI 단계에서만 고를 수 있다
+    const robotOpts = (sel) => Object.entries(ROBOT_KINDS).map(([k, v]) => `<option value="${k}"${k === sel ? ' selected' : ''}${v.darkOnly && !ammrOk ? ' disabled' : ''}>${esc(v.label)}${v.darkOnly && !ammrOk ? ' — 피지컬AI 전용' : ''}</option>`).join('');
     $('stList').innerHTML = this.draft.stations.map((s, i) => {
       const tag = changed.get(s.id);
       return `<div class="st-card ${tag ?? ''}" data-i="${i}">
@@ -194,7 +199,7 @@ export class LineDesigner {
           ${zone ? `<span class="ops cell-use" title="셀 용도">${esc(ZONE_CELLS[s.id]?.use ?? '')}</span>` : '<span class="ops"><button data-op="up" title="앞으로">↑</button><button data-op="down" title="뒤로">↓</button><button data-op="del" title="삭제">✕</button></span>'}
         </div>
         <div class="r">
-          <select data-f="kind" title="로봇 종류">${opts(ROBOT_KINDS, s.robot.kind)}</select>
+          <select data-f="kind" title="${!ammrOk && s.robot.kind === 'ammr' ? '이 셀은 피지컬AI 단계에서 AMMR — 레거시·자동화 단계에서는 협동로봇으로 운영' : '로봇 종류'}">${robotOpts(robotForMode(s.robot, mode).kind)}</select>${!ammrOk && s.robot.kind === 'ammr' ? '<small class="ammr-note" title="피지컬AI 단계에서는 AMMR">피지컬AI: AMMR</small>' : ''}
           <label>대수<input data-f="count" type="number" min="0" max="${MAX_ROBOTS}" value="${s.robot.count}" ${s.robot.kind === 'none' ? 'disabled' : ''} /></label>
           <label>기준<input data-f="cycle" type="number" min="2" max="40" step="0.5" value="${s.cycle}" />초</label>
           <span class="eff" data-eff="${i}"></span>
@@ -211,11 +216,11 @@ export class LineDesigner {
     const cur = this.getLine();
     const { line, errors, warnings } = normalizeLine(this.draft);
     const diff = diffLines(cur, line);
-    const a = lineMetrics(cur), b = lineMetrics(line);
+    const a = lineMetrics(cur, this.getMode()), b = lineMetrics(line, this.getMode());
     const bn = b.bottleneck?.id;
     line.stations.forEach((s, i) => {
       const el = document.querySelector(`[data-eff="${i}"]`);
-      if (el) { el.textContent = `실효 ${effCycle(s).toFixed(1)}초${s.id === bn ? ' · 병목' : ''}`; el.classList.toggle('bn', s.id === bn); }
+      if (el) { el.textContent = `실효 ${effCycle(s, this.getMode()).toFixed(1)}초${s.id === bn ? ' · 병목' : ''}`; el.classList.toggle('bn', s.id === bn); }
     });
     const arrow = (x, y, f = (v) => v) => (f(x) === f(y) ? `<b>${f(y)}</b>` : `${f(x)} → <b>${f(y)}</b>`);
     $('dockMetrics').innerHTML = `

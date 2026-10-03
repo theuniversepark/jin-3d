@@ -271,6 +271,8 @@ body.app .topbar button, body.app .topbar .seg { -webkit-app-region: no-drag; }
 .dock-form button { border: 1px solid var(--accent); background: var(--accent); color: #fff; border-radius: 9px; padding: 0 12px; white-space: nowrap; }
 .dock-form button:disabled { opacity: 0.4; }
 .st-label .rb { font-size: 10px; color: #ffc58a; margin-top: 1px; }
+.st-label .gd { font-size: 10px; color: #9fb4c8; margin-top: 2px; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-label .gd.doortrim { color: #f0a030; } .st-label .gd.eaxle { color: #b89bff; }
 .st-label.changed { border-color: var(--good); box-shadow: 0 0 0 2px rgba(61, 220, 132, 0.35); }
 .st-label.changed .nm::after { content: " ● 변경"; color: var(--good); font-size: 10px; font-weight: 600; }
 .detail .task { font-size: 11.5px; color: var(--ink2); margin: 2px 0 6px; }
@@ -600,3 +602,6 @@ table.rb-j .tq i { display: block; height: 100%; }
 #aiosBody .vla-actions button { border-color: #3fd0c9; background: rgba(63, 208, 201, 0.16); }
 #aiosBody .vla-grid { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
 #aiosBody .vla-grid h4:not(:first-child) { margin-top: 14px; }
+
+/* 공정 설계: 피지컬AI 단계에서만 AMMR인 셀 표시 */
+.st-card .ammr-note { font-size: 10.5px; color: #b89bff; white-space: nowrap; }

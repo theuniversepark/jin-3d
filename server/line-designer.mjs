@@ -9,7 +9,7 @@ const catalogText = () => [
   '공정 유형(type):',
   ...Object.entries(STATION_TYPES).map(([k, t]) => `- ${k}: ${t.label} (효과 ${t.effect}, 표준 사이클 ${t.cycle}초, 기본 작업 "${t.task}")`),
   '로봇 종류(robot_kind):',
-  ...Object.entries(ROBOT_KINDS).map(([k, r]) => `- ${k}: ${r.label} (사이클 배율 ${r.factor})`),
+  ...Object.entries(ROBOT_KINDS).map(([k, r]) => `- ${k}: ${r.label} (사이클 배율 ${r.factor})${r.darkOnly ? ' — 피지컬AI 단계 전용 (레거시·자동화 단계에서는 같은 대수의 협동로봇으로 운영됨)' : ''}`),
   '레이아웃(layout):',
   ...Object.entries(LAYOUTS).map(([k, l]) => `- ${k}: ${l.label} — ${l.desc}`),
 ].join('\n');
