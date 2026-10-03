@@ -5,6 +5,7 @@ import { RobotTelemetry } from './telemetry.js';
 import { BELT_Y, LOC, chgLoc, FG_CAP, RAW_CAP, ST_LABEL } from './sim.js';
 import { YARD } from './shipping.js';
 import { DRONE_PAD } from './drone.js';
+import { equipmentList, STATUS_CLASS } from './assets.js';
 import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, AMR_LANES, amrPark, ZONE_AMR, AMMR } from './line.js';
 
 // ── 헬퍼 ─────────────────────────────
@@ -449,6 +450,17 @@ export function makeSignSprite(text, hex, width = 6) {
   sp.scale.set(width, width / 5, 1); sp.renderOrder = 10;
   return sp;
 }
+// 로봇 고유 ID 명판 (작은 스프라이트)
+function idPlate(text) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 72;
+  const x = c.getContext('2d');
+  x.fillStyle = 'rgba(10,12,16,0.88)'; x.beginPath(); x.roundRect(2, 2, 252, 68, 14); x.fill();
+  x.lineWidth = 4; x.strokeStyle = '#ffb020'; x.stroke();
+  x.fillStyle = '#ffb020'; x.font = '800 40px Menlo, "SF Mono", Consolas, monospace'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, 128, 38);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, toneMapped: false }));
+  sp.scale.set(0.78, 0.22, 1); return sp;
+}
 export const ALARM_COLOR = { fault: 0xff3030, supply: 0xff8a1f, event: 0xffc21f };
 
 // ── 공정 설비 ─────────────────────────────
@@ -628,11 +640,17 @@ function placeRobots(g, st) {
     r.root.traverse((o) => { o.userData.robotIdx = i; });
     robots.push(r);
   }
-  // AMMR 셀: 로봇이 오가는 부품 선반 (양쪽, 작업 위치에서 약 1m 바깥) — 앞면이 셀을 향한다
+  // AMMR 셀: 로봇이 오가는 부품 선반 — 시뮬레이션이 정한 자리(st.ammrRacks: 셀 긴 쪽 바깥, 통로·AMR 경로와 겹치면 셀 옆쪽)
+  // 앞면이 로봇을 향한다. 같은 자리를 쓰는 로봇끼리는 선반 하나를 같이 쓴다
   const racks = [];
-  if (kind === 'ammr') for (const side of [...new Set(robots.map((r) => r.slot.side))]) {
-    const x = robots.find((r) => r.slot.side === side).slot.x;
-    const rk = put(new THREE.Group(), x, 0.06, side * AMMR.rackZ, group); rk.rotation.y = side > 0 ? Math.PI : 0;
+  const plans = kind === 'ammr' ? robots.map((r, i) => st.ammrRacks?.[i] ?? { mode: 'z', rack: { x: r.slot.x, z: r.slot.side * AMMR.rackZ }, side: r.slot.side }) : [];
+  robots.forEach((r, i) => { if (plans[i]) r.plan = plans[i]; });
+  const seen = new Map();
+  for (const pl of plans) {
+    const key = `${pl.rack.x.toFixed(2)},${pl.rack.z.toFixed(2)}`; if (seen.has(key)) continue; seen.set(key, true);
+    const side = pl.side;
+    const rk = put(new THREE.Group(), pl.rack.x, 0.06, pl.rack.z, group);
+    rk.rotation.y = pl.mode === 'x' ? (pl.dir < 0 ? Math.PI / 2 : -Math.PI / 2) : side > 0 ? Math.PI : 0;
     for (const [px, pz] of [[-0.7, -0.24], [0.7, -0.24], [-0.7, 0.24], [0.7, 0.24]]) put(box(0.06, 1.75, 0.06, MAT.accent), px, 0.88, pz, rk);
     const bins = [];
     [0.32, 0.92, 1.52].forEach((y) => {
@@ -977,6 +995,58 @@ export class FactoryView {
     }
     this.buildYard();
     this.buildSlogans();
+    this.buildBoard();
+  }
+
+  // 오른쪽 벽 설비 현황 전광판 — 모든 설비·로봇의 고유 ID·이름·현재 상태 (1초마다 갱신)
+  buildBoard() {
+    const W = 30, H = 6.4, cv = document.createElement('canvas'); cv.width = 4096; cv.height = Math.round(4096 * H / W);
+    this.boardCanvas = cv; this.boardTex = new THREE.CanvasTexture(cv); this.boardTex.colorSpace = THREE.SRGBColorSpace; this.boardTex.anisotropy = 8;
+    const g = put(new THREE.Group(), 37.72, 4.45, -1.5, this.root); g.rotation.y = -Math.PI / 2;
+    put(box(W + 0.5, H + 0.5, 0.16, std(0x0b0d10, { roughness: 0.5, metalness: 0.4 })), 0, 0, -0.1, g);
+    put(new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: this.boardTex, toneMapped: false })), 0, 0, 0, g);
+    this.boardT = -1;
+  }
+  drawBoard() {
+    const sim = this.sim, cv = this.boardCanvas, x = cv.getContext('2d'), W = cv.width, H = cv.height;
+    const F = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif', MONO = 'Menlo, "SF Mono", Consolas, monospace';
+    const list = equipmentList(sim, this);
+    const COL = { run: '#3dff8a', idle: '#8fb3c9', charge: '#37e8ff', maint: '#ffc21f', fault: '#ff4d4d', stop: '#ff7a3d', off: '#5c6670' };
+    x.fillStyle = '#020405'; x.fillRect(0, 0, W, H);
+    // 머리줄: 제목 · 시각 · 상태별 대수
+    const HH = 112;
+    x.fillStyle = '#0d1a12'; x.fillRect(0, 0, W, HH);
+    x.font = `900 58px ${F}`; x.fillStyle = '#ffb020'; x.textBaseline = 'middle'; x.textAlign = 'left';
+    x.fillText('설비 현황판', 34, HH / 2); x.font = `700 30px ${MONO}`; x.fillStyle = '#c99a3a'; x.fillText('EQUIPMENT STATUS BOARD', 400, HH / 2 + 4);
+    const s0 = Math.floor(sim.time) + 8 * 3600, clock = `${String(Math.floor(s0 / 3600) % 24).padStart(2, '0')}:${String(Math.floor(s0 / 60) % 60).padStart(2, '0')}:${String(s0 % 60).padStart(2, '0')}`;
+    const cnt = {}; for (const e of list) cnt[e.cls] = (cnt[e.cls] ?? 0) + 1;
+    let cx = W - 34; x.textAlign = 'right';
+    x.font = `700 44px ${MONO}`; x.fillStyle = '#3dff8a'; x.fillText(clock, cx, HH / 2); cx -= x.measureText(clock).width + 46;
+    for (const k of ['off', 'stop', 'fault', 'maint', 'charge', 'idle', 'run']) {
+      if (!cnt[k]) continue;
+      const t = `${STATUS_CLASS[k]} ${cnt[k]}`; x.font = `800 38px ${F}`; x.fillStyle = COL[k]; x.fillText(t, cx, HH / 2); cx -= x.measureText(t).width + 18;
+      x.beginPath(); x.arc(cx, HH / 2, 11, 0, Math.PI * 2); x.fill(); cx -= 40;
+    }
+    x.textAlign = 'right'; x.font = `700 30px ${F}`; x.fillStyle = '#7d8a95'; x.fillText(`전체 ${list.length}대 · ${sim.mode.label}`, cx, HH / 2);
+    // 목록: 4열
+    const cols = 4, rows = Math.ceil(list.length / cols), top = HH + 18, rh = Math.min(58, (H - top - 10) / Math.max(1, rows)), cw = W / cols;
+    const fs = Math.max(22, Math.min(32, rh * 0.6));
+    list.forEach((e, i) => {
+      const c = Math.floor(i / rows), r = i % rows, x0 = c * cw + 24, y = top + r * rh + rh / 2;
+      if (r % 2 === 0) { x.fillStyle = 'rgba(255,255,255,0.025)'; x.fillRect(c * cw + 8, top + r * rh, cw - 16, rh); }
+      x.textAlign = 'left'; x.font = `800 ${fs}px ${MONO}`; x.fillStyle = '#ffb020'; x.fillText(e.uid, x0, y);
+      x.font = `600 ${fs}px ${F}`; x.fillStyle = '#d7dde3'; let nm = e.name; while (x.measureText(nm).width > cw * 0.42 && nm.length > 3) nm = nm.slice(0, -2) + '…'; x.fillText(nm, x0 + fs * 5.4, y);
+      const col = COL[e.cls] ?? '#8fb3c9', blink = (e.cls === 'fault' || e.cls === 'stop') && Math.floor(performance.now() / 500) % 2;
+      x.fillStyle = blink ? 'rgba(255,255,255,0.15)' : col;
+      x.textAlign = 'right'; x.font = `800 ${fs}px ${F}`; x.fillStyle = blink ? '#5a1a1a' : col; x.fillText(e.text, c * cw + cw - 30, y);
+      x.beginPath(); x.arc(c * cw + cw - 30 - x.measureText(e.text).width - 18, y, fs * 0.22, 0, Math.PI * 2); x.fill();
+      if (c) { x.fillStyle = 'rgba(255,176,32,0.18)'; x.fillRect(c * cw, top, 2, rows * rh); }
+    });
+    // LED 점 질감
+    x.fillStyle = 'rgba(0,0,0,0.22)';
+    for (let yy = 0; yy < H; yy += 4) x.fillRect(0, yy, W, 1);
+    for (let xx = 0; xx < W; xx += 4) x.fillRect(xx, 0, 1, H);
+    this.boardTex.needsUpdate = true;
   }
 
   // 벽면 슬로건 현수막 (단계별 하나만 보임): 레거시 — 캠틱 로고와 출하 도크 사이, 자동화 — 중앙 관제 화면과 출하 도크 사이
@@ -1063,8 +1133,30 @@ export class FactoryView {
     // 정비실
     const tech = put(new THREE.Group(), LOC.TECH.x + 0.8, 0, 16.5, r);
     put(box(5, 0.02, 3.5, std(0x6b4a2a)), 0, 0.01, -1.5, tech);
-    put(box(1.6, 1.8, 0.6, std(0xc0392b)), -1.2, 0.9, 0.5, tech);
-    put(box(1.6, 0.9, 0.7, MAT.steel), 1.0, 0.45, 0.5, tech);
+    // 공구함(빨강)·정비 작업대(회색)는 양옆에 두고 가운데를 비워 바닥 표시가 보이게 한다
+    put(box(0.6, 1.8, 1.6, std(0xc0392b)), -2.15, 0.9, -1.4, tech);
+    put(box(0.7, 0.9, 1.6, MAT.steel), 2.15, 0.45, -1.4, tech);
+    // 정비실 바닥 표시 (단계별 문구: 레거시·자동화 — 정비원, 피지컬AI — 정비 휴머노이드) + 뒤쪽 표지판
+    const textTex = (lines, w, h, { bg, fg, sub, border }) => {
+      const c = document.createElement('canvas'); c.width = 1024; c.height = Math.round(1024 * h / w);
+      const x = c.getContext('2d'), F = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
+      if (bg) { x.fillStyle = bg; x.fillRect(0, 0, c.width, c.height); }
+      if (border) { x.strokeStyle = border; x.lineWidth = c.height * 0.06; x.strokeRect(c.height * 0.04, c.height * 0.04, c.width - c.height * 0.08, c.height - c.height * 0.08); }
+      x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.fillStyle = fg; x.font = `900 ${c.height * 0.38}px ${F}`; x.fillText(lines[0], c.width / 2, c.height * (lines[1] ? 0.4 : 0.52));
+      if (lines[1]) { let fs = c.height * 0.2; x.font = `700 ${fs}px ${F}`; while (x.measureText(lines[1]).width > c.width * 0.88) { fs *= 0.94; x.font = `700 ${fs}px ${F}`; } x.fillStyle = sub; x.fillText(lines[1], c.width / 2, c.height * 0.76); }
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
+    };
+    this.techMarks = {};
+    for (const [k, sub] of [['human', '정비원 대기 · 고장 수리 · 예지정비'], ['humanoid', '정비 휴머노이드 대기 · 고장 수리 · 예지정비']]) {
+      const m = put(new THREE.Mesh(new THREE.PlaneGeometry(3.4, 1.0), new THREE.MeshBasicMaterial({ map: textTex(['🔧 정비실', sub], 3.4, 1.0, { fg: 'rgba(255,255,255,0.92)', sub: 'rgba(255,214,140,0.95)', border: 'rgba(242,194,48,0.9)' }), transparent: true, depthWrite: false })), 0, 0.03, -0.9, tech);
+      m.rotation.x = -Math.PI / 2; m.visible = false; this.techMarks[k] = m;
+    }
+    // 표지판: 정비 대기 자리 뒤(라인 쪽 가장자리) 기둥 2개 위 — 앞에서 보면 대기 중인 정비 로봇 위로 보인다
+    const signG = put(new THREE.Group(), 0, 0, -3.45, tech);
+    for (const sx of [-1.3, 1.3]) put(box(0.08, 2.6, 0.08, MAT.steel), sx, 1.3, 0, signG);
+    put(box(2.9, 0.9, 0.06, MAT.dark), 0, 2.45, 0, signG);
+    put(new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.8), new THREE.MeshStandardMaterial({ map: textTex(['🔧 정비실', 'MAINTENANCE STATION'], 2.8, 0.8, { bg: '#1d3f8f', fg: '#ffffff', sub: '#f2c230' }), roughness: 0.6 })), 0, 2.45, 0.035, signG);
     // 관제/서버
     const srv = (this.server = put(new THREE.Group(), -2, 0, -17.5, r));
     this.serverLeds = [];
@@ -1097,7 +1189,7 @@ export class FactoryView {
     for (const v of [...this.stationViews, ...(this.vehicleViews ?? []), ...(this.techViews ?? []), ...(this.helperViews ?? []), ...(this.quadViews ?? []), ...(this.droneViews ?? []), ...(this.truckViews?.values() ?? [])]) {
       const l = v.label ?? v.lbl; l.removeFromParent(); l.element.remove();
     }
-    this.truckViews = new Map(); this.labelsOn = labelsOn;
+    this.truckViews = new Map(); this.labelsOn = labelsOn; this.idPlates = [];
     for (const sv of this.stationViews) { this.root.remove(sv.group); if (sv.alarm) this.root.remove(sv.alarm); }
     for (const c of this.convGroups ?? []) this.root.remove(c);
     if (this.zoneDeco) { this.root.remove(this.zoneDeco); this.zoneDeco = null; }
@@ -1115,6 +1207,9 @@ export class FactoryView {
       const parts = BUILDERS[st.type](g, st, sim);
       const { group: robotGroup, robots, racks } = placeRobots(g, st);
       parts.robots = robots; parts.racks = racks;
+      // 셀 로봇 고유 ID 명판 (로봇 위, 라벨 버튼으로 켜고 끔)
+      robots.forEach((rb, i) => { const uid = st.robotUids?.[i]; if (!uid) return; const sp = idPlate(uid); sp.position.set(0, rb.kind === 'ammr' ? 2.55 : 2.35, 0); rb.root.add(sp); this.idPlates.push(sp); sp.visible = labelsOn; });
+      if (parts.arms) Object.values(parts.arms).forEach((A, i) => { const uid = sim.sinkRobotUids?.[i]; if (!uid) return; const sp = idPlate(uid); sp.position.set(0, 3.3, 0); A.arm.root.add(sp); this.idPlates.push(sp); sp.visible = labelsOn; });
       const light = put(makeStackLight(), -1.9, 0.15, -1.6, g);
       g.traverse((o) => { o.userData.stationId = st.id; });
       g.userData.stationId = st.id;
@@ -1129,7 +1224,7 @@ export class FactoryView {
       const rb = st.def.robot?.count ? `${ROBOT_KINDS[st.def.robot.kind].short}×${st.def.robot.count}` : '';
       const cell = ZONE_CELLS[st.id.split('@')[0]];
       const use = cell && st.type !== 'source' && st.type !== 'sink' ? `<div class="use u-${cellUse(st.id.split('@')[0])}">${cell.use}</div>` : '';
-      el.innerHTML = `<div class="nm">${cell && use ? `<b class="no">${cell.no}</b>` : ''}<span></span></div>${use}<div class="row"><span class="chip"></span><span class="hp"><i></i></span></div>${rb && mode !== 'traditional' ? `<div class="rb">🤖 ${rb}</div>` : ''}`;
+      el.innerHTML = `<div class="nm">${cell && use ? `<b class="no">${cell.no}</b>` : ''}<span></span>${st.uid ? `<i class="uid">${st.uid}</i>` : ''}</div>${use}<div class="row"><span class="chip"></span><span class="hp"><i></i></span></div>${rb && mode !== 'traditional' ? `<div class="rb">🤖 ${rb}</div>` : ''}`;
       el.classList.toggle('changed', !!changed?.has(st.id));
       el.classList.toggle('standby', !!st.standby);
       const label = new CSS2DObject(el); label.position.set(0, 4.3, 0); g.add(label);
@@ -1152,6 +1247,8 @@ export class FactoryView {
     this.server.visible = mode !== 'traditional';
     this.screen.visible = mode !== 'traditional';
     this.sloganLegacy.visible = mode === 'traditional';
+    this.buildLogistics(sim);
+    this.techMarks.human.visible = sim.mode.techKind !== 'humanoid'; this.techMarks.humanoid.visible = sim.mode.techKind === 'humanoid';
     this.sloganSmart.visible = mode === 'smart';
 
     // 컨베이어 (경로를 따라 직선 구간별로 생성, 코너는 겹쳐서 이음). 미사용 분기는 멈춘 채 어둡게
@@ -1332,6 +1429,7 @@ export class FactoryView {
     for (const sv of this.stationViews) sv.label.visible = on;
     for (const vv of [...(this.vehicleViews ?? []), ...(this.techViews ?? []), ...(this.helperViews ?? []), ...(this.quadViews ?? []), ...(this.droneViews ?? []), ...(this.truckViews?.values() ?? [])]) vv.lbl.visible = on;
     this.labelsOn = on;
+    for (const sp of this.idPlates ?? []) sp.visible = on;
   }
 
   // ── 제품 메시 ─────────────────────────────
@@ -1490,9 +1588,10 @@ export class FactoryView {
         led.emissiveIntensity = v.charging ? 1.5 + Math.sin(t * 4) * 1.2 : 2.5;
       }
       if (v.auto) vv.g.userData.beacon.material.emissiveIntensity = v.moving ? (Math.sin(t * 9) > 0 ? 3 : 0.3) : 1;
-      vv.el.innerHTML = `${v.id}${v.kind === 'agv' ? ` · ${v.battery.toFixed(0)}%` : ''}<em>${v.task ?? '대기'}</em>`;
+      vv.el.innerHTML = `${v.uid ? `<i class="uid">${v.uid}</i>` : ''}${v.id}${v.kind === 'agv' ? ` · ${v.battery.toFixed(0)}%` : ''}<em>${v.task ?? '대기'}</em>`;
     }
     this.updateTrucks(t, rdt);
+    if (this.boardCanvas && this.sim && t - (this.boardT ?? -1) > 1) { this.boardT = t; this.drawBoard(); }
     for (const cv of this.carrierViews) {
       const c = cv.v;
       cv.g.visible = c.state !== 'line';
@@ -1505,6 +1604,11 @@ export class FactoryView {
     for (const tv of this.techViews) this.animatePerson(tv, rdt, t, true);
     for (const hv of this.helperViews) { this.animatePerson(hv, rdt, t, true); hv.g.userData.bin.visible = !!hv.v.carry; }
     for (const qv of this.quadViews) this.animateQuad(qv, rdt, t);
+    for (const dk of this.quadDocks ?? []) {   // 충전 도크 상태등
+      const at = Math.hypot(dk.q.x - dk.q.home.x, dk.q.z - dk.q.home.z) < 0.3;
+      dk.led.emissive.setHex(dk.q.charging ? 0x3dff8a : dk.q.battery < 30 ? 0xff8a3d : 0x2aa8ff);
+      dk.led.emissiveIntensity = dk.q.charging ? 1.2 + Math.sin(t * 4) * 1.1 : at ? 2.2 : 0.8;
+    }
     for (const dv of this.droneViews ?? []) this.animateDrone(dv, rdt, t);
     for (const wv of this.workerViews) this.animatePerson(wv, rdt, t, false);
 
@@ -1566,7 +1670,7 @@ export class FactoryView {
       ud.arm.pose(Math.sin(t * 1.5) * 0.6, working ? 0.8 + Math.sin(t * 3) * 0.2 : 0.2, working ? 1.0 : 0.9, 0.5);
       ud.beacon.emissiveIntensity = working || moved ? (Math.sin(t * 10) > 0 ? 4 : 0.3) : 1;
     }
-    if (pv.el) pv.el.innerHTML = `${v.id}<em>${v.task ?? '대기'}</em>`;
+    if (pv.el) pv.el.innerHTML = `${v.uid ? `<i class="uid">${v.uid}</i>` : ''}${v.id}<em>${v.task ?? '대기'}</em>`;
   }
 
   animateQuad(qv, rdt, t) {
@@ -1586,7 +1690,7 @@ export class FactoryView {
     ud.body.position.y = 0.55 + (moved ? Math.abs(Math.sin(t * 10)) * 0.025 : 0);
     ud.beam.visible = !!v.scanning;
     ud.cam.rotation.y = v.scanning ? Math.sin(t * 2.5) * 0.4 : 0;
-    qv.el.innerHTML = `${v.id}<em>${v.task ?? '대기'}</em>`;
+    qv.el.innerHTML = `${v.uid ? `<i class="uid">${v.uid}</i>` : ''}${v.id} · ${v.battery.toFixed(0)}%<em>${v.task ?? "대기"}</em>`;
   }
 
   spawnPacket(sv) {
@@ -1629,9 +1733,17 @@ export class FactoryView {
     // AMMR: 작업 위치 ↔ 부품 선반 왕복 (회전 → 주행 → 양팔 피킹 → 회전 → 복귀)
     if (st.ammr && parts.robots) parts.robots.forEach((r, i) => {
       const u = st.ammr[i]; if (!u || !r.slot) return;
-      const e = u.pos * u.pos * (3 - 2 * u.pos);
-      r.root.position.z = r.slot.z + (r.slot.side * AMMR.pickZ - r.slot.z) * e;
-      r.root.rotation.y = r.slot.yaw + u.turn * Math.PI;
+      const e = u.pos * u.pos * (3 - 2 * u.pos), pl = r.plan;
+      if (pl?.mode === 'x') {
+        // 셀 옆쪽 선반: 진행 방향(±x)으로 돌아 로봇 줄을 따라 주행
+        r.root.position.x = r.slot.x + (pl.pick.x - r.slot.x) * e;
+        const face = pl.dir < 0 ? -Math.PI / 2 : Math.PI / 2;
+        const d = ((face - r.slot.yaw + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+        r.root.rotation.y = r.slot.yaw + u.turn * d;
+      } else {
+        r.root.position.z = r.slot.z + (r.slot.side * AMMR.pickZ - r.slot.z) * e;
+        r.root.rotation.y = r.slot.yaw + u.turn * Math.PI;
+      }
       if (u.phase !== 'work') r.anim(u.phase === 'pick', t + r.phase, p);
       r.bin.visible = u.carry || u.phase === 'pick';
     });
@@ -1757,7 +1869,7 @@ export class FactoryView {
     const look = flying && (d.mode === 'event' || (d.mode === 'patrol' && d.hover > 0));
     ud.beam.visible = look;
     if (look) { ud.beam.scale.set(1, d.y - 0.2, 1); ud.beam.position.y = -(d.y - 0.2) / 2 - 0.1; ud.beam.material.color.setHex(d.mode === 'event' ? 0xff8a3d : 0x37e8ff); ud.beam.material.opacity = d.mode === 'event' ? 0.14 : 0.08; }
-    dv.el.innerHTML = `${d.id} · ${d.battery.toFixed(0)}%<em>${d.task ?? '대기'}</em>`;
+    dv.el.innerHTML = `${d.uid ? `<i class="uid">${d.uid}</i>` : ''}${d.id} · ${d.battery.toFixed(0)}%<em>${d.task ?? '대기'}</em>`;
   }
 
   // 구분 적재장 로봇 2대: 제품 양품이 하역될 때마다(goodBy 증가) 집기 → 들어 올려 옮기기 → 다음 적재 칸에 내려놓기 → 복귀
@@ -1792,6 +1904,51 @@ export class FactoryView {
       } else A.held.visible = false;
       A.arm.pose(q[0], q[1], q[2], q[3]);
     }
+  }
+
+  // 물류존·물류 대기 구역 바닥 표시 (단계별로 다시 그린다): 점선 테두리 + 옅은 바탕 + 이름
+  buildLogistics(sim) {
+    if (this.logiDeco) this.root.remove(this.logiDeco);
+    const g = this.logiDeco = put(new THREE.Group(), 0, 0, 0, this.root);
+    const F = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
+    const flat = (w, d, mat, x, z, y) => { const m = put(new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat), x, y, z, g); m.rotation.x = -Math.PI / 2; return m; };
+    const area = (x0, z0, x1, z1, rgb, title, sub, tx, tz, tw = 6) => {
+      const col = new THREE.Color(`rgb(${rgb})`), w = x1 - x0, d = z1 - z0;
+      flat(w, d, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.08, depthWrite: false }), (x0 + x1) / 2, (z0 + z1) / 2, 0.006);
+      const tape = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85 });
+      const dash = (ax, az, bx, bz) => { const L = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.floor(L / 0.9)); for (let i = 0; i < n; i++) { const k = (i + 0.5) / n; const m = flat(az === bz ? 0.55 : 0.09, az === bz ? 0.09 : 0.55, tape, ax + (bx - ax) * k, az + (bz - az) * k, 0.018); } };
+      dash(x0, z0, x1, z0); dash(x0, z1, x1, z1); dash(x0, z0, x0, z1); dash(x1, z0, x1, z1);
+      const th = tw / 5.5, c = document.createElement('canvas'); c.width = 1024; c.height = Math.round(1024 / 5.5);
+      const x = c.getContext('2d'); x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.fillStyle = `rgba(${rgb},0.95)`; x.font = `900 ${c.height * 0.46}px ${F}`; x.fillText(title, c.width / 2, c.height * (sub ? 0.36 : 0.52));
+      if (sub) { let fs = c.height * 0.24; x.font = `700 ${fs}px ${F}`; while (x.measureText(sub).width > c.width * 0.94) { fs *= 0.94; x.font = `700 ${fs}px ${F}`; } x.fillStyle = 'rgba(232,237,242,0.85)'; x.fillText(sub, c.width / 2, c.height * 0.78); }
+      const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+      flat(tw, th, new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }), tx, tz, 0.02);
+    };
+    const AMBER = '245,166,35', GREEN = '61,220,132';
+    const legacy = sim.mode.key === 'traditional', agv = sim.mode.vehicleKind === 'agv';
+    // 물류존: 자재창고 랙 · AGV 상차 · 부품 랙 피킹
+    area(-31.6, -18.6, -20.6, -11.4, AMBER, '📦 물류존', agv ? '자재창고 · AGV 자재 상차 · 부품 랙 피킹' : '자재창고 · 지게차 자재 상차 · 부품 랙', -26.1, -12.2, 7);
+    // 물류 대기: 부품 보충 휴머노이드 (피지컬AI)
+    if (sim.helpers?.length) area(-20.2, -13.6, -16.2, -11.4, GREEN, '물류 대기', '부품 보충 휴머노이드', -18.2, -11.95, 3.8);
+    // 물류 대기: AGV(레거시는 지게차) 대기·충전 — 충전 패드 4칸과 충전 기둥
+    area(-15.6, 12.0, -2.8, 15.5, GREEN, agv ? '🔋 물류 대기 · AGV 충전' : '물류 대기 · 지게차', agv ? '자재 공급 AGV 대기·자동 충전' : '자재 운반 지게차 대기 (유인)', -9.2, 16.25, 6.5);
+    // 사족보행 충전 스테이션 (피지컬AI): 도킹 충전기 + 상태등 (충전 중 초록 점멸, 대기 파랑)
+    this.quadDocks = [];
+    if (sim.quads?.length) {
+      const xs = sim.quads.map((q) => q.home.x), zc = sim.quads[0].home.z;
+      area(Math.min(...xs) - 1.2, zc - 1.2, Math.max(...xs) + 1.2, zc + 1.9, '90,169,255', '🔋 사족보행 충전 스테이션', `순찰 로봇 ${sim.quads.length}대 · 30% 이하 자동 복귀 도킹 충전`, (Math.min(...xs) + Math.max(...xs)) / 2, zc + 2.55, 4.6);
+      for (const q of sim.quads) {
+        const d = put(new THREE.Group(), q.home.x, 0, q.home.z, g);
+        put(new THREE.Mesh(new THREE.CircleGeometry(0.7, 28), new THREE.MeshStandardMaterial({ color: 0x1d2a3a, roughness: 0.7 })), 0, 0.012, 0, d).rotation.x = -Math.PI / 2;
+        put(box(0.7, 0.55, 0.28, MAT.white), 0, 0.28, 1.05, d);                 // 충전 도크 (로봇 뒤쪽)
+        put(box(0.5, 0.06, 0.4, MAT.dark), 0, 0.03, 0.75, d);                    // 충전 접점 판
+        const led = emis(0x2aa8ff, 2); put(box(0.42, 0.03, 0.12, led, false), 0, 0.57, 1.05, d);   // 도크 윗면 상태등 (앞에서도 보이게)
+        this.quadDocks.push({ q, led });
+      }
+    }
+    // 물류 대기: 출하 지게차 (출하 도크 옆)
+    area(18.2, -17.8, 20.8, -15.2, GREEN, '출하 대기', legacy ? '출하 지게차 (유인)' : '자율 지게차', 19.5, -14.55, 3.2);
   }
 
   // 화물트럭: 시뮬레이션 트럭 목록과 모델을 맞추고, 위치·방향·뒷문·적재 팔레트·라벨을 갱신한다

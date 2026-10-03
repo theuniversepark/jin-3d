@@ -557,3 +557,5 @@ table.rb-j .tq i { display: block; height: 100%; }
 .g-detail li b { font-weight: 700; } .g-detail li span { color: var(--ink2); min-width: 0; overflow-wrap: anywhere; }
 .g-detail li.s-pass b { color: rgb(var(--g-pass)); } .g-detail li.s-warn b { color: rgb(var(--g-warn)); } .g-detail li.s-fail b { color: #ff9a9a; } .g-detail li.s-skip { opacity: 0.5; } .g-detail li.s-pending b { color: #9fd0ff; }
 .g-detail .cp { margin-right: 4px; }
+.uid { font-style: normal; font-family: Menlo, 'SF Mono', Consolas, monospace; font-size: 9.5px; font-weight: 700; color: #ffb020; background: rgba(255, 176, 32, 0.14); border: 1px solid rgba(255, 176, 32, 0.45); border-radius: 4px; padding: 0 4px; margin: 0 5px 0 0; }
+.st-label .nm .uid { margin: 0 0 0 6px; }

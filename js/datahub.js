@@ -50,7 +50,7 @@ function buildAssets(sim, view) {
     const d = st.def, T = STATION_TYPES[st.type];
     assets.push({
       id: st.id, kind: 'Station', name: st.name, nameplate: plate(st.id, `${T.label} 셀`),
-      tech: { StationType: T.label, Robot: d.robot.count ? `${ROBOT_KINDS[d.robot.kind].label} ${d.robot.count}대` : '없음', BaseCycleTime: d.baseCycle, Task: d.task, ...(d.product ? { ProductLine: d.product } : {}) },
+      tech: { EquipmentId: st.uid ?? st.id, StationType: T.label, Robot: d.robot.count ? `${ROBOT_KINDS[d.robot.kind].label} ${d.robot.count}대` : '없음', BaseCycleTime: d.baseCycle, Task: d.task, ...(d.product ? { ProductLine: d.product } : {}) },
       fields: [
         f('State', '상태', 'string', null, () => st.state),
         f('StateText', '상태(한글)', 'string', null, () => ST_LABEL[st.state] ?? st.state),
@@ -85,7 +85,7 @@ function buildAssets(sim, view) {
         const tcp2 = () => { const w = r.tip2.getWorldPosition(r.tip2.position.clone()), b = r.root.getWorldPosition(r.root.position.clone()); return { x: (w.x - b.x) * 1000, y: -(w.z - b.z) * 1000, z: (w.y - b.y) * 1000 }; };
         fields.push(f('Tcp2X', '오른팔 TCP X', 'double', 'mm', () => tcp2().x), f('Tcp2Y', '오른팔 TCP Y', 'double', 'mm', () => tcp2().y), f('Tcp2Z', '오른팔 TCP Z', 'double', 'mm', () => tcp2().z));
       }
-      assets.push({ id, kind: 'CellRobot', parent: st.id, name: `${st.name} ${ROBOT_KINDS[r.kind].label} #${i + 1}`, nameplate: plate(id, ROBOT_KINDS[r.kind].label), tech: { RobotType: ROBOT_KINDS[r.kind].label, Axes: r.jointDefs.length, Payload: r.payload, Cell: st.id }, fields });
+      assets.push({ id, kind: 'CellRobot', parent: st.id, name: `${st.name} ${ROBOT_KINDS[r.kind].label} #${i + 1}`, nameplate: plate(id, ROBOT_KINDS[r.kind].label), tech: { EquipmentId: st.robotUids?.[i] ?? id, RobotType: ROBOT_KINDS[r.kind].label, Axes: r.jointDefs.length, Payload: r.payload, Cell: st.id }, fields });
     });
   }
   // 이동 로봇 AAS id: 영문 ID(AMR-01·AGV-1)는 그대로, 한글 이름은 역할 접두어 + 번호 (HUM_MNT_1 등)
@@ -94,7 +94,7 @@ function buildAssets(sim, view) {
     count[prefix] = (count[prefix] ?? 0) + 1;
     const assetIdStr = /^[A-Za-z0-9-]+$/.test(m.id) ? m.id.replace(/-/g, '_') : `${prefix}_${count[prefix]}`;
     assets.push({
-      id: assetIdStr, kind, mover: m, name: `${m.id} (${label})`, nameplate: plate(assetIdStr, label), tech: { RobotType: label, DisplayName: m.id },
+      id: assetIdStr, kind, mover: m, name: `${m.id} (${label})`, nameplate: plate(assetIdStr, label), tech: { EquipmentId: m.uid ?? m.id, RobotType: label, DisplayName: m.id },
       fields: [
         f('PositionX', '위치 X', 'double', 'm', () => m.x), f('PositionZ', '위치 Z', 'double', 'm', () => m.z),
         f('Heading', '방위', 'double', 'deg', () => ((m.heading * DEG) % 360 + 360) % 360),
@@ -116,7 +116,7 @@ function buildAssets(sim, view) {
   ]);
   for (const t of sim.techs) if (t.kind !== 'human') mobile(t, t.kind === 'humanoid' ? 'Humanoid' : 'MaintenanceRobot', t.kind === 'humanoid' ? '휴머노이드 (정비)' : '정비로봇', t.kind === 'humanoid' ? 'HUM_MNT' : 'MBOT');
   for (const h of sim.helpers) mobile(h, 'Humanoid', '휴머노이드 (부품 보충)', 'HUM_SUP', [f('CarryingBin', '부품 빈 운반', 'boolean', null, () => !!h.carry)]);
-  for (const q of sim.quads) mobile(q, 'Quadruped', '사족보행 순찰', 'QUAD', [f('InspectionTarget', '점검 대상', 'string', null, () => q.scanning?.id ?? '')]);
+  for (const q of sim.quads) mobile(q, 'Quadruped', '사족보행 순찰', 'QUAD', [f('InspectionTarget', '점검 대상', 'string', null, () => q.scanning?.id ?? ''), f('Battery', '배터리', 'double', '%', () => q.battery)]);
   return assets;
 }
 

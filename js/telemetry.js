@@ -74,7 +74,7 @@ export class RobotTelemetry {
       put('MotorCurrentTotal', '모터 전류 합계', 'A', (this.tq ?? []).reduce((a, b) => a + b, 0) * 0.06);
       put('BaseVibrationRMS', '베이스 진동 RMS', 'mm/s', 0.6 + (100 - st.health) * 0.045 + (busy ? 0.4 : 0));
       const au = R.robot.dual ? st.ammr?.[this.ref.idx] : null;
-      if (au) { put('PartsBin', '로봇 부품 빈', 'pcs', au.bin, 'int'); put('PlatformPhase', '이동 플랫폼 상태', null, au.phase, 'string'); put('PlatformOffset', '작업 위치에서 이동 거리', 'm', au.pos * (AMMR.pickZ - AMMR.slotZ)); put('RackStock', '부품 선반 재고', 'pcs', st.parts ?? null, 'int'); }
+      if (au) { put('PartsBin', '로봇 부품 빈', 'pcs', au.bin, 'int'); put('PlatformPhase', '이동 플랫폼 상태', null, au.phase, 'string'); put('PlatformOffset', '작업 위치에서 이동 거리', 'm', au.pos * (au.travel ?? AMMR.pickZ - AMMR.slotZ)); put('RackStock', '부품 선반 재고', 'pcs', st.parts ?? null, 'int'); }
       if (R.robot.kind === 'cobot') put('NearestMoverDistance', '최근접 이동체 거리 (안전 감시)', 'm', this.nearestMover(R.robot.root.getWorldPosition(v3())));
       return out;
     }
@@ -95,6 +95,7 @@ export class RobotTelemetry {
     }
     if (m.kind === 'humanoid') put('CarryingBin', '부품 빈 운반', null, !!m.carry, 'boolean');
     if (m.kind === 'drone') { put('Altitude', '비행 고도', 'm', m.y); put('Battery', '배터리', '%', m.battery); put('FlightMode', '비행 모드', null, m.mode, 'string'); }
+    if (m.kind === 'quadruped') put('Battery', '배터리', '%', m.battery);
     if (m.kind === 'quadruped') {
       const st = m.scanning;
       put('InspectionTarget', '점검 대상', null, st?.id ?? '', 'string');
@@ -251,7 +252,7 @@ export class RobotTelemetry {
       const cobot = r.kind === 'cobot';
       const safety = !cobot ? null : near < 1.0 ? ['보호 정지', 'bad'] : near < 2.0 ? ['협동 감속 50%', 'warn'] : ['정상 속도 100%', 'ok'];
       const vib = 0.6 + (100 - st.health) * 0.045 + (busy ? 0.4 : 0);
-      out.title = `${st.name} · ${ROBOT_LABEL[r.kind]} ${R.view ? '' : `#${this.ref.idx + 1}`}`;
+      out.title = `${st.robotUids?.[this.ref.idx] ? `[${st.robotUids[this.ref.idx]}] ` : ''}${st.name} · ${ROBOT_LABEL[r.kind]} ${R.view ? '' : `#${this.ref.idx + 1}`}`;
       out.status = [['상태', busy ? `가동 (진행 ${(p * 100).toFixed(0)}%)` : st.state === 'DOWN' ? '설비 고장 — 정지' : st.state === 'MAINT' ? '정비 중 — 정지' : st.state === 'ESTOP' ? '비상정지 — 동력 차단' : st.state === 'PSTOP' ? '보호정지 — 자세 유지' : st.state === 'CHECK' ? '자가진단 중' : st.state === 'CSTOP' ? '사이클 정지' : '대기'], ['정격 가반하중', `${r.payload} kg`]];
       const xyz = (p) => `${p.x.toFixed(0)} / ${p.y.toFixed(0)} / ${p.z.toFixed(0)} mm`;
       out.sections.push({ title: 'TCP (툴 끝점, 베이스 기준)', rows: !this.tcp ? [] : this.tcp2 ? [
@@ -273,7 +274,7 @@ export class RobotTelemetry {
     } else {
       const m = R.mover;
       const kindLabel = { agv: 'AGV', forklift: '지게차', carrier: '운반 AMR', humanoid: '휴머노이드', quadruped: '사족보행 로봇', robot: '정비로봇', drone: '순찰 드론' }[m.kind] ?? m.kind;
-      out.title = `${m.id} · ${kindLabel}`;
+      out.title = `${m.uid ? `[${m.uid}] ` : ''}${m.id} · ${kindLabel}`;
       const lidar = this.lidar(m);
       const field = m.blockedOn ? [`정지 — 전방 ${m.blockedOn.id}`, 'warn'] : !m.moving ? ['정지 (대기)', ''] : lidar < 0.5 ? ['보호 필드 침범', 'bad'] : lidar < 1.5 ? ['경고 필드 — 감속', 'warn'] : ['정상', 'ok'];
       out.status = [['작업', m.task ?? '대기'], ['위치', `x ${m.x.toFixed(2)} · z ${m.z.toFixed(2)} m`], ['방위', `${Math.round(((m.heading * DEG) % 360) + 360) % 360}°`]];
@@ -289,6 +290,7 @@ export class RobotTelemetry {
           ['로터 속도', `${m.y > 0.3 ? (5200 + (m.speedNow ?? 0) * 260).toFixed(0) : 0} rpm`], ['짐벌 카메라', m.mode === 'event' ? '현장 이벤트 추적 (하방 −90°)' : m.hover > 0 ? '셀 점검 (하방 −70°)' : '전방 −30°'],
           ['비행 모드', { patrol: '순찰', event: '이벤트 확인', return: '귀환', charge: '착륙·충전' }[m.mode] ?? m.mode]]
         : [['라이다 최근접 장애물', `${lidar.toFixed(2)} m`], ['안전 필드', field[0], field[1]]];
+      if (m.kind === 'quadruped') sens.push(['배터리', `${m.battery.toFixed(0)}%${m.charging ? ' · 도킹 충전 중' : ''}`, m.battery < 30 ? 'warn' : '']);
       if (m.kind === 'agv') sens.push(['배터리', `${m.battery.toFixed(0)}%${m.charging ? ' · 충전 중' : ''}`, m.battery < 25 ? 'warn' : ''], ['적재', m.load ? `${m.load.type === 'raw' ? '자재' : '완제품'} ${m.load.n}개` : '없음']);
       if (m.kind === 'carrier') {
         const item = sim.itemOfCarrier?.(m);
