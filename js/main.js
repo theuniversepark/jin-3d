@@ -586,7 +586,7 @@ function frame() {
   if (view.telemetry && ui.robotMode) placeRobotPanel();
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought); }
   epRec.update();
-  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); renderAios(); aiosUpload(); }
+  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); renderAios(); aiosUpload(); renderFacos(); }
   if (!glLost) {
     try {
       camWall.update(rdt);
@@ -765,6 +765,41 @@ function renderAios(force) {
         <h4>최근 인시던트 <small>감지 → 판단 → 완료 시간</small></h4><table class="vla-t"><thead><tr><th>시각</th><th>유형</th><th>내용</th><th>판단</th><th>완료</th></tr></thead><tbody>
         ${P.events.slice(-6).reverse().map((e) => `<tr><td>${hub.iso(e.t).slice(11, 19)}</td><td>${escV(e.type)}</td><td class="ins" title="${escV(e.title)}">${escV(e.title)}</td><td>${e.decide_s != null ? `${e.decide_s}s` : '셀 자체'}</td><td>${e.resolve_s}s</td></tr>`).join('') || '<tr><td colspan="5">아직 없음</td></tr>'}</tbody></table></div>
     </div>`;
+}
+
+// ── FACOS 공장 운영 SW 통합 표시 (피지컬AI) ─────────────────
+// 운영자 지시 → AIOS → 오케스트레이터 → 자율 에이전트 → 명령 센터 → 셀·게이트 → VLA → 현장 감지 → DataHub 를 한 줄로, 계층마다 실시간 상태와 해당 창 바로가기
+const facosEl = document.getElementById('facos');
+try { if (localStorage.getItem('jin3d.facos.min') === '1') facosEl.classList.add('min'); } catch { /* 저장소 없음 */ }
+facosEl.addEventListener('click', (e) => {
+  if (e.target.closest('.fc-brand')) { facosEl.classList.toggle('min'); try { localStorage.setItem('jin3d.facos.min', facosEl.classList.contains('min') ? '1' : '0'); } catch { /* 무시 */ } return; }
+  const c = e.target.closest('[data-open]'); if (c) document.getElementById(c.dataset.open)?.click();
+});
+const AIOS_PH = { train: '학습 중', twin: '트윈 검증', shadow: '섀도', verify: '배포 확인' };
+const VLA_PH = { train: '학습 중', eval: '평가', canary: '카나리', rollout: 'OTA 배포' };
+function renderFacos() {
+  if (modeKey !== 'dark') return;
+  const s = sim, K = s.cmd, P = s.aios, V = s.vla;
+  const open = s.orch.openCount(), evs = (s.fieldEvents ?? []).filter((e) => !e.cleared).length;
+  const cells = s.processing.filter((st) => !st.standby), busy = cells.filter((st) => st.state === 'BUSY').length, down = cells.filter((st) => st.state === 'DOWN').length;
+  const gates = cells.filter((st) => st.gateCount).reduce((a, st) => a + Object.values(st.gateCount).reduce((x, y) => x + y, 0), 0);
+  const vrob = s.processing.filter((st) => st.vlaCell).reduce((a, st) => a + (st.robotUids?.length ?? 0), 0);
+  const cmd = K.estopAll || s.processing.some((st) => st.cmd?.estop) ? ['비상정지 발령', 'bad'] : K.pstopAll ? ['보호정지', 'warn'] : K.lineSafe || K.evac || K.feedHold ? ['제한 운전', 'warn'] : ['정상', 'ok'];
+  const mq = hub.mqtt;
+  const L = [
+    ['💬', '운영자 지시', llm.enabled ? '대화 기반' : '추론 기반', 'ok', null, '추론 기반: 내장 규칙 자율 운영 · 대화 기반: 지시 → 지시 게이트(해석·대상·안전·실행 가능성·영향) → 반영 (js/llm.js · js/dialog.js · js/gate.js)'],
+    ['🏭', 'AIOS', `${P.version}${P.job ? ` · ${AIOS_PH[P.job.phase] ?? ''}` : ''}`, P.job ? 'act' : 'ok', 'btnAios', '공장 운영 AI — 운영 데이터 → 정책 학습 → 트윈 검증 → 오케스트레이터 배포 (js/aios.js)'],
+    ['🛰', '오케스트레이터', open ? `인시던트 ${open}건` : '인시던트 없음', open ? 'warn' : 'ok', 'btnOrch', '인시던트 감지 → 셀 자체 조치 → 보고 → 판단 → 명령 → 조치 → 완료 확인 (js/orchestrator.js)'],
+    ['🤖', '자율 에이전트', `의사결정 ${agent.decisions}건`, 'ok', null, '관찰 → 판단 → 실행: 예지정비·자율 보정·투입 제어·병목 최적화·공급 차질·AGV 배차·절전 (js/agent.js)'],
+    ['📡', '명령 센터', cmd[0], cmd[1], 'btnOrch', '상위 긴급·제어 명령: 전송 → 셀 ACK → 실행 → 완료, 인터록 (js/commands.js)'],
+    ['🚦', '셀·게이트', `가동 ${busy}/${cells.length}${down ? ` · 고장 ${down}` : ''} · 판별 ${gates}`, down ? 'warn' : 'ok', null, '셀 컨트롤러 · 분류·포장 게이트 판별 → 로봇 역할(주 작업/보조) 결정 (js/sim.js)'],
+    ['🧠', 'VLA', `${V.label(V.latest)} · ${vrob}대${V.job ? ` · ${VLA_PH[V.job.phase] ?? ''}` : ''}`, V.job ? 'act' : 'ok', 'btnVla', '로봇 VLA 추론 모델 — 에피소드 → 학습 → 평가 → 카나리 → OTA 배포 (js/vla.js)'],
+    ['👁', '현장 감지', evs ? `이벤트 ${evs}건` : `드론 ${s.drones.length} · 사족 ${s.quads.length}`, evs ? 'warn' : 'ok', null, '로봇 비전 AI 이벤트 감지 · 순찰 드론 · 사족보행 열화상·진동 점검 (js/robotcam.js · js/drone.js)'],
+    ['🗄', 'DataHub', mq.available ? `MQTT ${mq.sent.toLocaleString('ko-KR')}건` : `AAS · 수집 ${hub.samples.length}`, mq.available && mq.failed ? 'warn' : 'ok', 'btnData', '기준 시계(UTC) · AAS · OPC UA PubSub over MQTT · AASX 저장 (js/datahub.js)'],
+  ];
+  const html = `<button type="button" class="fc-brand" title="FACOS — 피지컬AI 공장 운영 SW (누르면 접기/펴기)"><b>FACOS</b><small>공장 운영 SW</small></button>` + L.map(([ic, nm, val, cls, open, tip], i) =>
+    `${i ? '<i class="fc-arw">›</i>' : ''}<button type="button" class="fc-l ${cls}" ${open ? `data-open="${open}"` : 'disabled'} title="${escV(tip)}"><span class="fc-n"><i class="fc-ic">${ic}</i>${nm}</span><span class="fc-v">${escV(val)}</span></button>`).join('');
+  if (html !== facosEl.dataset.h) { facosEl.dataset.h = html; facosEl.innerHTML = html; }
 }
 
 window.__twin = { epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };

@@ -605,3 +605,22 @@ table.rb-j .tq i { display: block; height: 100%; }
 
 /* 공정 설계: 피지컬AI 단계에서만 AMMR인 셀 표시 */
 .st-card .ammr-note { font-size: 10.5px; color: #b89bff; white-space: nowrap; }
+
+/* FACOS 공장 운영 SW 통합 표시 (피지컬AI): 상단 바 아래 가운데, 계층별 실시간 상태 칩 */
+.dark-only-flex { display: none; }
+body[data-mode="dark"] .dark-only-flex { display: flex; }
+#facos { position: fixed; top: 66px; left: 314px; right: 364px; z-index: 6; align-items: stretch; gap: 3px; flex-wrap: wrap; justify-content: center; pointer-events: none; }
+#facos > * { pointer-events: auto; }
+#facos .fc-brand { display: flex; flex-direction: column; justify-content: center; padding: 3px 9px; border-radius: 9px; border: 1px solid #3fd0c9; background: linear-gradient(135deg, rgba(63, 208, 201, 0.28), rgba(184, 155, 255, 0.24)); color: #e8fffd; line-height: 1.1; }
+#facos .fc-brand b { font-size: 12.5px; letter-spacing: 1.2px; } #facos .fc-brand small { font-size: 9px; color: #b9e9e6; }
+#facos .fc-l { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 3px 7px; border-radius: 8px; border: 1px solid var(--line); background: rgba(13, 17, 23, 0.82); backdrop-filter: blur(6px); color: var(--ink); line-height: 1.15; cursor: pointer; }
+#facos .fc-l:disabled { cursor: default; opacity: 1; }
+#facos .fc-l:not(:disabled):hover { border-color: #3fd0c9; }
+#facos .fc-n { font-size: 9.5px; color: var(--muted); white-space: nowrap; }
+#facos .fc-v { font-size: 11px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#facos .fc-l.ok .fc-v { color: #8ff0b8; } #facos .fc-l.act .fc-v { color: #c9b5ff; } #facos .fc-l.warn .fc-v { color: #ffc65a; } #facos .fc-l.bad .fc-v { color: #ff7b7b; }
+#facos .fc-l.act { border-color: rgba(184, 155, 255, 0.6); } #facos .fc-l.warn { border-color: rgba(255, 176, 32, 0.6); } #facos .fc-l.bad { border-color: rgba(255, 90, 90, 0.8); }
+#facos .fc-arw { align-self: center; color: var(--muted); font-style: normal; font-size: 11px; }
+#facos.min .fc-l, #facos.min .fc-arw { display: none; }
+#facos .fc-ic { font-style: normal; margin-right: 3px; }
+@media (max-width: 1500px) { #facos { gap: 2px; } #facos .fc-arw, #facos .fc-ic { display: none; } #facos .fc-l { padding: 2px 5px; } #facos .fc-n { font-size: 9px; } #facos .fc-v { font-size: 10.5px; } #facos .fc-brand { padding: 2px 7px; } }
