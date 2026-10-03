@@ -586,7 +586,7 @@ function frame() {
   if (view.telemetry && ui.robotMode) placeRobotPanel();
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought); }
   epRec.update();
-  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); renderAios(); aiosUpload(); renderFacos(); }
+  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); renderAios(); aiosUpload(); renderFacos(); renderFacosView(); }
   if (!glLost) {
     try {
       camWall.update(rdt);
@@ -773,7 +773,8 @@ const facosEl = document.getElementById('facos');
 try { if (localStorage.getItem('jin3d.facos.min') === '1') facosEl.classList.add('min'); } catch { /* 저장소 없음 */ }
 facosEl.addEventListener('click', (e) => {
   if (e.target.closest('.fc-brand')) { facosEl.classList.toggle('min'); try { localStorage.setItem('jin3d.facos.min', facosEl.classList.contains('min') ? '1' : '0'); } catch { /* 무시 */ } return; }
-  const c = e.target.closest('[data-open]'); if (c) document.getElementById(c.dataset.open)?.click();
+  const c = e.target.closest('[data-open]'); if (!c) return;
+  if (c.dataset.open.startsWith('facos:')) openFacosView(c.dataset.open.slice(6)); else document.getElementById(c.dataset.open)?.click();
 });
 const AIOS_PH = { train: '학습 중', twin: '트윈 검증', shadow: '섀도', verify: '배포 확인' };
 const VLA_PH = { train: '학습 중', eval: '평가', canary: '카나리', rollout: 'OTA 배포' };
@@ -790,16 +791,93 @@ function renderFacos() {
     ['💬', '운영자 지시', llm.enabled ? '대화 기반' : '추론 기반', 'ok', null, '추론 기반: 내장 규칙 자율 운영 · 대화 기반: 지시 → 지시 게이트(해석·대상·안전·실행 가능성·영향) → 반영 (js/llm.js · js/dialog.js · js/gate.js)'],
     ['🏭', 'AIOS', `${P.version}${P.job ? ` · ${AIOS_PH[P.job.phase] ?? ''}` : ''}`, P.job ? 'act' : 'ok', 'btnAios', '공장 운영 AI — 운영 데이터 → 정책 학습 → 트윈 검증 → 오케스트레이터 배포 (js/aios.js)'],
     ['🛰', '오케스트레이터', open ? `인시던트 ${open}건` : '인시던트 없음', open ? 'warn' : 'ok', 'btnOrch', '인시던트 감지 → 셀 자체 조치 → 보고 → 판단 → 명령 → 조치 → 완료 확인 (js/orchestrator.js)'],
-    ['🤖', '자율 에이전트', `의사결정 ${agent.decisions}건`, 'ok', null, '관찰 → 판단 → 실행: 예지정비·자율 보정·투입 제어·병목 최적화·공급 차질·AGV 배차·절전 (js/agent.js)'],
+    ['🤖', '자율 에이전트', `의사결정 ${agent.decisions}건`, 'ok', 'facos:agent', '관찰 → 판단 → 실행: 예지정비·자율 보정·투입 제어·병목 최적화·공급 차질·AGV 배차·절전 (js/agent.js)'],
     ['📡', '명령 센터', cmd[0], cmd[1], 'btnOrch', '상위 긴급·제어 명령: 전송 → 셀 ACK → 실행 → 완료, 인터록 (js/commands.js)'],
-    ['🚦', '셀·게이트', `가동 ${busy}/${cells.length}${down ? ` · 고장 ${down}` : ''} · 판별 ${gates}`, down ? 'warn' : 'ok', null, '셀 컨트롤러 · 분류·포장 게이트 판별 → 로봇 역할(주 작업/보조) 결정 (js/sim.js)'],
+    ['🚦', '셀·게이트', `가동 ${busy}/${cells.length}${down ? ` · 고장 ${down}` : ''} · 판별 ${gates}`, down ? 'warn' : 'ok', 'facos:cell', '셀 컨트롤러 · 분류·포장 게이트 판별 → 로봇 역할(주 작업/보조) 결정 (js/sim.js)'],
     ['🧠', 'VLA', `${V.label(V.latest)} · ${vrob}대${V.job ? ` · ${VLA_PH[V.job.phase] ?? ''}` : ''}`, V.job ? 'act' : 'ok', 'btnVla', '로봇 VLA 추론 모델 — 에피소드 → 학습 → 평가 → 카나리 → OTA 배포 (js/vla.js)'],
-    ['👁', '현장 감지', evs ? `이벤트 ${evs}건` : `드론 ${s.drones.length} · 사족 ${s.quads.length}`, evs ? 'warn' : 'ok', null, '로봇 비전 AI 이벤트 감지 · 순찰 드론 · 사족보행 열화상·진동 점검 (js/robotcam.js · js/drone.js)'],
+    ['👁', '현장 감지', evs ? `이벤트 ${evs}건` : `드론 ${s.drones.length} · 사족 ${s.quads.length}`, evs ? 'warn' : 'ok', 'facos:sense', '로봇 비전 AI 이벤트 감지 · 순찰 드론 · 사족보행 열화상·진동 점검 (js/robotcam.js · js/drone.js)'],
     ['🗄', 'DataHub', mq.available ? `MQTT ${mq.sent.toLocaleString('ko-KR')}건` : `AAS · 수집 ${hub.samples.length}`, mq.available && mq.failed ? 'warn' : 'ok', 'btnData', '기준 시계(UTC) · AAS · OPC UA PubSub over MQTT · AASX 저장 (js/datahub.js)'],
   ];
   const html = `<button type="button" class="fc-brand" title="FACOS — 피지컬AI 공장 운영 SW (누르면 접기/펴기)"><b>FACOS</b><small>공장 운영 SW</small></button>` + L.map(([ic, nm, val, cls, open, tip], i) =>
     `${i ? '<i class="fc-arw">›</i>' : ''}<button type="button" class="fc-l ${cls}" ${open ? `data-open="${open}"` : 'disabled'} title="${escV(tip)}"><span class="fc-n"><i class="fc-ic">${ic}</i>${nm}</span><span class="fc-v">${escV(val)}</span></button>`).join('');
   if (html !== facosEl.dataset.h) { facosEl.dataset.h = html; facosEl.innerHTML = html; }
 }
+
+// ── FACOS 계층 상세: 자율 에이전트 · 셀·게이트 · 현장 감지 (데이터 기반 진행 결과) ─────────────────
+const fcModal = document.getElementById('facosModal'), fcBody = document.getElementById('facosBody'), fcTitle = document.getElementById('facosTitle');
+let fcView = null;
+const fclock = (t) => { const x = Math.floor(t) + 8 * 3600; return `${String(Math.floor(x / 3600) % 24).padStart(2, '0')}:${String(Math.floor(x / 60) % 60).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`; };
+const fdur = (s) => (s == null ? '-' : s >= 60 ? `${(s / 60).toFixed(1)}분` : `${s.toFixed(1)}초`);
+const pct = (v) => `${Math.round(v * 100)}%`;
+const tile = (k, v, sub = '') => `<div class="fc-tile"><small>${k}</small><b>${v}</b>${sub ? `<i>${sub}</i>` : ''}</div>`;
+const bars = (rows, unit = '건') => { const mx = Math.max(1, ...rows.map((r) => r[1])); return `<div class="fc-bars">${rows.map(([k, v, c]) => `<div class="fc-bar"><span>${escV(k)}</span><i style="width:${(v / mx) * 100}%;${c ? `background:${c}` : ''}"></i><b>${v}${unit}</b></div>`).join('')}</div>`; };
+// UPH 추이 (최근 10분 이동 UPH, 1분 간격) — 막대
+function uphSpark() {
+  const h = sim.history.filter((x, i) => i % 3 === 0).slice(-40); if (h.length < 2) return '<p class="vla-note">추이 수집 중…</p>';
+  const mx = Math.max(1, ...h.map((x) => x.uph)), W = 100 / h.length;
+  return `<svg class="fc-spark" viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label="시간당 생산 추이">${h.map((x, i) => `<rect x="${i * W + 0.15}" y="${32 - (x.uph / mx) * 30}" width="${W - 0.3}" height="${(x.uph / mx) * 30}" fill="#3fd0c9"><title>${fclock(x.t)} · UPH ${Math.round(x.uph)} · OEE ${pct(x.oee)}</title></rect>`).join('')}</svg><div class="fc-axis"><span>${fclock(h[0].t)}</span><span>최대 UPH ${Math.round(mx)}</span><span>${fclock(h.at(-1).t)}</span></div>`;
+}
+function viewAgent() {
+  const A = agent, k = sim.kpi(), s = sim;
+  const bott = s.processing.filter((st) => !st.standby).reduce((b, st) => { const c = st.def.cycle * s.mode.cycleMul * st.speedMul * (st.def.share ?? 1); return c > b.c ? { c, st } : b; }, { c: 0, st: null });
+  const saving = s.processing.filter((st) => st.powerSave).length, avgH = s.processing.reduce((a, st) => a + st.health, 0) / s.processing.length;
+  const cats = Object.entries(A.byCat).sort((a, b) => b[1] - a[1]);
+  return `<div class="fc-tiles">
+      ${tile('의사결정', `${A.decisions}건`, `${fdur(s.time)} 동안`)}${tile('예지정비', `${k.pm}건`, `고장 ${k.failures}건`)}${tile('품질 보정', `${k.cal}건`, `유출 ${k.escaped}건 · ${Math.round(k.ppm)} ppm`)}
+      ${tile('투입 간격', `${s.releaseInterval.toFixed(2)}초`, bott.st ? `병목 ${bott.st.name} ${bott.c.toFixed(1)}초` : '')}${tile('평균 재공', `${k.avgWip.toFixed(1)}개`, `현재 ${k.wip}개`)}${tile('평균 건강도', `${avgH.toFixed(0)}%`, `절전 셀 ${saving}개`)}${tile('OEE', pct(k.OEE), `가동 ${pct(k.A)} · 양품 ${pct(k.Q)}`)}${tile('에너지', `${k.kwhPerUnit.toFixed(3)} kWh/개`, `${k.energy.toFixed(1)} kWh`)}
+    </div>
+    <div class="vla-grid"><div><h4>분류별 의사결정</h4>${cats.length ? bars(cats) : '<p class="vla-note">아직 의사결정이 없습니다.</p>'}<h4>시간당 생산 추이 <small>최근 10분 이동 UPH</small></h4>${uphSpark()}</div>
+    <div><h4>최근 판단 근거와 실행 <small>관찰 → 판단 → 실행</small></h4><table class="vla-t"><thead><tr><th>시각</th><th>분류</th><th>판단</th><th>관찰 · 근거</th><th>실행</th></tr></thead><tbody>
+      ${A.history.slice(-14).reverse().map((d) => `<tr><td>${fclock(d.t)}</td><td>${escV(d.cat)}</td><td class="ins" title="${escV(d.title)}"><b>${escV(d.title)}</b></td><td class="ins" title="${escV([d.obs, d.dec].filter(Boolean).join(' · '))}">${escV([d.obs, d.dec].filter(Boolean).join(' · ') || '-')}</td><td class="ins" title="${escV(d.act ?? '')}">${escV(d.act ?? '-')}</td></tr>`).join('') || '<tr><td colspan="5">아직 없음</td></tr>'}</tbody></table></div></div>`;
+}
+function viewCells() {
+  const s = sim, T = Math.max(1, s.time), cells = s.processing.filter((st) => !st.standby);
+  const mixW = ZONE_MIXES[s.line.mix]?.w, mixSum = mixW ? Object.values(mixW).reduce((a, b) => a + b, 0) : 0;
+  const gates = cells.filter((st) => st.def.type === 'sort' || st.def.type === 'pack');
+  const PCOL = { doortrim: '#f0a030', eaxle: '#9a6bff' };
+  const gateCard = (st) => {
+    const c = st.gateCount ?? {}, n = Object.values(c).reduce((a, b) => a + b, 0);
+    const rows = Object.keys(ZONE_PRODUCTS).map((p) => [`${ZONE_PRODUCTS[p].label} ${n ? pct((c[p] ?? 0) / n) : '-'}${mixSum ? ` (목표 ${pct((mixW[p] ?? 0) / mixSum)})` : ''}`, c[p] ?? 0, PCOL[p]]);
+    const lead = Object.entries(st.leadCount ?? {});
+    return `<div class="fc-card"><h4>🚦 ${escV(st.name)} 게이트 <small>판별 ${n}건 · 현재: ${escV(st.item && st.gate?.id === st.item.id ? st.gate.text : '대기')}</small></h4>
+      ${bars(rows)}
+      <div class="fc-sub">주 작업 배정: ${lead.map(([u, v]) => `<b>${escV(u)}</b> ${v}회`).join(' · ') || '-'}</div>
+      <table class="vla-t"><thead><tr><th>시각</th><th>대상물</th><th>판별 결정</th><th>주 작업 로봇</th></tr></thead><tbody>
+      ${(st.gateLog ?? []).slice(-6).reverse().map((g) => `<tr><td>${fclock(g.t)}</td><td>#${g.item}</td><td style="color:${PCOL[g.product] ?? 'inherit'}">${escV(g.text)}</td><td>${escV(g.lead.join(', '))}</td></tr>`).join('') || '<tr><td colspan="4">아직 없음</td></tr>'}</tbody></table></div>`;
+  };
+  return `<h4>셀별 진행 결과 <small>${fdur(T)} 누적 · 이용률은 최근 90초 평균</small></h4><table class="vla-t"><thead><tr><th>ID</th><th>셀</th><th>상태</th><th>이용률</th><th>처리</th><th>불량</th><th>고장</th><th>건강도</th><th>자재대기</th><th>배출대기</th><th>정지·정비</th><th>실효 사이클</th></tr></thead><tbody>
+    ${cells.map((st) => `<tr><td><b class="uidc">${escV(st.uid ?? st.id)}</b></td><td>${escV(st.name)}</td><td>${escV(ST_LABEL[st.state] ?? st.state)}</td><td>${pct(st.ema)}</td><td>${st.c.processed}</td><td>${st.c.defects}</td><td>${st.c.fails}</td><td style="color:${st.health > 60 ? '#8ff0b8' : st.health > 40 ? '#ffc65a' : '#ff7b7b'}">${st.health.toFixed(0)}%</td><td>${pct(st.c.starved / T)}</td><td>${pct(st.c.blocked / T)}</td><td>${pct((st.c.down + st.c.maint) / T)}</td><td>${(st.def.cycle * s.mode.cycleMul * st.speedMul * (s.vla?.cycleFactor(st) ?? 1)).toFixed(1)}초</td></tr>`).join('')}</tbody></table>
+    ${gates.length ? `<div class="fc-cards">${gates.map(gateCard).join('')}</div>` : '<p class="vla-note">이 라인에는 분류·포장 게이트 셀이 없습니다.</p>'}`;
+}
+function viewSense() {
+  const s = sim, L = s.fieldLog ?? [], det = L.filter((e) => e.detected), done = L.filter((e) => e.cleared && e.tClear != null);
+  const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+  const st = s.stats, scans = s.scanLog ?? [];
+  const resp = (e) => e.responder ?? (e.type === 'intrusion' ? '주변 셀 감속 · 원격 관제' : '-');
+  return `<div class="fc-tiles">
+      ${tile('현장 이벤트', `${L.length}건`, `감지 ${det.length} · 처리 ${done.length}`)}${tile('평균 감지 시간', fdur(avg(det.map((e) => e.tDetect - e.t0))), '발생 → 카메라 AI 인식')}${tile('평균 처리 시간', fdur(avg(done.map((e) => e.tClear - e.t0))), '발생 → 해소')}${tile('평균 추론 신뢰도', det.length ? avg(det.map((e) => e.conf)).toFixed(2) : '-')}
+      ${tile('사족보행 순찰 점검', `${st.scans ?? 0}회`, `예지정비 ${st.scan_예지정비 ?? 0} · 재보정 ${st.scan_재보정 ?? 0}`)}${tile('드론 순찰 지점', `${s.drones.reduce((a, d) => a + (d.visits ?? 0), 0)}곳`, `이벤트 상공 확인 ${s.drones.reduce((a, d) => a + (d.evChecks ?? 0), 0)}회`)}
+    </div>
+    <h4>현장 이벤트 처리 결과 <small>로봇 카메라 AI 감지 → 오케스트레이터 → 대응</small></h4><table class="vla-t"><thead><tr><th>발생</th><th>유형</th><th>감지 로봇</th><th>신뢰도</th><th>감지까지</th><th>드론 확인</th><th>대응</th><th>해소까지</th><th>상태</th></tr></thead><tbody>
+      ${L.slice(-8).reverse().map((e) => `<tr><td>${fclock(e.t0)}</td><td>${escV(e.label)}</td><td>${escV(e.detectedBy ?? '-')}</td><td>${e.conf?.toFixed(2) ?? '-'}</td><td>${e.detected ? fdur(e.tDetect - e.t0) : '-'}</td><td>${escV(e.droneBy ?? '-')}</td><td class="ins" title="${escV(resp(e))}">${escV(resp(e))}</td><td>${e.cleared && e.tClear != null ? fdur(e.tClear - e.t0) : '-'}</td><td class="${e.cleared ? 'p-done' : e.detected ? 'p-train' : 'p-rejected'}">${e.cleared ? '해소' : e.detected ? '대응 중' : '미감지'}</td></tr>`).join('') || '<tr><td colspan="9">아직 없음 — 하단 "⚠ 현장 이벤트"로 발생시킬 수 있습니다</td></tr>'}</tbody></table>
+    <div class="vla-grid"><div><h4>사족보행 순찰 점검 <small>열화상·진동 스캔 결과</small></h4><table class="vla-t"><thead><tr><th>시각</th><th>로봇</th><th>셀</th><th>건강도</th><th>편차</th><th>결과</th></tr></thead><tbody>
+      ${scans.slice(-8).reverse().map((x) => `<tr><td>${fclock(x.t)}</td><td>${escV(x.by)}</td><td>${escV(x.st)}</td><td>${x.health}%</td><td>${x.drift}%</td><td class="${x.result === '정상' ? 'p-done' : x.result === '점검 생략' ? '' : 'p-rejected'}">${escV(x.result)}</td></tr>`).join('') || '<tr><td colspan="6">아직 없음</td></tr>'}</tbody></table></div>
+    <div><h4>순찰 드론</h4><table class="vla-t"><thead><tr><th>드론</th><th>상태</th><th>배터리</th><th>순찰 지점</th><th>이벤트 확인</th><th>비행 시간</th></tr></thead><tbody>
+      ${s.drones.map((d) => `<tr><td><b class="uidc">${escV(d.uid ?? d.id)}</b></td><td class="ins" title="${escV(d.task)}">${escV(d.task)}</td><td>${Math.round(d.battery)}%</td><td>${d.visits ?? 0}곳</td><td>${d.evChecks ?? 0}회</td><td>${fdur(d.flight ?? 0)}</td></tr>`).join('') || '<tr><td colspan="6">드론 없음</td></tr>'}</tbody></table>
+      <h4>최근 드론 순찰</h4><table class="vla-t"><thead><tr><th>시각</th><th>드론</th><th>점검 지점</th><th>배터리</th></tr></thead><tbody>
+      ${(s.droneVisits ?? []).slice(-6).reverse().map((v) => `<tr><td>${fclock(v.t)}</td><td>${escV(v.by)}</td><td>${escV(v.where)}</td><td>${v.battery}%</td></tr>`).join('') || '<tr><td colspan="4">아직 없음</td></tr>'}</tbody></table></div></div>`;
+}
+const FC_VIEWS = { agent: ['🤖 자율 에이전트 · 진행 결과', '관찰 → 판단 → 실행 의사결정과 운영 지표', viewAgent], cell: ['🚦 셀·게이트 · 진행 결과', '셀별 생산·상태 누적과 분류·포장 게이트 판별 (혼류)', viewCells], sense: ['👁 현장 감지 · 진행 결과', '로봇 비전 AI 이벤트 감지·대응, 사족보행 순찰 점검, 순찰 드론', viewSense] };
+function openFacosView(k) { fcView = k; fcModal.classList.remove('hidden'); renderFacosView(true); }
+function renderFacosView(force) {
+  if (!fcView || fcModal.classList.contains('hidden')) return;
+  if (!force && fcBody.querySelector(':hover')) return;   // 마우스를 올려 둔 동안은 고정 (툴팁 유지)
+  if (modeKey !== 'dark') { fcModal.classList.add('hidden'); return; }
+  const [t, sub, fn] = FC_VIEWS[fcView];
+  fcTitle.innerHTML = `${t} <small>FACOS · ${sub}</small>`;
+  fcBody.innerHTML = fn();
+}
+document.getElementById('closeFacos').addEventListener('click', () => { fcModal.classList.add('hidden'); fcView = null; });
+fcModal.addEventListener('click', (e) => { if (e.target === fcModal) { fcModal.classList.add('hidden'); fcView = null; } });
 
 window.__twin = { epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };

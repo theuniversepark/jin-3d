@@ -3,6 +3,9 @@
 
 import { LOC, PALLET_RAW, RAW_CAP } from './sim.js';
 
+// 의사결정 분류 (제목으로 판정)
+export const AGENT_CAT = [['예지정비', /예지정비|정비 지시/], ['품질 보정', /보정|SPC/], ['투입 제어', /투입/], ['병목 최적화', /병목|사이클 복귀|표준 사이클/], ['자재 물류', /자재|공급|조달|배차/], ['AGV 충전', /충전/], ['에너지 절감', /절전/]];
+
 const fmtMin = (sec) => (sec >= 60 ? `${(sec / 60).toFixed(1)}분` : `${Math.round(sec)}초`);
 
 export class FactoryAgent {
@@ -11,7 +14,7 @@ export class FactoryAgent {
     this.m = sim.mode;
     this.t = 0;
     this.cool = new Map();
-    this.decisions = 0;
+    this.decisions = 0; this.byCat = {}; this.history = [];
     this.supplyWait = 0;
     this.boosted = null;
     this.disruptHandled = 0;
@@ -29,6 +32,10 @@ export class FactoryAgent {
 
   decide(level, title, body) {
     this.decisions++;
+    // FACOS 자율 에이전트 화면: 분류별 누적 + 최근 판단 근거
+    const cat = AGENT_CAT.find(([, re]) => re.test(title))?.[0] ?? '기타';
+    this.byCat[cat] = (this.byCat[cat] ?? 0) + 1;
+    this.history.push({ t: this.sim.time, level, cat, title, ...body }); if (this.history.length > 200) this.history.shift();
     this.sim.log(level, title, body);
   }
 

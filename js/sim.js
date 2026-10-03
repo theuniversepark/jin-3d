@@ -705,6 +705,10 @@ export class Simulation {
       role: sort ? { lead: `${P} 부품 키팅`, support: '작업물 고정 · ID 태그' } : { lead: `${P} ${tray ? '트레이' : '크레이트'} 포장`, support: '작업물 고정 · 라벨' },
     };
     st.gateCount ??= {}; st.gateCount[it.product] = (st.gateCount[it.product] ?? 0) + 1;
+    // 결정 기록 (FACOS 셀·게이트 화면): 최근 40건 + 로봇별 주 작업 횟수
+    st.leadCount ??= {}; for (const i of lead) { const u = st.robotUids?.[i] ?? `#${i + 1}`; st.leadCount[u] = (st.leadCount[u] ?? 0) + 1; }
+    (st.gateLog ??= []).push({ t: this.time, item: it.id, product: it.product, text: st.gate.text, lead: lead.map((i) => st.robotUids?.[i] ?? `#${i + 1}`) });
+    if (st.gateLog.length > 40) st.gateLog.shift();
   }
   // 게이트 결정에서 이 로봇이 주 작업을 맡는가 (게이트가 없는 셀은 모두 주 작업)
   isLead(st, i) { return !st.gate || !st.item || st.gate.id !== st.item.id || st.gate.lead.includes(i); }
@@ -995,8 +999,10 @@ export class Simulation {
   patrolScan(q, st) {
     st.lastScan = this.time;
     this.stats.scans = (this.stats.scans ?? 0) + 1;
-    if (st.request || st.state === 'DOWN' || st.state === 'MAINT') return;
+    const rec = (result) => { (this.scanLog ??= []).push({ t: this.time, by: q.id, st: st.name, health: Math.round(st.health), drift: Math.round(st.drift * 100), result }); if (this.scanLog.length > 60) this.scanLog.shift(); if (result !== '정상' && result !== '점검 생략') this.stats['scan_' + result] = (this.stats['scan_' + result] ?? 0) + 1; };
+    if (st.request || st.state === 'DOWN' || st.state === 'MAINT') return rec('점검 생략');
     if (st.health < this.mode.pmThreshold + this.mode.scanPm) {
+      rec('예지정비');
       if (this.requestTech(st, 'pm')) {
         this.log('plan', `${q.id} 순찰 이상 징후 · ${st.name}`, {
           obs: `열화상·진동 스캔 — 베어링 온도 상승, 진동 RMS 증가 (건강도 ${st.health.toFixed(0)}%)`,
@@ -1005,9 +1011,12 @@ export class Simulation {
         });
       }
     } else if (st.drift > 0.15 && !st.def.inspect) {
+      rec('재보정');
       if (this.selfCalibrate(st)) this.log('plan', `${q.id} 순찰 · ${st.name} 미세 편차`, { obs: `치수·토크 편차 드리프트 ${(st.drift * 100).toFixed(0)}%`, act: '셀 자율 재보정' });
-    }
+    } else rec('정상');
   }
+
+  droneLog(d, where) { (this.droneVisits ??= []).push({ t: this.time, by: d.id, where, battery: Math.round(d.battery) }); if (this.droneVisits.length > 40) this.droneVisits.shift(); }
 
   // ── 현장 이벤트: 발생 → 로봇 카메라 AI 감지 → 자율 대응 ─────────────────
   injectFieldEvent(type, x, z) {
@@ -1015,6 +1024,7 @@ export class Simulation {
     this.fieldEvents ??= []; this.fieldSeq = (this.fieldSeq ?? 0) + 1;
     const ev = { id: this.fieldSeq, type, label: E.label, cls: E.cls, severity: E.severity, x, z, t0: this.time, detected: false, cleared: false };
     this.fieldEvents.push(ev);
+    (this.fieldLog ??= []).push(ev); if (this.fieldLog.length > 50) this.fieldLog.shift();   // 처리 끝난 것도 남긴다 (FACOS 현장 감지 화면)
     return ev;
   }
   // 로봇 카메라 영상에서 처음 인식했을 때 (by: 이동체·로봇 이름, conf: 추론 신뢰도)

@@ -31,7 +31,7 @@ export class PatrolDrone {
     this.moving = false; this.charging = false;
     // 전체 비상정지·보호정지: 제자리 정지 비행 (착륙해 있으면 그대로)
     if (K?.estopAll || K?.pstopAll) { this.task = this.y > 0.5 ? '정지 비행 (비상정지)' : '대기 (비상정지)'; this.speedNow = 0; return; }
-    if (this.y > 0.5) this.battery = Math.max(0, this.battery - DRAIN * dt);
+    if (this.y > 0.5) { this.battery = Math.max(0, this.battery - DRAIN * dt); this.flight = (this.flight ?? 0) + dt; }
     // 대피 명령·배터리 부족 → 귀환
     if ((K?.evac || this.battery < 22) && this.mode !== 'return' && this.mode !== 'charge') { this.mode = 'return'; this.targetEv = null; }
     if (this.mode === 'charge') {
@@ -44,7 +44,7 @@ export class PatrolDrone {
     if (this.mode !== 'return') {
       const ev = (s.fieldEvents ?? []).find((e) => e.detected && !e.cleared);
       if (ev && this.targetEv !== ev) {
-        this.targetEv = ev; this.mode = 'event';
+        this.targetEv = ev; this.mode = 'event'; this.evChecks = (this.evChecks ?? 0) + 1; ev.droneBy = this.id;
         s.orch.step(ev.inc, 'exec', 'act', `${this.id} 상공 확인 비행 — 실시간 영상 관제 송출`);
         s.log('info', `${this.id} 현장 이벤트 상공 확인`, { obs: `${ev.label} · x ${ev.x.toFixed(1)}, z ${ev.z.toFixed(1)}`, act: '하방 카메라 영상 관제 화면 송출' });
       }
@@ -73,7 +73,7 @@ export class PatrolDrone {
         if (this.mode === 'patrol' && !climbing) {
           this.hover += dt; this.heading += 0.5 * dt;   // 제자리에서 천천히 돌며 내려다본다
           label = `순찰 · ${goal.name} 점검`;
-          if (this.hover >= HOVER) { this.hover = 0; this.wp++; }
+          if (this.hover >= HOVER) { this.hover = 0; this.wp++; this.visits = (this.visits ?? 0) + 1; s.droneLog?.(this, goal.name); }
         } else if (this.mode === 'event') { this.heading += 0.35 * dt; }
         else if (this.mode === 'return' && this.y <= 0.3) { this.mode = 'charge'; s.log('info', `${this.id} 착륙`, { obs: K?.evac ? '대피 명령' : `배터리 ${this.battery.toFixed(0)}%`, act: K?.evac ? '이착륙장 대기' : '무선 충전 시작' }); }
       }
