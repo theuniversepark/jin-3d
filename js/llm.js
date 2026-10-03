@@ -2,6 +2,7 @@
 // 입력창의 운영자 지시만 해석해 공정에 반영한다. 내장 해석기(js/dialog.js)가 먼저 처리하고,
 // 해석하지 못한 문장은 Claude가 연결되어 있을 때 Claude가 해석해 같은 조치(도구)로 돌려준다.
 import { parseInstruction, applyAction, DIALOG_EXAMPLES } from './dialog.js';
+import { evaluate } from './gate.js';
 
 const HISTORY = 12;
 
@@ -59,29 +60,53 @@ export class LLMController {
     this.pump();
   }
 
-  // 운영자 지시: 내장 해석기로 문장별 조치를 만들어 바로 반영하고, 해석하지 못한 문장은 Claude에 맡긴다
+  // 운영자 지시: 내장 해석기로 문장별 조치를 만들고, 조치마다 게이트(해석·대상·안전·실행 가능성·영향)를 거쳐
+  // 수행 또는 거절한다. 기록(dialogs)은 대화창 항목을 누르면 게이트 도식으로 보인다.
   chat(text) {
     if (!this.enabled) return false;
     const sim = this.sim;
     this.history.push({ t: fmt(sim.time), who: '운영자', text });
-    sim.log('chat', '운영자 지시', { obs: text });
+    const rec = { id: (this.dlgSeq = (this.dlgSeq ?? 0) + 1), t: sim.time, text, items: [] };
+    (this.dialogs ??= []).unshift(rec); if (this.dialogs.length > 40) this.dialogs.pop();
+    sim.log('chat', '운영자 지시', { obs: text, dlg: rec.id });
     const { actions, unknown } = parseInstruction(text, sim);
-    const results = actions.map((a) => ({ a, r: applyAction(a, sim, { agent: this.agent, onMix: this.onMix }) }));
-    const done = results.filter((x) => x.r.ok && !x.r.reply), replies = results.filter((x) => x.r.reply), failed = results.filter((x) => !x.r.ok);
-    if (results.length) {
-      this.agent.decisions += done.length;
-      sim.log('dialog', done.length ? '대화 지시 → 공정 반영' : replies.length ? '대화 지시 → 상태 응답' : '대화 지시 → 반영 안 됨', {
-        obs: [...new Set(actions.map((a) => a.clause))].join(' / '),
-        dec: '추론 기반 운영 위에 운영자 지시 적용 (내장 해석기)',
-        act: results.map((x) => `${x.r.ok ? '✓' : '✗'} ${x.r.text}`).join('\n'),
-      });
-      this.history.push({ t: fmt(sim.time), who: '에이전트', text: results.map((x) => x.r.text).join(' / ') });
+    for (const a of actions) this.gateAndRun(rec, a, '내장 해석기');
+    for (const c of unknown) {
+      if (this.available) rec.items.push({ clause: c, source: 'Agent', gate: { checks: [{ key: 'parse', status: 'warn', text: `"${c}" — 내장 해석기로 알 수 없어 Agent에 해석 요청` }], verdict: 'pending', summary: 'Agent 해석 대기' } });
+      else rec.items.push({ clause: c, source: '내장 해석기', gate: evaluate({ type: 'unknown', clause: c }, sim, this.agent) });
     }
-    if (unknown.length) {
-      if (this.available) this.request('운영자 지시 해석 (내장 해석기로 알 수 없는 문장)', true, unknown.join(' / '));
-      else sim.log('dialog', '대화 지시 → 해석하지 못함', { obs: unknown.join(' / '), dec: 'Agent 미연결 — 내장 해석기로 알 수 없는 문장', act: `예: ${DIALOG_EXAMPLES.join(' · ')}` });
-    }
+    this.logDialog(rec);
+    if (unknown.length && this.available) { this.pendingDialog = rec; this.request('운영자 지시 해석 (내장 해석기로 알 수 없는 문장)', true, unknown.join(' / ')); }
     return true;
+  }
+
+  // 게이트 판정 후 수행(실행 결과·명령 추적) 또는 거절
+  gateAndRun(rec, a, source) {
+    const sim = this.sim, gate = evaluate(a, sim, this.agent);
+    const item = { clause: a.clause, source, action: a, gate };
+    if (gate.verdict === 'approve' || gate.verdict === 'answer') {
+      const r = applyAction(a, sim, { agent: this.agent, onMix: this.onMix, by: source === 'Agent' ? 'Agent · 대화 지시 해석' : '운영자 대화 지시' });
+      item.result = r; item.cmd = r.cmd ?? null;
+      if (!r.ok) { gate.verdict = 'reject'; gate.reason = r.text; }
+      else if (gate.verdict === 'approve') this.agent.decisions++;
+    }
+    rec.items.push(item);
+    return item;
+  }
+
+  logDialog(rec, items = rec.items) {
+    const sim = this.sim;
+    if (!items.length) return;
+    const line = (it) => it.gate.verdict === 'approve' ? `✓ 수행 · ${it.result?.text ?? it.gate.summary}`
+      : it.gate.verdict === 'answer' ? `💬 ${it.result?.text ?? ''}` : it.gate.verdict === 'pending' ? `⏳ ${it.gate.summary} · "${it.clause}"`
+      : `✗ 거절 · ${it.gate.summary} — ${it.gate.reason}${it.gate.alt ? ` (${it.gate.alt})` : ''}`;
+    const nOk = items.filter((i) => i.gate.verdict === 'approve').length, nNo = items.filter((i) => i.gate.verdict === 'reject').length;
+    sim.log('dialog', `지시 게이트 · 수행 ${nOk} · 거절 ${nNo}${items.some((i) => i.gate.verdict === 'answer') ? ' · 응답' : ''}${items.some((i) => i.gate.verdict === 'pending') ? ' · Agent 해석 중' : ''}`, {
+      obs: [...new Set(items.map((i) => i.clause))].join(' / '),
+      dec: items.map((i) => i.gate.checks.map((c) => `${{ pass: '✓', warn: '⚠', fail: '✗' }[c.status]}${{ parse: '해석', target: '대상', safety: '안전', feasible: '가능', impact: '영향' }[c.key]}`).join(' ')).join(' | '),
+      act: items.map(line).join('\n'), dlg: rec.id,
+    });
+    this.history.push({ t: fmt(sim.time), who: '에이전트', text: items.map(line).join(' / ') });
   }
 
   // 대화 기반에서는 Claude를 주기적으로 부르지 않는다 (운영 판단은 추론 기반 에이전트)
@@ -142,6 +167,11 @@ export class LLMController {
       this.calls++; this.costUSD += out.costUSD; this.tokensIn += out.usage.input_tokens; this.tokensOut += out.usage.output_tokens;
       for (const a of out.actions) this.apply(a);
       for (const r of out.rejected) this.sim.log('warn', `Agent 제안 반려 · ${r.name}`, { obs: r.input.reason, dec: r.error });
+      const rec = this.pendingDialog; this.pendingDialog = null;
+      if (rec) {
+        for (const it of rec.items) if (it.gate.verdict === 'pending') { it.gate.verdict = rec.agentItems?.length ? 'delegated' : 'reject'; it.gate.reason = rec.agentItems?.length ? 'Agent가 해석해 아래 조치로 전환' : 'Agent도 공정 조치로 해석하지 못함'; it.gate.checks[0].text += rec.agentItems?.length ? ' → 해석됨' : ' → 조치 없음'; it.reply = out.text; }
+        this.logDialog(rec, rec.agentItems ?? []);
+      }
       if (out.text) {
         this.history.push({ t: fmt(this.sim.time), who: '에이전트', text: out.text });
         this.sim.log('llm', 'Agent 판단', { obs: trigger, dec: out.text, act: out.actions.length ? `조치 ${out.actions.length}건 실행` : '추가 조치 없음' });
@@ -149,6 +179,7 @@ export class LLMController {
       this.status = `${(out.latencyMs / 1000).toFixed(1)}초 응답 · 조치 ${out.actions.length}건`;
     } catch (e) {
       if (gen !== this.gen) return;
+      if (this.pendingDialog) { for (const it of this.pendingDialog.items) if (it.gate.verdict === 'pending') { it.gate.verdict = 'reject'; it.gate.reason = `Agent 호출 실패: ${e.message}`; } this.pendingDialog = null; }
       this.sim.log('alert', 'Agent 호출 실패', { obs: e.message, act: '추론 기반 에이전트로 계속 운영 · 지시를 더 짧게 다시 입력해 보세요' });
       this.status = `오류: ${e.message}`;
     } finally {
@@ -196,8 +227,10 @@ export class LLMController {
         break;
       // 대화 지시 해석 결과: 상위 명령·혼류 비율 (내장 해석기와 같은 경로로 실행)
       case 'issue_command': case 'set_mix': {
-        const r = applyAction(name === 'set_mix' ? { type: 'mix', mix: input.mix } : { type: 'command', code: input.code, target: input.target, arg: input.arg ?? null, clause: input.reason },
-          sim, { by: 'Agent · 대화 지시 해석', agent, onMix: this.onMix });
+        const a = name === 'set_mix' ? { type: 'mix', mix: input.mix, clause: input.reason } : { type: 'command', code: input.code, target: input.target, arg: input.arg ?? null, clause: input.reason };
+        const rec = this.pendingDialog;
+        if (rec) { rec.agentItems ??= []; rec.agentItems.push(this.gateAndRun(rec, a, 'Agent')); return; }
+        const r = applyAction(a, sim, { by: 'Agent · 대화 지시 해석', agent, onMix: this.onMix });
         if (!r.ok) { sim.log('warn', `Agent 조치 미적용 · ${r.text}`, { dec: input.reason }); return; }
         act = r.text;
         break;

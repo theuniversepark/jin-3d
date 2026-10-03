@@ -91,10 +91,12 @@ export class UI {
     const box = $('log');
     for (const l of fresh) {
       const d = document.createElement('div');
-      d.className = 'entry ' + l.level;
+      d.className = 'entry ' + l.level + (l.dlg ? ' dlg' : '');
+      if (l.dlg) { d.dataset.dlg = l.dlg; d.title = '누르면 지시 게이트(판정·수행/거절 과정) 도식'; }
       const row = (tag, txt) => (txt ? `<div class="r"><em>${tag}</em>${esc(txt)}</div>` : '');
       const tags = l.level === 'llm' ? ['지시', 'Agent', '결과'] : l.level === 'chat' ? ['운영자'] : l.level === 'dialog' ? ['지시', '해석', '반영'] : ['관찰', '판단', '실행'];
-      d.innerHTML = `<div class="h"><span>${esc(l.title)}</span><time>${fmtClock(l.t)}</time></div>${row(tags[0], l.obs)}${row(tags[1] ?? '판단', l.dec)}${row(tags[2] ?? '실행', l.act)}`;
+      const tg = l.level === 'dialog' ? ['지시', '게이트', '판정'] : tags;
+      d.innerHTML = `<div class="h"><span>${esc(l.title)}</span><time>${fmtClock(l.t)}</time></div>${row(tg[0], l.obs)}${row(tg[1] ?? '판단', l.dec)}${row(tg[2] ?? '실행', l.act)}${l.dlg && l.level === 'dialog' ? '<div class="g-hint">▸ 게이트 도식 보기</div>' : ''}`;
       box.prepend(d);
     }
     this.lastLogId = this.sim.logs[0].id;

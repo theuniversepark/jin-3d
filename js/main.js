@@ -14,6 +14,7 @@ import { LineDesigner } from './designer.js';
 import { renderConcept } from './concept.js';
 import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
 import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
+import { GateView } from './gateview.js';
 import { OrchView } from './orchview.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
@@ -75,6 +76,13 @@ const llm = new LLMController();
 ui.llm = llm;
 llm.onChange = () => { ui.renderEngine(); designer?.onLLMChange(); };
 // 대화 지시로 혼류 비율이 바뀌면 라인 설정·Zone 카드를 맞춘다 (재시작하지 않고 다음 투입부터 적용)
+// 대화창의 지시 항목을 누르면 게이트 도식 (판정 → 수행/거절)
+const gateView = new GateView(document.getElementById('gateModal'), document.getElementById('gateBody'), document.getElementById('gateSub'));
+document.getElementById('log').addEventListener('click', (e) => {
+  const d = e.target.closest('.entry[data-dlg]'); if (!d) return;
+  const rec = llm.dialogs?.find((r) => r.id === +d.dataset.dlg);
+  if (rec) gateView.show(rec, sim);
+});
 llm.onMix = (key) => { currentLine = lines.zone = { ...currentLine, mix: key }; saveLines(); renderZoneCard(); designer?.sync(); };
 let sim, agent;
 let modeKey = 'smart', speed = 3, running = true, labelsOn = true;
@@ -495,7 +503,7 @@ function frame() {
   view.update(rdt, running, speed);
   controls.update();
   uiTimer += rdt; screenTimer += rdt;
-  if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); updateAlarmButtons(); updateCmdUI(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
+  if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); gateView.tick(); updateAlarmButtons(); updateCmdUI(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
   robotTimer += rdt;
   if (view.telemetry && robotTimer > 0.12) { robotTimer = 0; ui.renderRobot(view.telemetry.snapshot(), hub.robotCounts(view.telemetry)); }
   if (view.telemetry && ui.robotMode) placeRobotPanel();

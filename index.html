@@ -145,6 +145,13 @@
     </div>
   </div>
 
+  <div class="modal hidden" id="gateModal">
+    <div class="modal-card wide">
+      <div class="modal-h"><h2>운영자 지시 게이트 <small id="gateSub"></small></h2><button data-close-gate>✕</button></div>
+      <p class="g-intro">대화 기반으로 입력한 지시는 조치마다 <b>해석 → 대상 확인 → 안전 규칙 → 실행 가능성 → 영향 평가</b>를 거쳐 판정됩니다. 통과하면 수행(명령 전송 → 셀 수신 확인 → 완료), 한 단계라도 막히면 거절하고 사유와 대안을 돌려줍니다.</p>
+      <div id="gateBody"></div>
+    </div>
+  </div>
   <div class="modal hidden" id="settings">
     <div class="modal-card small">
       <div class="modal-h"><h2>Agent API 키 설정 <small>키는 macOS 키체인으로 암호화되어 이 Mac에만 저장되며, 화면(렌더러)으로는 전달되지 않습니다.</small></h2><button id="closeSettings">✕</button></div>

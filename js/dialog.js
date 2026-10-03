@@ -94,7 +94,7 @@ export function applyAction(a, sim, { by = '운영자 대화 지시', onMix, age
       const av = K.availability(a.code, a.target, a.arg);
       if (!av.ok && av.hard) return { ok: false, text: `${C.label} → ${name(a.target)}: ${av.reason}` };
       const c = K.issue(a.code, a.target, a.arg, { by, why: a.clause });
-      return c ? { ok: true, text: `${C.icon} ${K.label(c)} → ${name(a.target)} (명령 #${c.id})` } : { ok: false, text: `${C.label}: 이 대상에는 쓸 수 없습니다` };
+      return c ? { ok: true, cmd: c, text: `${C.icon} ${K.label(c)} → ${name(a.target)} (명령 #${c.id})` } : { ok: false, text: `${C.label}: 이 대상에는 쓸 수 없습니다` };
     }
     case 'mix': {
       if (!sim.zone) return { ok: false, text: '혼류 비율은 정밀조립Zone 라인에서만 바꿀 수 있습니다' };

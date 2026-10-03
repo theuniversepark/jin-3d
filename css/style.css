@@ -517,3 +517,43 @@ table.rb-j .tq i { display: block; height: 100%; }
 
 .entry.dialog { border-left-color: #2bd4c6; background: rgba(43, 212, 198, 0.08); }
 .entry.dialog .r { white-space: pre-line; }
+
+/* 운영자 지시 게이트: 대화창 항목(누르면 도식) · 게이트 도식 모달 */
+:root { --g-pass: 61, 220, 132; --g-warn: 245, 184, 46; --g-fail: 255, 90, 90; --g-pend: 90, 169, 255; }
+.entry.dlg { cursor: pointer; }
+.entry.dlg:hover { filter: brightness(1.18); }
+.g-hint { margin-top: 4px; font-size: 10.5px; color: #7fe0d6; }
+.g-intro { margin: -4px 0 10px; font-size: 12px; color: var(--ink2); line-height: 1.5; }
+.g-legend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 11px; margin-bottom: 8px; color: var(--ink2); }
+.g-legend .pass { color: rgb(var(--g-pass)); } .g-legend .warn { color: rgb(var(--g-warn)); } .g-legend .fail { color: rgb(var(--g-fail)); } .g-legend .skip { color: var(--muted); } .g-legend .cur { color: rgb(var(--g-pend)); }
+.g-row { border: 1px solid var(--line); border-left: 4px solid var(--muted); border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; background: rgba(255, 255, 255, 0.02); }
+.g-row.v-pass { border-left-color: rgb(var(--g-pass)); } .g-row.v-fail { border-left-color: rgb(var(--g-fail)); } .g-row.v-pending { border-left-color: rgb(var(--g-pend)); }
+.g-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.g-head small { color: var(--muted); margin-left: auto; }
+.g-no { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(255, 255, 255, 0.1); font-size: 11px; font-weight: 700; }
+.g-v { font-style: normal; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 6px; }
+.g-v.pass { background: rgba(var(--g-pass), 0.2); color: rgb(var(--g-pass)); } .g-v.fail { background: rgba(var(--g-fail), 0.22); color: #ff9a9a; } .g-v.pending { background: rgba(var(--g-pend), 0.2); color: #9fd0ff; }
+.g-svg { overflow-x: auto; margin: 6px 0; }
+.gsvg { min-width: 900px; display: block; }
+.gsvg .gn rect { fill: rgba(16, 22, 30, 0.95); stroke: var(--muted); stroke-width: 1.3; }
+.gsvg .gn.s-pass rect { stroke: rgb(var(--g-pass)); fill: rgba(var(--g-pass), 0.08); }
+.gsvg .gn.s-warn rect { stroke: rgb(var(--g-warn)); fill: rgba(var(--g-warn), 0.1); }
+.gsvg .gn.s-fail rect { stroke: rgb(var(--g-fail)); fill: rgba(var(--g-fail), 0.12); stroke-width: 2; }
+.gsvg .gn.s-pending rect, .gsvg .gn.s-cur rect { stroke: rgb(var(--g-pend)); fill: rgba(var(--g-pend), 0.1); stroke-dasharray: 4 3; }
+.gsvg .gn.s-skip { opacity: 0.38; } .gsvg .gn.s-skip rect { stroke-dasharray: 3 3; }
+.gsvg .gl { fill: var(--ink); font-size: 11px; font-weight: 700; }
+.gsvg .gt { fill: var(--ink2); font-size: 10px; }
+.gsvg .gb { fill: var(--muted); font-size: 10.5px; font-weight: 700; } .gsvg .gb.on { fill: rgb(var(--g-pass)); } .gsvg .gb.bad { fill: #ff9a9a; }
+.gsvg .ga { fill: none; stroke-width: 1.6; }
+.gsvg .ga.on { stroke: rgb(var(--g-pass)); } .gsvg .ga.fail { stroke: rgb(var(--g-fail)); } .gsvg .ga.off { stroke: rgba(255, 255, 255, 0.18); stroke-dasharray: 4 3; } .gsvg .ga.pend { stroke: rgb(var(--g-pend)); stroke-dasharray: 5 3; }
+.gsvg .gm.on { fill: rgb(var(--g-pass)); } .gsvg .gm.fail { fill: rgb(var(--g-fail)); } .gsvg .gm.off { fill: rgba(255, 255, 255, 0.25); } .gsvg .gm.pend { fill: rgb(var(--g-pend)); }
+.gsvg .gd path { stroke-width: 2; fill: rgba(16, 22, 30, 0.95); stroke: var(--muted); }
+.gsvg .gd.s-pass path { stroke: rgb(var(--g-pass)); fill: rgba(var(--g-pass), 0.14); } .gsvg .gd.s-fail path { stroke: rgb(var(--g-fail)); fill: rgba(var(--g-fail), 0.16); } .gsvg .gd.s-pending path { stroke: rgb(var(--g-pend)); }
+.gsvg .gn.s-cur rect { animation: g-pulse 1s ease-in-out infinite; }
+@keyframes g-pulse { 50% { stroke-width: 2.6; } }
+@media (prefers-reduced-motion: reduce) { .gsvg .gn.s-cur rect { animation: none; } }
+.g-detail { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr; gap: 3px; font-size: 11.5px; }
+.g-detail li { display: grid; grid-template-columns: 110px 1fr; gap: 8px; padding: 3px 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.03); }
+.g-detail li b { font-weight: 700; } .g-detail li span { color: var(--ink2); min-width: 0; overflow-wrap: anywhere; }
+.g-detail li.s-pass b { color: rgb(var(--g-pass)); } .g-detail li.s-warn b { color: rgb(var(--g-warn)); } .g-detail li.s-fail b { color: #ff9a9a; } .g-detail li.s-skip { opacity: 0.5; } .g-detail li.s-pending b { color: #9fd0ff; }
+.g-detail .cp { margin-right: 4px; }
