@@ -50,6 +50,26 @@ function listEpisodes(res) {
   return send(res, 200, { dir: base, robots });
 }
 
+// AIOS 운영 데이터 묶음 저장소 — POST /api/aios?id=run-..._aios_0001 (본문: 운영 데이터셋 zip) → data/aios/<id>.zip
+async function saveAios(req, res, url) {
+  const id = url.searchParams.get('id') ?? '';
+  if (!SAFE.test(id)) return send(res, 400, { error: 'id 형식 오류' });
+  try {
+    const buf = await readRaw(req, 16 * 1024 * 1024);
+    const dir = path.join(DATA_DIR(), 'aios');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${id}.zip`), buf);
+    return send(res, 200, { ok: true, bytes: buf.length });
+  } catch (e) { return send(res, 400, { error: e.message }); }
+}
+// GET /api/aios → 저장된 운영 데이터 묶음 수·용량
+function listAios(res) {
+  const dir = path.join(DATA_DIR(), 'aios');
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.zip')); } catch { /* 아직 없음 */ }
+  return send(res, 200, { dir, count: files.length, bytes: files.reduce((a, f) => a + fs.statSync(path.join(dir, f)).size, 0) });
+}
+
 // 키를 바꾸면 클라이언트를 새로 만든다. 빈 값이면 환경변수(ANTHROPIC_API_KEY 등)로 되돌아간다.
 export function setApiKey(key) {
   if (key) client = new Anthropic({ apiKey: key });
@@ -120,9 +140,11 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
   await startMqtt();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    if (url.pathname === '/api/status') return send(res, 200, { llm: hasApiKey(), model: MODEL, episodes: true });
+    if (url.pathname === '/api/status') return send(res, 200, { llm: hasApiKey(), model: MODEL, episodes: true, aios: true });
     if (url.pathname === '/api/episodes' && req.method === 'POST') return saveEpisode(req, res, url);
     if (url.pathname === '/api/episodes') return listEpisodes(res);
+    if (url.pathname === '/api/aios' && req.method === 'POST') return saveAios(req, res, url);
+    if (url.pathname === '/api/aios') return listAios(res);
     if (url.pathname === '/api/agent' && req.method === 'POST') return handleAgent(req, res);
     if (url.pathname === '/api/line' && req.method === 'POST') return handleLine(req, res);
     // OPC UA PubSub(JSON) over MQTT — 내장 브로커로 발행

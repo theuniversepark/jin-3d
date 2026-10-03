@@ -592,3 +592,11 @@ table.rb-j .tq i { display: block; height: 100%; }
 /* 상단: 피지컬AI 버튼 옆 VLA 학습 */
 .topbar .vla-top { border: 1px solid #b89bff; background: rgba(184, 155, 255, 0.16); color: #e2d6ff; font-weight: 700; padding: 6px 12px; border-radius: 10px; white-space: nowrap; }
 .topbar .vla-top:hover { background: rgba(184, 155, 255, 0.3); }
+
+/* AIOS 공장 운영 AI */
+.topbar .aios-top { border-color: #3fd0c9; background: rgba(63, 208, 201, 0.14); color: #c4f5f2; margin-left: -4px; margin-right: 4px; }
+.topbar .aios-top:hover { background: rgba(63, 208, 201, 0.28); }
+.vs.aios.on { border-color: #3fd0c9; background: rgba(63, 208, 201, 0.12); box-shadow: 0 0 0 1px rgba(63, 208, 201, 0.35); }
+#aiosBody .vla-actions button { border-color: #3fd0c9; background: rgba(63, 208, 201, 0.16); }
+#aiosBody .vla-grid { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+#aiosBody .vla-grid h4:not(:first-child) { margin-top: 14px; }

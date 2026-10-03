@@ -164,7 +164,7 @@ export class FactoryAgent {
       const c = st.def.cycle * m.cycleMul * st.speedMul * (st.def.share ?? 1);
       if (c > bc) { bc = c; bott = st; }
     }
-    const target = +(bc * 0.98).toFixed(2);
+    const target = +(bc * (m.releaseMargin ?? 0.98)).toFixed(2);
     if (Math.abs(target - s.releaseInterval) > 0.15) {
       s.releaseInterval = target;
       if (this.ready('release', 30)) {
@@ -198,7 +198,7 @@ export class FactoryAgent {
     for (const st of s.processing) {
       if (st.def.inspect) continue;
       const q = s.queueLen(st);
-      if (st.ema > 0.85 && q >= 3 && st.ema > cu && st.health > 60) { cu = st.ema; cand = st; }
+      if (st.ema > (m.boostUtil ?? 0.85) && q >= (m.boostQueue ?? 3) && st.ema > cu && st.health > 60) { cu = st.ema; cand = st; }
     }
     if (this.boosted && (this.boosted.health < 55 || (cand && cand !== this.boosted))) {
       const b = this.boosted;
@@ -208,11 +208,11 @@ export class FactoryAgent {
       });
     }
     if (cand && cand !== this.boosted) {
-      cand.speedMul = 0.9; this.boosted = cand;
+      cand.speedMul = m.boostMul ?? 0.9; this.boosted = cand;
       this.decide('act', `병목 해소: ${cand.name} 사이클 최적화`, {
         obs: `이용률 ${(cand.ema * 100).toFixed(0)}% · 대기열 ${s.queueLen(cand)}개`,
         dec: '라인 산출은 병목이 결정 — 건강도 여유 있음, 마모 +30% 감수',
-        act: '공정 파라미터 최적화로 사이클 10% 단축',
+        act: `공정 파라미터 최적화로 사이클 ${Math.round((1 - (m.boostMul ?? 0.9)) * 100)}% 단축`,
       });
     }
   }
@@ -235,7 +235,7 @@ export class FactoryAgent {
   // ── 에너지 ─────────────────
   energy() {
     for (const st of this.sim.processing) {
-      if (st.state === 'STARVED' && st.starvedFor > 25 && !st.powerSave) {
+      if (st.state === 'STARVED' && st.starvedFor > (this.m.ecoWait ?? 25) && !st.powerSave) {
         st.powerSave = true;
         if (this.sim.time > 120 && this.ready('eco' + st.id, 120)) {
           this.decide('info', `${st.name} 절전 모드`, {

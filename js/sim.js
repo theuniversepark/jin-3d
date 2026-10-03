@@ -3,6 +3,7 @@ import { CommandCenter } from './commands.js';
 import { TruckYard, planForklift } from './shipping.js';
 import { PatrolDrone } from './drone.js';
 import { VLAPipeline } from './vla.js';
+import { AIOSPipeline } from './aios.js';
 import { Orchestrator } from './orchestrator.js';
 import { AMMR, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
@@ -205,7 +206,8 @@ function gauss(rand) {
 
 export class Simulation {
   constructor(modeKey = 'smart', seed = 12345, opts = {}) {
-    const m = (this.mode = MODES[modeKey]);
+    const m = (this.mode = { ...MODES[modeKey] });   // 시뮬레이션마다 복사 — AIOS가 운영 정책 값을 바꿔도 다른 시뮬레이션에 번지지 않게
+    this.twin = !!opts.twin;                          // AIOS 트윈 검증용 시뮬레이션
     this.rand = mulberry32(seed);
     this.quiet = !!opts.quiet;
     this.time = 0;
@@ -322,6 +324,7 @@ export class Simulation {
     // 피지컬AI: VLA 셀(6축 협동·산업용 로봇, AMMR)과 VLA 학습·배포 파이프라인
     for (const st of this.processing) st.vlaCell = m.key === 'dark' && ['cobot', 'articulated', 'ammr'].includes(st.def.robot?.kind);
     new VLAPipeline(this);
+    new AIOSPipeline(this);   // 공장 운영 AI (데이터 수집 → 학습 → 트윈 검증 → 오케스트레이터 배포)
   }
 
   // 설비·로봇 고유 ID — 현황판·라벨·텔레메트리·데이터 연동에 같은 ID를 쓴다 (사람은 제외)
@@ -427,7 +430,9 @@ export class Simulation {
     const cs = this.carriers;
     if (!cs.length) return;
     // 투입 스테이션에 빈 AMR이 없으면 대기열에서 가장 가까운 AMR을 부른다
-    if (!this.releaseHold && !cs.some((c) => c.state === 'toSrc' || c.state === 'atSrc')) {
+    // 선행 배차(amrStage): 운영 정책(AIOS)이 2 이상이면 다음 AMR을 미리 불러 진입로 끝에서 대기시킨다
+    const stage = this.mode.amrStage ?? 1, coming = cs.filter((c) => c.state === 'toSrc' || c.state === 'docking' || c.state === 'atSrc').length;
+    if (!this.releaseHold && coming < stage) {
       const c = cs.filter((c) => c.state === 'park').sort((a, b) => a.x - b.x)[0];
       if (c) {
         c.state = 'toSrc'; c.slot = null;
@@ -435,7 +440,8 @@ export class Simulation {
         const via = amrDockVia(c), gate = via.pop(), out = this.stations[0].out;
         c.setTask('투입 위치로', [
           { go: { ...gate, aisle: 'F' }, via },
-          { until: () => !out.items.length || out.items[out.items.length - 1].s > 3.4 },
+          { until: () => (!out.items.length || out.items[out.items.length - 1].s > 3.4) && !cs.some((k) => k !== c && (k.state === 'docking' || k.state === 'atSrc')) },
+          { do: () => { c.state = 'docking'; } },
           { go: AMR_DOCK, via: [] },
           { do: () => { c.state = 'atSrc'; c.heading = Math.PI / 2; } },
         ]);
@@ -539,6 +545,7 @@ export class Simulation {
   }
 
   log(level, title, body = {}) {
+    this.aios?.onLog(level, title, body);   // 운영 의사결정 → AIOS 데이터
     if (this.quiet) return;
     this.logs.unshift({ id: ++this.logSeq, t: this.time, level, title, ...body });
     if (this.logs.length > 160) this.logs.pop();
@@ -590,6 +597,7 @@ export class Simulation {
     // 출하: 트럭은 건물 밖이라 계속 움직이고, 지게차는 Zone 명령(정지·감속·대피)을 따른다
     this.yard.update(dt);
     this.vla?.update(dt);
+    this.aios?.update(dt);
     for (const d of this.drones) d.update(dt);
     if (mdt > 0) for (const f of this.forklifts) { if (f.idle && !K.evac) planForklift(this, f); f.update(mdt); }
     if (mdt > 0) {

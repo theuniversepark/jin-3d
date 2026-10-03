@@ -16,6 +16,8 @@ import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
 import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
 import { GateView } from './gateview.js';
 import { EpisodeRecorder, buildEpisodesZip, EP_HZ, SAMPLE } from './vla.js';
+import { buildAiosZip, HEADS as AIOS_HEADS, FEATURES as AIOS_FEATURES, SAMPLE_S as AIOS_SAMPLE_S, CHUNK as AIOS_CHUNK, TRAIN_MIN as AIOS_TRAIN_MIN } from './aios.js';
+import { zipStore } from './aasx.js';
 import { OrchView } from './orchview.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
@@ -216,7 +218,7 @@ function updateZoneCard() {
   const g = sim.stats.goodBy;
   const amr = document.getElementById('zcAmr');
   if (amr) amr.innerHTML = `양품 도어트림 <b>${g.doortrim ?? 0}</b> · e-axle <b>${g.eaxle ?? 0}</b> · 구분 적재 <b>${sim.fgBy.doortrim}</b> / <b>${sim.fgBy.eaxle}</b>`
-    + (sim.carriers.length ? `<br>🛻 AMR ${sim.carriers.length}대 · 적재 운반 <b>${n('line')}</b> · 빈차 복귀 <b>${n('return')}</b> · 대기 <b>${n('park') + n('toSrc') + n('atSrc')}</b>` : '<br>셀 간 물류: 고정 컨베이어 (레거시)');
+    + (sim.carriers.length ? `<br>🛻 AMR ${sim.carriers.length}대 · 적재 운반 <b>${n('line')}</b> · 빈차 복귀 <b>${n('return')}</b> · 대기 <b>${n('park') + n('toSrc') + n('docking') + n('atSrc')}</b>` : '<br>셀 간 물류: 고정 컨베이어 (레거시)');
 }
 zoneCard.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-slot]');
@@ -583,7 +585,7 @@ function frame() {
   if (view.telemetry && ui.robotMode) placeRobotPanel();
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought); }
   epRec.update();
-  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); }
+  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); renderAios(); aiosUpload(); }
   if (!glLost) {
     try {
       camWall.update(rdt);
@@ -694,6 +696,72 @@ function renderVla(force) {
       <div><h4>로봇별 에피소드 <small>${shared ? '공유 페이지에서는 다운로드할 수 없습니다 (맥 앱·웹 버전에서)' : '⬇ 전체 = 보관 에피소드(최근 30개), ⬇ 1개 = 최근 에피소드 — zip(메타·스텝 JSONL·카메라 JPEG)'}</small></h4>
         <table class="vla-t"><thead><tr><th>ID</th><th>셀 · 로봇</th><th>모델</th><th>보관 / 누적</th><th>성공률</th><th>최근 지시</th><th></th></tr></thead><tbody>
         ${robots.map((R) => { const eps = epRec.list(R.uid), st = P.robotStats.get(R.uid), le = eps.at(-1), dis = !eps.length || shared ? 'disabled' : ''; return `<tr><td><b class="uidc">${R.uid}</b></td><td>${escV(R.st.name.replace(/\s*\(.*\)$/, ''))} · ${kindKo(R.r.kind)}</td><td>${P.versionOf(R.uid)}</td><td>${eps.length} / ${st?.n ?? 0}</td><td>${st?.n ? Math.round((st.ok / st.n) * 100) + '%' : '-'}</td><td class="ins" title="${escV(le?.instruction)}">${escV(le?.instruction ?? '-')}</td><td class="dl"><button type="button" data-dl="${R.uid}" ${dis}>⬇ 전체</button><button type="button" data-dl="${R.uid}" data-one="1" ${dis}>⬇ 1개</button></td></tr>`; }).join('')}</tbody></table></div>
+    </div>`;
+}
+
+// ── AIOS 공장 운영 AI 창 ─────────────────
+const aiosModal = document.getElementById('aiosModal'), aiosBody = document.getElementById('aiosBody');
+const aiosUp = { n: 0, bytes: 0, busy: false };
+let aiosDir = null;
+document.getElementById('btnAios').addEventListener('click', () => {
+  aiosModal.classList.remove('hidden'); renderAios(true);
+  if (epRec.server) fetch('/api/aios').then((r) => r.json()).then((j) => { aiosDir = j; }).catch(() => {});
+});
+document.getElementById('closeAios').addEventListener('click', () => aiosModal.classList.add('hidden'));
+aiosModal.addEventListener('click', (e) => {
+  if (e.target === aiosModal) return aiosModal.classList.add('hidden');
+  const P = sim.aios;
+  if (e.target.closest('[data-aios-train]')) { if (!P.startTraining(true)) sim.log('info', 'AIOS 학습 요청 보류', { obs: P.job ? '이미 학습·배포 진행 중' : '새 운영 샘플이 30개(5분) 이상 필요' }); renderAios(true); return; }
+  const b = e.target.closest('[data-aios-dl]'); if (!b || b.disabled) return;
+  const last = P.samples.at(-1)?.t ?? 0, range = b.dataset.aiosDl === 'recent' ? [last - 600, last] : null;
+  const zip = buildAiosZip(P, zipStore, (t) => hub.iso(t), epRec.runId, range);
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([zip], { type: 'application/zip' }));
+  a.download = `AIOS_ops_${range ? 'recent10m' : `${P.samples.length}samples`}_${P.version}_${epRec.runId}.zip`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+});
+// 10분 묶음이 생길 때마다 서버(data/aios/)에 올린다
+function aiosUpload() {
+  const P = sim.aios; if (!P?.on || !epRec.server || aiosUp.busy) return;
+  const c = P.chunks.find((x) => !x.up); if (!c) return;
+  c.up = true; aiosUp.busy = true;
+  const zip = buildAiosZip(P, zipStore, (t) => hub.iso(t), epRec.runId, [c.t - (AIOS_CHUNK - 1) * AIOS_SAMPLE_S, c.t]);
+  fetch(`/api/aios?id=${epRec.runId}_${c.id}`, { method: 'POST', body: zip }).then((r) => { if (r.ok) { aiosUp.n++; aiosUp.bytes += zip.length; } })
+    .catch(() => {}).finally(() => { aiosUp.busy = false; });
+}
+function renderAios(force) {
+  if (aiosModal.classList.contains('hidden') && !force) return;
+  const P = sim.aios;
+  if (!P?.on) { aiosBody.innerHTML = '<p class="vla-note">AIOS는 피지컬AI 단계에서 동작합니다.</p>'; return; }
+  if (aiosBody.querySelector('button:hover')) return;
+  const j = P.job, act = j?.phase ?? 'idle', last = P.jobs.find((x) => x.result), need = AIOS_TRAIN_MIN * P.backoff;
+  const tw = j?.phase === 'twin' && j.twin?.total ? Math.round((j.twin.steps / j.twin.total) * 100) : null;
+  const stage = (ic, title, val, sub, on) => `<div class="vs aios ${on ? 'on' : ''}"><i>${ic}</i><b>${title}</b><span>${val}</span><small>${sub}</small></div>`;
+  const ph = { train: (x) => `학습 ${x.epoch}/${x.epochs}`, twin: () => '트윈 검증', shadow: () => '섀도 모드', verify: () => '적용 · 효과 확인', done: () => '배포 완료', rejected: () => '배포 안 함', rollback: () => '롤백' };
+  const S = P.samples.slice(-8).reverse(), shared = !!window.JIN3D_SHARED;
+  const dirTxt = `…/${(aiosDir?.dir ?? 'data/aios').split(/[\\/]/).slice(-2).join('/')}/*.zip`;
+  aiosBody.innerHTML = `
+    <div class="vla-flow">
+      ${stage('🏭', '1 현장 데이터 수집', `샘플 ${P.total}개 · ${AIOS_SAMPLE_S}초 주기`, '생산·설비·물류(AMR·AGV)·에너지·품질 + 인시던트·운영 의사결정', true)}<b class="va">›</b>
+      ${stage('🧹', '2 AI-ready 정제', `특징 ${AIOS_FEATURES.length}종 · 셀 ${sim.processing.length}×5`, '고정 스키마 · UTC 동기 · 보상 라벨 · 전이(상태·행동·보상)', true)}<b class="va">›</b>
+      ${stage('📚', '3 운영 데이터셋', `전이 ${Math.max(0, P.samples.length - 1)} · 이벤트 ${P.events.length}`, `의사결정 ${P.decisions.length}건 · 10분 묶음 ${P.chunks.length}개`, false)}<b class="va">›</b>
+      ${stage('🗄', '4 서버 저장', epRec.server ? `${aiosUp.n}묶음 · ${(aiosUp.bytes / 1048576).toFixed(1)}MB` : '브라우저 보관', epRec.server ? escV(dirTxt) : '서버 없음 (웹·공유) — 파일로 내려받아 보관', aiosUp.n > 0)}<b class="va">›</b>
+      ${stage('🧠', '5 AIOS 학습', act === 'train' ? `에폭 ${j.epoch}/${j.epochs} · loss ${j.loss.at(-1) ?? '-'}` : `다음 학습까지 ${Math.max(0, need - P.newSamples)}개`, act === 'train' ? `${j.label} · 정책 헤드 ${AIOS_HEADS.length}개` : `새 샘플 ${P.newSamples}개 누적 (30분마다)`, act === 'train')}<b class="va">›</b>
+      ${stage('🧪', '6 트윈 검증', tw != null ? `시뮬레이션 ${tw}%` : last ? `UPH ${last.result.uphCur} → ${last.result.uphCand}` : '-', tw != null ? '현재 vs 후보 정책 · 20분 × 2' : last ? `${last.label} · 생산 ${last.result.gain >= 0 ? '+' : ''}${last.result.gain}% · 에너지 ${last.result.eGain >= 0 ? '+' : ''}${last.result.eGain}%` : '디지털트윈에서 현재·후보 정책 비교', act === 'twin')}<b class="va">›</b>
+      ${stage('🚀', '7 오케스트레이터 배포', `AIOS ${P.version}`, act === 'shadow' ? `${j.label} 섀도 모드 (추천만)` : act === 'verify' ? `${j.label} 적용 · 실측 효과 확인 중` : '운영 정책 → 피지컬AI 오케스트레이터', act === 'shadow' || act === 'verify')}
+    </div>
+    <div class="vla-actions"><button type="button" data-aios-train ${j ? 'disabled' : ''}>🧠 지금 학습 시작</button>
+      <button type="button" data-aios-dl="all" ${shared || !P.samples.length ? 'disabled' : ''}>⬇ 운영 데이터셋 (보관 ${Math.round(P.samples.length * AIOS_SAMPLE_S / 60)}분)</button>
+      <button type="button" data-aios-dl="recent" ${shared || !P.samples.length ? 'disabled' : ''}>⬇ 최근 10분</button>
+      <span class="vla-note">${shared ? '공유 페이지에서는 다운로드할 수 없습니다 (맥 앱·웹 버전에서). ' : ''}학습은 데이터 기반 정책 탐색(시뮬레이션), 트윈 검증·배포 후 효과는 실제 시뮬레이션 측정값입니다.</span></div>
+    <div class="vla-grid">
+      <div><h4>운영 정책 (오케스트레이터 적용 값)</h4><table class="vla-t"><thead><tr><th>정책 헤드</th><th>v1.0</th><th>현재 ${P.version}</th><th>의미</th></tr></thead><tbody>
+        ${AIOS_HEADS.map((h) => `<tr><td><b>${h.label}</b></td><td>${h.base}${h.unit}</td><td class="${P.policy[h.key] !== h.base ? 'p-done' : ''}">${P.policy[h.key]}${h.unit}</td><td class="ins" title="${escV(h.desc)}">${escV(h.desc)}</td></tr>`).join('')}</tbody></table>
+        <h4>학습·배포 이력</h4><table class="vla-t"><thead><tr><th>모델</th><th>상태</th><th>샘플</th><th>트윈 UPH</th><th>실측 UPH</th><th>학습 근거</th></tr></thead><tbody>
+        ${P.jobs.map((x) => `<tr><td><b>${x.label}</b></td><td class="p-${x.phase === 'shadow' || x.phase === 'verify' || x.phase === 'twin' ? 'train' : x.phase === 'rollback' ? 'rejected' : x.phase}">${ph[x.phase](x)}</td><td>${x.samples}</td><td>${x.result ? `${x.result.uphCur}→${x.result.uphCand}` : '-'}</td><td>${x.after ? `${x.after.before}→${x.after.uph}` : '-'}</td><td class="ins" title="${escV(x.why.join(' · ') || x.reason || '')}">${escV(x.why.join(' · ') || x.reason || '-')}</td></tr>`).join('')}
+        <tr><td><b>v1.0</b></td><td>규칙 기반 초기 정책</td><td>-</td><td>-</td><td>-</td><td class="ins">-</td></tr></tbody></table></div>
+      <div><h4>최근 운영 데이터 <small>10초 샘플 · AI-ready 시계열 (UTC)</small></h4><table class="vla-t"><thead><tr><th>시각</th><th>UPH</th><th>OEE</th><th>재공</th><th>전력</th><th>AMR 대기</th><th>열린 인시던트</th><th>보상</th></tr></thead><tbody>
+        ${S.map((x) => `<tr><td>${hub.iso(x.t).slice(11, 19)}</td><td>${x.uph}</td><td>${x.oee}%</td><td>${x.wip}</td><td>${x.power_kw}kW</td><td>${x.src_noamr_s}s</td><td>${x.incidents_open}</td><td>${x.reward}</td></tr>`).join('') || '<tr><td colspan="8">수집 대기 중…</td></tr>'}</tbody></table>
+        <h4>최근 인시던트 <small>감지 → 판단 → 완료 시간</small></h4><table class="vla-t"><thead><tr><th>시각</th><th>유형</th><th>내용</th><th>판단</th><th>완료</th></tr></thead><tbody>
+        ${P.events.slice(-6).reverse().map((e) => `<tr><td>${hub.iso(e.t).slice(11, 19)}</td><td>${escV(e.type)}</td><td class="ins" title="${escV(e.title)}">${escV(e.title)}</td><td>${e.decide_s != null ? `${e.decide_s}s` : '셀 자체'}</td><td>${e.resolve_s}s</td></tr>`).join('') || '<tr><td colspan="5">아직 없음</td></tr>'}</tbody></table></div>
     </div>`;
 }
 

@@ -40,7 +40,7 @@ export function equipmentList(sim, view = null) {
     if (halted && !m.charging) return add(m.uid, name, group, '정지 (명령)', 'stop');
     const r = fn(m); add(m.uid, name, group, ...r);
   };
-  for (const c of sim.carriers) mover(c, `운반 ${c.id}`, '물류', (m) => m.blockedOn ? ['진로 대기', 'idle'] : ({ line: ['운반 중', 'run'], return: ['빈차 복귀', 'run'], toSrc: ['투입 이동', 'run'], atSrc: ['적재 대기', 'idle'], park: ['대기', 'idle'] })[m.state] ?? ['대기', 'idle']);
+  for (const c of sim.carriers) mover(c, `운반 ${c.id}`, '물류', (m) => m.blockedOn ? ['진로 대기', 'idle'] : ({ line: ['운반 중', 'run'], return: ['빈차 복귀', 'run'], toSrc: ['투입 이동', 'run'], docking: ['투입 진입', 'run'], atSrc: ['적재 대기', 'idle'], park: ['대기', 'idle'] })[m.state] ?? ['대기', 'idle']);
   const vehicle = (m) => m.charging ? [`충전 ${m.battery.toFixed(0)}%`, 'charge'] : m.task ? [short(m.task), 'run'] : ['대기', 'idle'];
   for (const v of sim.vehicles) mover(v, v.kind === 'agv' ? `${v.id}` : `${v.id} (유인)`, '물류', vehicle);
   for (const f of sim.forklifts) mover(f, f.auto ? '출하 자율 지게차' : '출하 지게차 (유인)', '물류', vehicle);

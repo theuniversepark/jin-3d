@@ -28,8 +28,8 @@ export class Orchestrator {
     this.sim = sim; this.incidents = []; this.seq = 0; this.jobs = [];
   }
   // 오케스트레이터 이름·판단 지연 (단계별): 레거시는 작업반장이 직접 확인하고 판단한다
-  get name() { return { traditional: '작업반장 (수동 판단)', smart: '공장 오케스트레이터 (MES)', dark: '피지컬AI 오케스트레이터' }[this.sim.mode.key]; }
-  get latency() { return { traditional: 40, smart: 3, dark: 1.5 }[this.sim.mode.key]; }
+  get name() { return { traditional: '작업반장 (수동 판단)', smart: '공장 오케스트레이터 (MES)', dark: `피지컬AI 오케스트레이터${this.sim.aios?.latest ? ` · AIOS ${this.sim.aios.version}` : ''}` }[this.sim.mode.key]; }
+  get latency() { return this.sim.mode.orchLatency ?? { traditional: 40, smart: 3, dark: 1.5 }[this.sim.mode.key]; }
 
   open(type, key, title, source, opts = {}) {
     const inc = { id: ++this.seq, type, key, title, source, t0: this.sim.time, steps: [], status: 'open', cellResolved: !!opts.cellResolved };
