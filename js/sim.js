@@ -2,7 +2,7 @@
 import { CommandCenter } from './commands.js';
 import { TruckYard, planForklift } from './shipping.js';
 import { InboundYard, planReceiver, WH, INBOUND } from './receiving.js';
-import { PatrolDrone } from './drone.js';
+import { PatrolDrone, MISSION_PRIO } from './drone.js';
 import { VLAPipeline } from './vla.js';
 import { AIOSPipeline } from './aios.js';
 import { Orchestrator } from './orchestrator.js';
@@ -44,6 +44,7 @@ export const MODES = {
     techs: 2, techKind: 'humanoid', techSpeed: 1.6,
     // 사람 대신: 휴머노이드(정비 2·부품 보충 2) + 사족보행 순찰 로봇 2
     helpers: 2, quadrupeds: 2, partsCap: 40, partsReorder: 14, scanPm: 12,
+    drones: 3,   // 순찰 드론 — 시설 크기(순찰 주기)·인시던트 출동률로 산정 (drone.js DRONE_SIZING)
     reorderPoint: 14, shipBatch: 12, dispatchDelay: 0, releaseInterval: 8.3,
     lightingKW: 6, hvacKW: 7, agentActive: true,   // 고효율 LED 구역 조명
   },
@@ -298,7 +299,9 @@ export class Simulation {
     this.inbound = new InboundYard(this);
     this.yard = new TruckYard(this);
     // 피지컬AI: 순찰 드론 (지상 교통과 높이가 달라 movers에는 넣지 않는다)
-    this.drones = m.key === 'dark' ? [new PatrolDrone(this, 0)] : [];
+    // 순찰 드론 대수: 시설 크기(순찰 주기)와 인시던트 출동률로 산정한 값 (README '드론 운용 대수 산정', MODES.dark.drones)
+    const nd = opts.drones ?? m.drones ?? 1;
+    this.drones = m.key === 'dark' ? Array.from({ length: nd }, (_, i) => new PatrolDrone(this, i, nd)) : [];
     this.techs = [];
     for (let i = 0; i < m.techs; i++) {
       const home = { ...LOC.TECH, x: LOC.TECH.x + i * 1.6 };
@@ -622,6 +625,7 @@ export class Simulation {
     this.yard.update(dt);
     this.vla?.update(dt);
     this.aios?.update(dt);
+    this.dispatchDrones();
     for (const d of this.drones) d.update(dt);
     this.inbound.update(dt);   // 입고 트럭도 건물 밖이라 계속 움직인다
     if (mdt > 0) for (const f of this.forklifts) { if (f.idle && !K.evac) (f.receiver ? planReceiver : planForklift)(this, f); f.update(mdt); }
@@ -1042,6 +1046,21 @@ export class Simulation {
     } else rec('정상');
   }
 
+  // ── 드론 관제: 열린 인시던트(우선순위 순)마다 가장 가까운 가용 드론을 보낸다. 가용 드론이 없으면 더 낮은 우선순위 출동 중인 드론을 돌린다
+  dispatchDrones() {
+    if (!this.drones.length) return;
+    const open = this.orch.incidents.filter((i) => i.status === 'open' && i.where && MISSION_PRIO[i.type] && !i.droneDone)
+      .sort((a, b) => MISSION_PRIO[b.type] - MISSION_PRIO[a.type] || a.t0 - b.t0);
+    const dist = (d, w) => Math.hypot(d.x - w.x, d.z - w.z);
+    for (const inc of open) {
+      if (this.drones.some((d) => d.mission === inc)) continue;
+      inc.droneWaitFrom ??= this.time;
+      let d = this.drones.filter((x) => x.available).sort((a, b) => dist(a, inc.where) - dist(b, inc.where))[0];
+      if (!d) d = this.drones.filter((x) => x.mode === 'mission' && x.mission && MISSION_PRIO[x.mission.type] < MISSION_PRIO[inc.type]).sort((a, b) => MISSION_PRIO[a.mission.type] - MISSION_PRIO[b.mission.type] || dist(a, inc.where) - dist(b, inc.where))[0];
+      if (d) { inc.droneWait = (inc.droneWait ?? 0) + (this.time - inc.droneWaitFrom); inc.droneWaitFrom = null; d.assign(inc); }
+    }
+  }
+
   // ── 드론 현장 관찰 → 오케스트레이터 대응 보강 ─────────────────
   // 드론이 사고 현장 상공에 도착하면 하방·짐벌 카메라 영상으로 현장 상황을 정리해 보고하고(관찰),
   // 공장 운영 SW(오케스트레이터·AI)가 그 정보를 대응 조치 수립 근거로 쓴다(판단 보강·조치 조정)
@@ -1063,6 +1082,7 @@ export class Simulation {
   }
   droneAssist(inc, d) {
     const o = this.orch, obs = this.droneObserve(inc);
+    if (inc.drone) { inc.drone.tArrive = this.time; o.step(inc, 'field', 'detect', `🛸 ${d.id} 현장 중계 이어받음 — ${obs.text}`); return; }   // 교대 중계: 첫 도착·판단 보강은 한 번만
     inc.drone = { by: d.id, tArrive: this.time, dt: this.time - inc.t0, obs: obs.text };
     o.step(inc, 'field', 'detect', `🛸 ${d.id} 현장 도착 (+${(this.time - inc.t0).toFixed(1)}초) · 상공 영상 실시간 중계 — ${obs.text}`);
     let dec = '';
@@ -1083,7 +1103,15 @@ export class Simulation {
     this.stats.droneMissions = (this.stats.droneMissions ?? 0) + 1;
   }
 
-  droneLog(d, where) { (this.droneVisits ??= []).push({ t: this.time, by: d.id, where, battery: Math.round(d.battery) }); if (this.droneVisits.length > 40) this.droneVisits.shift(); }
+  // 순찰 지점별 재방문 간격 (어느 드론이든) — 드론 운용 대수 산정 기준(재방문 p95)을 운영 중에 확인
+  dronePatrolStats() {
+    const g = [...(this.patrolGaps ?? [])].sort((a, b) => a - b);
+    return g.length ? { mean: g.reduce((a, b) => a + b, 0) / g.length, p95: g[Math.min(g.length - 1, Math.floor(g.length * 0.95))], n: g.length } : null;
+  }
+  droneLog(d, where) {
+    this.patrolLast ??= new Map(); const last = this.patrolLast.get(where);
+    if (last != null) { (this.patrolGaps ??= []).push(this.time - last); if (this.patrolGaps.length > 300) this.patrolGaps.shift(); }
+    this.patrolLast.set(where, this.time); (this.droneVisits ??= []).push({ t: this.time, by: d.id, where, battery: Math.round(d.battery) }); if (this.droneVisits.length > 40) this.droneVisits.shift(); }
 
   // ── 현장 이벤트: 발생 → 로봇 카메라 AI 감지 → 자율 대응 ─────────────────
   injectFieldEvent(type, x, z) {

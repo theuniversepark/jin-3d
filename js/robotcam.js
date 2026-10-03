@@ -83,13 +83,17 @@ export class RobotCamWall {
       mover(this.carrierPick, '전방 카메라', 0.42, 0.82, 5, 0.12);
     } else mover(sim.vehicles[0], '전방 카메라', 0.45, 0.85, 5, 0.12);
     // 순찰 드론: 오른쪽 열 위 — 짐벌 전방 카메라, 아래 — 하방 매핑 카메라 (점검·이벤트 확인 중에는 짐벌도 아래를 본다)
-    const d = sim.drones?.[0];
-    if (d) {
-      const drone = (base, down, fwd, ahead) => ({ ref: { type: 'mover', id: d.id }, robot: d.id, get label() { return d.mission && d.arrived ? `${base} · 🔴 사고 현장 중계` : base; }, kind: 'drone', mover: d,
-        pose: () => { const fx = Math.sin(d.heading), fz = Math.cos(d.heading), look = d.mode === 'mission' || d.hover > 0;
-          return { pos: new THREE.Vector3(d.x + fx * fwd, d.y - 0.15, d.z + fz * fwd), dir: new THREE.Vector3(fx, typeof down === 'function' ? down(look) : down, fz).normalize(), ahead }; } });
-      out.splice(3, 0, drone('짐벌 카메라', (look) => (look ? -2.2 : -0.55), 0.3, 8));
-      out.splice(7, 0, drone('하방 매핑 카메라', -12, 0.05, 6));
+    const ds = sim.drones ?? [];
+    if (ds.length) {
+      // 오른쪽 열 두 칸: 사고 현장을 중계 중인 드론을 먼저, 나머지는 순찰 드론 (1대면 짐벌·하방 매핑 카메라)
+      const order = () => [...ds].sort((a, b) => (b.mission && b.arrived ? 1 : 0) - (a.mission && a.arrived ? 1 : 0) || (b.mission ? 1 : 0) - (a.mission ? 1 : 0));
+      const drone = (slot, base, down, fwd, ahead) => { const D = () => order()[Math.min(slot, ds.length - 1)]; return {
+        get ref() { return { type: 'mover', id: D().id }; }, get robot() { return D().id; }, get mover() { return D(); }, kind: 'drone',
+        get label() { const d = D(); return d.mission && d.arrived ? `${base} · 🔴 사고 현장 중계` : base; },
+        pose: () => { const d = D(), fx = Math.sin(d.heading), fz = Math.cos(d.heading), look = d.mode === 'mission' || d.hover > 0;
+          return { pos: new THREE.Vector3(d.x + fx * fwd, d.y - 0.15, d.z + fz * fwd), dir: new THREE.Vector3(fx, typeof down === 'function' ? down(look) : down, fz).normalize(), ahead }; } }; };
+      out.splice(3, 0, drone(0, '짐벌 카메라', (look) => (look ? -2.2 : -0.55), 0.3, 8));
+      out.splice(7, 0, ds.length > 1 ? drone(1, '짐벌 카메라', (look) => (look ? -2.2 : -0.55), 0.3, 8) : drone(0, '하방 매핑 카메라', -12, 0.05, 6));
     }
     while (out.length < COLS * ROWS && sim.vehicles[out.length - 6]) mover(sim.vehicles[out.length - 6], '전방 카메라', 0.45, 0.85, 5, 0.12);
     return out.slice(0, COLS * ROWS);

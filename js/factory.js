@@ -5,7 +5,7 @@ import { RobotTelemetry } from './telemetry.js';
 import { BELT_Y, LOC, chgLoc, FG_CAP, RAW_CAP, ST_LABEL } from './sim.js';
 import { YARD } from './shipping.js';
 import { INBOUND, WH } from './receiving.js';
-import { DRONE_PAD } from './drone.js';
+import { DRONE_PAD, dronePad } from './drone.js';
 import { equipmentList, STATUS_CLASS } from './assets.js';
 import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, AMR_LANES, amrPark, ZONE_AMR, AMMR, AMMR_FETCH } from './line.js';
 
@@ -1349,15 +1349,18 @@ export class FactoryView {
     put(box(10.4, 2.95, 0.12, std(0x0b0d10, { roughness: 0.5, metalness: 0.4 })), 0, 0, -0.07, bd);
     put(new THREE.Mesh(new THREE.PlaneGeometry(10, 2.73), new THREE.MeshBasicMaterial({ map: this.whBoard.tex, toneMapped: false })), 0, 0, 0, bd);
     // 드론 이착륙·충전 패드 (피지컬AI 단계에서만 보임)
-    this.dronePad = put(new THREE.Group(), DRONE_PAD.x, 0, DRONE_PAD.z, r);
-    const padC = document.createElement('canvas'); padC.width = padC.height = 256;
-    const pc = padC.getContext('2d'); pc.fillStyle = '#1d2a3a'; pc.beginPath(); pc.arc(128, 128, 124, 0, Math.PI * 2); pc.fill();
-    pc.strokeStyle = '#37e8ff'; pc.lineWidth = 10; pc.beginPath(); pc.arc(128, 128, 110, 0, Math.PI * 2); pc.stroke();
-    pc.fillStyle = '#ffffff'; pc.font = '900 150px sans-serif'; pc.textAlign = 'center'; pc.textBaseline = 'middle'; pc.fillText('H', 128, 136);
-    const padTex = new THREE.CanvasTexture(padC); padTex.colorSpace = THREE.SRGBColorSpace;
-    const pad = put(new THREE.Mesh(new THREE.CircleGeometry(1.1, 40), new THREE.MeshStandardMaterial({ map: padTex, roughness: 0.7 })), 0, 0.02, 0, this.dronePad); pad.rotation.x = -Math.PI / 2;
-    put(box(0.5, 0.25, 0.3, MAT.dark), 1.35, 0.125, 0, this.dronePad);   // 무선 충전기
-    this.dronePad.visible = false;
+    // 드론마다 이착륙·충전 패드 (H1·H2·H3…, 3m 간격) — 운용 대수만큼 보인다
+    this.dronePads = [0, 1, 2, 3].map((i) => {
+      const p = dronePad(i), g = put(new THREE.Group(), p.x, 0, p.z, r);
+      const padC = document.createElement('canvas'); padC.width = padC.height = 256;
+      const pc = padC.getContext('2d'); pc.fillStyle = '#1d2a3a'; pc.beginPath(); pc.arc(128, 128, 124, 0, Math.PI * 2); pc.fill();
+      pc.strokeStyle = '#37e8ff'; pc.lineWidth = 10; pc.beginPath(); pc.arc(128, 128, 110, 0, Math.PI * 2); pc.stroke();
+      pc.fillStyle = '#ffffff'; pc.font = '900 120px sans-serif'; pc.textAlign = 'center'; pc.textBaseline = 'middle'; pc.fillText(`H${i + 1}`, 128, 136);
+      const padTex = new THREE.CanvasTexture(padC); padTex.colorSpace = THREE.SRGBColorSpace;
+      const pad = put(new THREE.Mesh(new THREE.CircleGeometry(1.1, 40), new THREE.MeshStandardMaterial({ map: padTex, roughness: 0.7 })), 0, 0.02, 0, g); pad.rotation.x = -Math.PI / 2;
+      put(box(0.5, 0.25, 0.3, MAT.dark), 1.35, 0.125, 0, g);   // 무선 충전기
+      g.visible = false; return g;
+    });
     // 충전소
     this.chargers = [];
     for (let i = 0; i < 4; i++) {
@@ -1554,7 +1557,7 @@ export class FactoryView {
     this.helperViews = sim.helpers.map((h) => robotView(h, makeHumanoid(0x2aa8ff), 2.4, 'helper'));
     this.quadViews = sim.quads.map((q) => robotView(q, makeQuadruped(), 1.5, 'quad'));
     this.droneViews = (sim.drones ?? []).map((d) => robotView(d, makeDrone(), 0.7, 'drone'));
-    this.dronePad.visible = (sim.drones ?? []).length > 0;
+    this.dronePads.forEach((g, i) => (g.visible = i < (sim.drones ?? []).length));
     this.workerViews = sim.workers.map((w) => {
       const hat = { 반장: 0xffffff, 모니터링: 0x2aa8ff, 관제: 0x2aa8ff, 검사원: 0x9b59b6 }[w.role] ?? 0xf2c230;
       const g = makeWorker(hat, w.role === '모니터링' || w.role === '관제' ? std(0x2a6fdb) : MAT.hiVis);
