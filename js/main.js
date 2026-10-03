@@ -478,7 +478,7 @@ function robotScreenRect() {
 function placeRobotPanel() {
   const rb = robotScreenRect(); if (!rb) return;
   const cur = detailEl.getBoundingClientRect(), right = detailEl.classList.contains('side-right');
-  const w = cur.width, rightGap = innerWidth <= 1100 ? 304 : 364, leftX = innerWidth <= 1100 ? 270 : 314;
+  const cs = getComputedStyle(document.body), w = cur.width, rightGap = parseFloat(cs.getPropertyValue('--rx')) || 364, leftX = parseFloat(cs.getPropertyValue('--lx')) || 314;
   const rects = { left: { l: leftX, r: leftX + w, t: cur.top, b: cur.bottom }, right: { l: innerWidth - rightGap - w, r: innerWidth - rightGap, t: cur.top, b: cur.bottom } };
   const hit = (a) => !(a.r < rb.l || a.l > rb.r || a.b < rb.t || a.t > rb.b);
   const dist = (a) => Math.abs((a.l + a.r) / 2 - (rb.l + rb.r) / 2);
@@ -486,6 +486,26 @@ function placeRobotPanel() {
   if (!hit(rects[now])) return;
   if (!hit(rects[other]) || dist(rects[other]) > dist(rects[now])) detailEl.classList.toggle('side-right', other === 'right');
 }
+
+// ── 양쪽 패널 숨기기/보이기 (버튼 ◀ ▶, 단축키 [ ]) — 상태는 브라우저에 기억 ─────────────────
+const sidePanels = { left: document.getElementById('tglLeft'), right: document.getElementById('tglRight') };
+function setSide(side, hide) {
+  document.body.classList.toggle(`hide-${side}`, hide);
+  const b = sidePanels[side], name = side === 'left' ? '왼쪽 패널(정밀조립Zone)' : '오른쪽 패널(자율운영 에이전트)', key = side === 'left' ? '[' : ']';
+  b.textContent = (side === 'left') === hide ? '▶' : '◀';
+  b.title = `${name} ${hide ? '보이기' : '숨기기'} · 단축키 ${key}`;
+  try { localStorage.setItem(`jin3d.hide.${side}`, hide ? '1' : '0'); } catch { /* 저장소 없음 */ }
+}
+for (const side of ['left', 'right']) {
+  let h = false; try { h = localStorage.getItem(`jin3d.hide.${side}`) === '1'; } catch { /* 무시 */ }
+  setSide(side, h);
+  sidePanels[side].addEventListener('click', () => setSide(side, !document.body.classList.contains(`hide-${side}`)));
+}
+addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+  if (e.key === '[') setSide('left', !document.body.classList.contains('hide-left'));
+  else if (e.key === ']') setSide('right', !document.body.classList.contains('hide-right'));
+});
 
 // ── 하단 시나리오 버튼 경보: 고장·공급 차질·현장 이벤트가 진행 중이면 해당 버튼이 깜빡이고 건수를 보여 준다 ─────────────────
 const alarmBtns = { fault: document.getElementById('btnFault'), supply: document.getElementById('btnSupply'), event: document.getElementById('btnEvent') };

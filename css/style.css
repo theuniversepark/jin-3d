@@ -132,7 +132,7 @@ body.llm-on .agent-avatar { background: linear-gradient(135deg, #d97757, #f0c27b
 .chatbox button:disabled { opacity: 0.35; background: transparent; border-color: var(--line); cursor: not-allowed; }
 
 /* 상세 패널 */
-.detail { left: 314px; bottom: 64px; width: 300px; padding: 12px; }
+.detail { left: var(--lx); bottom: 64px; width: 300px; padding: 12px; }
 .detail.hidden, .modal.hidden { display: none; }
 .detail h3 { margin: 0 0 6px; font-size: 15px; display: flex; justify-content: space-between; align-items: center; }
 .detail h3 button { border: 0; background: none; color: var(--ink2); font-size: 14px; }
@@ -146,7 +146,7 @@ body.llm-on .agent-avatar { background: linear-gradient(135deg, #d97757, #f0c27b
 .bar i { display: block; height: 100%; border-radius: 3px; }
 
 /* 하단 */
-.bottombar { position: fixed; bottom: 12px; left: 314px; display: flex; gap: 6px; z-index: 6; padding: 6px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); }
+.bottombar { position: fixed; bottom: 12px; left: var(--lx); display: flex; gap: 6px; z-index: 6; padding: 6px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(10px); }
 .bottombar button, .detail .btns button { border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); padding: 7px 12px; border-radius: 9px; white-space: nowrap; }
 .bottombar button:hover, .detail .btns button:hover { background: rgba(255, 255, 255, 0.1); }
 .bottombar button.on { border-color: var(--accent); color: #9fd0ff; }
@@ -196,7 +196,6 @@ table.cmp td.best { color: var(--good); font-weight: 700; }
   .panel.right { width: 280px; }
   .dock { width: 280px; }
   .panel.left { width: 250px; }
-  .detail { left: 270px; }
   .brand p { display: none; }
 }
 
@@ -340,8 +339,7 @@ body.app .topbar button, body.app .topbar .seg { -webkit-app-region: no-drag; }
 /* 로봇 텔레메트리 패널 */
 .detail.robot { width: 400px; max-height: calc(100vh - 150px); overflow-y: auto; }
 /* 선택한 로봇을 가리지 않도록 오른쪽(에이전트 패널 옆)으로 옮긴 위치 */
-.detail.robot.side-right { left: auto; right: 364px; }
-@media (max-width: 1100px) { .detail.robot.side-right { right: 304px; } }
+.detail.robot.side-right { left: auto; right: var(--rx); }
 .rb-status .grid { margin: 4px 0 6px; }
 table.rb-j { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
 table.rb-j th { color: var(--muted); font-weight: 500; text-align: left; padding: 2px 4px; font-size: 10.5px; }
@@ -395,9 +393,8 @@ table.rb-j .tq i { display: block; height: 100%; }
 /* 오케스트레이터 인시던트 흐름 */
 :root { --o-detect: #ff6b6b; --o-self: #2bd4c6; --o-report: #5aa9ff; --o-decide: #b89bff; --o-command: #ff9a3d; --o-act: #3ddc84; --o-notify: #a9b4c0; --o-done: #7dffb0; --o-line: rgba(232, 237, 242, 0.55); }
 .badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 3px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 11px; }
-.panel.orch { top: 70px; left: 314px; width: min(1000px, calc(100vw - 680px)); max-height: calc(100vh - 150px); z-index: 9; padding: 10px 12px; display: flex; flex-direction: column; }
+.panel.orch { top: 70px; left: var(--lx); width: min(1000px, calc(100vw - var(--lx) - var(--rx) - 2px)); max-height: calc(100vh - 150px); z-index: 9; padding: 10px 12px; display: flex; flex-direction: column; }
 .panel.orch.hidden { display: none; }
-@media (max-width: 1100px) { .panel.orch { left: 270px; width: calc(100vw - 590px); } }
 .orch-h { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .orch-h b { font-size: 14px; }
 .orch-h small { color: var(--muted); margin-right: auto; }
@@ -609,7 +606,7 @@ table.rb-j .tq i { display: block; height: 100%; }
 /* FACOS 공장 운영 SW 통합 표시 (피지컬AI): 상단 바 아래 가운데, 계층별 실시간 상태 칩 */
 .dark-only-flex { display: none; }
 body[data-mode="dark"] .dark-only-flex { display: flex; }
-#facos { position: fixed; top: 66px; left: 314px; right: 364px; z-index: 6; align-items: stretch; gap: 3px; flex-wrap: wrap; justify-content: center; pointer-events: none; }
+#facos { position: fixed; top: 66px; left: var(--lx); right: var(--rx); z-index: 6; align-items: stretch; gap: 3px; flex-wrap: wrap; justify-content: center; pointer-events: none; }
 #facos > * { pointer-events: auto; }
 #facos .fc-brand { display: flex; flex-direction: column; justify-content: center; padding: 3px 9px; border-radius: 9px; border: 1px solid #3fd0c9; background: linear-gradient(135deg, rgba(63, 208, 201, 0.28), rgba(184, 155, 255, 0.24)); color: #e8fffd; line-height: 1.1; }
 #facos .fc-brand b { font-size: 12.5px; letter-spacing: 1.2px; } #facos .fc-brand small { font-size: 9px; color: #b9e9e6; }
@@ -640,3 +637,16 @@ body[data-mode="dark"] .dark-only-flex { display: flex; }
 .fc-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; margin-top: 6px; }
 .fc-card { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.02); min-width: 0; }
 .fc-sub { font-size: 11px; color: var(--ink2); margin: 6px 0; }
+
+/* 양쪽 패널 숨기기/보이기 — 가운데 요소(하단 버튼·정보 창·오케스트레이터·FACOS)는 --lx/--rx 기준으로 넓어진다 */
+:root { --lx: 314px; --rx: 364px; }
+@media (max-width: 1100px) { :root { --lx: 270px; --rx: 304px; } }
+body.hide-left { --lx: 44px; }
+body.hide-right { --rx: 44px; }
+.panel.left, .panel.right { transition: transform 0.22s ease, opacity 0.22s ease; }
+body.hide-left .panel.left { transform: translateX(calc(-100% - 16px)); opacity: 0; pointer-events: none; }
+body.hide-right .panel.right { transform: translateX(calc(100% + 16px)); opacity: 0; pointer-events: none; }
+.side-tgl { position: fixed; top: 50%; transform: translateY(-50%); z-index: 7; width: 22px; height: 46px; display: grid; place-items: center; padding: 0; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); backdrop-filter: blur(10px); color: var(--ink2); font-size: 12px; cursor: pointer; transition: left 0.22s ease, right 0.22s ease; }
+.side-tgl:hover { color: var(--ink); border-color: #3fd0c9; }
+#tglLeft { left: calc(var(--lx) - 23px); } #tglRight { right: calc(var(--rx) - 23px); }   /* 패널 가장자리에 걸쳐 둔다 */
+body.hide-left #tglLeft { left: 12px; } body.hide-right #tglRight { right: 12px; }
