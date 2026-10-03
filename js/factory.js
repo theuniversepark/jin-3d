@@ -592,6 +592,57 @@ function makeRobot(kind, color, opts = {}) {
       },
     };
   }
+  if (kind === 'humanoid') {
+    // 휴머노이드 로봇: 두 다리로 셀 작업 위치에 서서 허리를 돌리며 양팔(각 6축)로 작업. 머리에 스테레오 카메라. 로컬 +z가 작업 쪽
+    const root = new THREE.Group();
+    const shell = std(0xe6e9ee, { roughness: 0.35, metalness: 0.2 }), jm = std(0x2a2f36, { roughness: 0.5, metalness: 0.4 });
+    const legs = [-0.12, 0.12].map((x) => {
+      const hip = put(new THREE.Group(), x, 0.92, 0, root);
+      put(mesh(new THREE.CapsuleGeometry(0.08, 0.36, 4, 8), shell), 0, -0.22, 0, hip);
+      put(mesh(new THREE.SphereGeometry(0.075, 10, 8), jm), 0, -0.45, 0.01, hip);
+      put(mesh(new THREE.CapsuleGeometry(0.07, 0.34, 4, 8), shell), 0, -0.67, 0, hip);
+      put(box(0.13, 0.06, 0.24, jm), 0, -0.89, 0.04, hip);
+      return hip;
+    });
+    put(box(0.34, 0.16, 0.2, jm), 0, 0.98, 0, root);                                       // 골반
+    const torso = put(new THREE.Group(), 0, 1.0, 0, root);                                  // 허리 회전
+    put(mesh(new THREE.CapsuleGeometry(0.19, 0.3, 4, 10), shell), 0, 0.3, 0, torso);
+    const led = emis(0xff8a2a, 1.6); put(box(0.2, 0.1, 0.03, led, false), 0, 0.36, 0.2, torso);   // 가슴 상태등
+    put(cyl(0.05, 0.06, 0.08, jm), 0, 0.64, 0, torso);
+    const head = put(new THREE.Group(), 0, 0.8, 0, torso);
+    put(mesh(new THREE.SphereGeometry(0.15, 16, 12), shell), 0, 0, 0, head);
+    put(box(0.22, 0.06, 0.06, emis(0x37e8ff, 2.2), false), 0, 0.01, 0.12, head);             // 스테레오 카메라 (바이저)
+    const arms = [-1, 1].map((sd) => {
+      put(mesh(new THREE.SphereGeometry(0.085, 10, 8), jm), sd * 0.25, 0.52, 0, torso);       // 어깨
+      const a = makeArm(COBOT_MAT, 0.42);
+      put(a.root, sd * 0.3, 0.5, 0.06, torso); a.root.rotation.set(1.35, 0, -sd * 0.2);    // 어깨에서 앞쪽(작업대)으로 뻗도록 장착
+      return a;
+    });
+    const sideNames = ['왼팔', '오른팔'];
+    return {
+      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, payload: 15, dual: true, arms, torso, legs,
+      jointDefs: [{ name: '허리 회전', unit: 'rad', min: -0.6, max: 0.6 },
+        ...sideNames.flatMap((n) => ARM_JOINTS.map((j) => ({ ...j, name: `${n} ${j.name}` })))],
+      joints: () => [torso.rotation.y, ...arms[0].joints(), ...arms[1].joints()],
+      cur: null,
+      anim(busy, t) {
+        const w = t * 1.4;
+        const target = [busy ? Math.sin(w * 0.45) * 0.28 : 0, busy ? Math.sin(w * 0.7) * 0.25 : 0];
+        arms.forEach((a, i) => {
+          const ph = w + i * Math.PI * 0.5, sd = i ? -1 : 1;   // 두 팔이 엇갈려 집고 놓는다
+          target.push(...(busy ? [sd * (0.25 + Math.sin(ph) * 0.22), 0.85 + Math.sin(ph * 1.3) * 0.15, 1.25 + Math.cos(ph) * 0.12, 0.7, Math.sin(ph * 0.9) * 0.3, Math.sin(ph * 0.6) * 1.4]
+            : [sd * 0.1, 0.2, 0.9, 0.4, 0, 0]));
+        });
+        this.cur = this.cur ? this.cur.map((c, i) => c + (target[i] - c) * 0.12) : target;
+        const c = this.cur;
+        torso.rotation.y = c[0]; head.rotation.y = c[1] - c[0] * 0.5;
+        arms[0].pose(...c.slice(2, 8)); arms[1].pose(...c.slice(8, 14));
+        // 작업 중에는 무게중심을 옮기며 다리를 살짝 굽혔다 편다
+        const k = busy ? Math.sin(w * 0.9) * 0.05 : 0;
+        legs.forEach((h, j) => { h.rotation.x = (j ? -k : k); });
+      },
+    };
+  }
   if (kind === 'gantry') {
     // 직교 3축 갠트리: 양쪽 X축 레일(고정 프레임) 위를 브리지가 주행(X) → 브리지 위 캐리지가 가로 이송(Y) → 수직 축 승강(Z)
     const root = new THREE.Group(), xr = opts.xr ?? 1.0, L = 2 * xr + 0.7;
@@ -2101,9 +2152,9 @@ export class FactoryView {
     ud.body.position.y = flying ? Math.sin(t * 2.3) * 0.03 : 0;
     ud.rotors.forEach((r, i) => (r.rotation.y += (flying ? 60 : 2) * rdt * (i % 3 ? 1 : -1)));
     ud.strobe.material.emissiveIntensity = Math.sin(t * 7) > 0.85 ? 6 : 0.3;
-    const look = flying && (d.mode === 'event' || (d.mode === 'patrol' && d.hover > 0));
+    const look = flying && (d.mode === 'mission' || (d.mode === 'patrol' && d.hover > 0));
     ud.beam.visible = look;
-    if (look) { ud.beam.scale.set(1, d.y - 0.2, 1); ud.beam.position.y = -(d.y - 0.2) / 2 - 0.1; ud.beam.material.color.setHex(d.mode === 'event' ? 0xff8a3d : 0x37e8ff); ud.beam.material.opacity = d.mode === 'event' ? 0.14 : 0.08; }
+    if (look) { ud.beam.scale.set(1, d.y - 0.2, 1); ud.beam.position.y = -(d.y - 0.2) / 2 - 0.1; ud.beam.material.color.setHex(d.mode === 'mission' ? 0xff8a3d : 0x37e8ff); ud.beam.material.opacity = d.mode === 'mission' ? 0.14 : 0.08; }
     dv.el.innerHTML = `${d.uid ? `<i class="uid">${d.uid}</i>` : ''}${d.id} · ${d.battery.toFixed(0)}%<em>${d.task ?? '대기'}</em>`;
   }
 

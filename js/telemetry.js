@@ -264,6 +264,7 @@ export class RobotTelemetry {
       if (u) out.status.push(['이동 플랫폼', AMMR_PHASE[u.phase] ?? u.phase, u.phase === 'work' ? '' : 'ok'],
         ['양팔', u.carry ? '선반에서 가져온 부품 파지' : u.phase === 'work' && st.state === 'BUSY' ? '조립·체결 작업' : '대기'],
         ['부품 선반 재고', st.parts != null ? `${st.parts}개` : '충분 (상시 보충)'], ['선반 왕복', `${u.trips}회`]);
+      else if (r.kind === 'humanoid') out.status.push(['보행', '셀 작업 위치에 양발로 서서 작업']);
       else if (r.dual) out.status.push(['이동 플랫폼', '셀 도킹 (위치 고정)']);
       if (st.gate && st.item?.id === st.gate.id && st.gate.role) { const lead = this.view.sim.isLead(st, this.ref.idx); out.status.push(['게이트 결정', st.gate.text], ['이 로봇 역할', lead ? `주 작업 — ${st.gate.role.lead}` : `보조 — ${st.gate.role.support}`, lead ? 'ok' : '']); }
       out.sections.push({ title: '센서', rows: [
@@ -289,7 +290,7 @@ export class RobotTelemetry {
       out.sections.push({ title: '주행', rows: motion });
       const sens = m.kind === 'drone'
         ? [['비행 고도', `${m.y.toFixed(2)} m`], ['배터리', `${m.battery.toFixed(0)}%${m.charging ? ' · 무선 충전 중' : ''}`, m.battery < 25 ? 'warn' : ''],
-          ['로터 속도', `${m.y > 0.3 ? (5200 + (m.speedNow ?? 0) * 260).toFixed(0) : 0} rpm`], ['짐벌 카메라', m.mode === 'event' ? '현장 이벤트 추적 (하방 −90°)' : m.hover > 0 ? '셀 점검 (하방 −70°)' : '전방 −30°'],
+          ['로터 속도', `${m.y > 0.3 ? (5200 + (m.speedNow ?? 0) * 260).toFixed(0) : 0} rpm`], ['짐벌 카메라', m.mode === 'mission' ? (m.arrived ? `사고 현장 중계 · ${m.mission?.title ?? ''} (하방 −90°)` : '사고 현장으로 이동')  : m.hover > 0 ? '셀 점검 (하방 −70°)' : '전방 −30°'],
           ['비행 모드', { patrol: '순찰', event: '이벤트 확인', return: '귀환', charge: '착륙·충전' }[m.mode] ?? m.mode]]
         : [['라이다 최근접 장애물', `${lidar.toFixed(2)} m`], ['안전 필드', field[0], field[1]]];
       if (m.kind === 'quadruped') sens.push(['배터리', `${m.battery.toFixed(0)}%${m.charging ? ' · 도킹 충전 중' : ''}`, m.battery < 30 ? 'warn' : '']);
@@ -348,7 +349,7 @@ export class RobotTelemetry {
   }
 }
 
-const ROBOT_LABEL = { articulated: '6축 다관절 로봇', cobot: '협동로봇', scara: 'SCARA', gantry: '갠트리', ammr: 'AMR 기반 양팔 로봇 (AMMR)' };
+const ROBOT_LABEL = { articulated: '6축 다관절 로봇', cobot: '협동로봇', scara: 'SCARA', gantry: '갠트리', ammr: 'AMR 기반 양팔 로봇 (AMMR)', humanoid: '휴머노이드 로봇' };
 const HUMANOID_JOINTS = [
   { name: '왼쪽 고관절', unit: 'deg', min: -0.8, max: 0.8 },
   { name: '오른쪽 고관절', unit: 'deg', min: -0.8, max: 0.8 },

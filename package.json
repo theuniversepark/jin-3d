@@ -5,7 +5,7 @@
   "main": "electron/main.mjs",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node tests/estop.mjs && node tests/commands.mjs && node tests/logistics.mjs",
+    "test": "node tests/estop.mjs && node tests/commands.mjs && node tests/logistics.mjs && node tests/drone.mjs",
     "app": "electron .",
     "package": "electron-packager . Jin-3D --platform=darwin --arch=arm64 --icon=build/icon.icns --out=dist --overwrite --app-bundle-id=kr.or.camtic.jin3d --app-category-type=public.app-category.productivity --ignore=^/dist --ignore=^/build --ignore=^/\\.env --ignore=^/README.md --ignore=^/tests --ignore=^/data --ignore=^/server\\.mjs$",
     "postpackage": "codesign --force --deep --sign - dist/Jin-3D-darwin-arm64/Jin-3D.app"

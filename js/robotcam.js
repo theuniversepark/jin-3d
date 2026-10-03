@@ -85,8 +85,8 @@ export class RobotCamWall {
     // 순찰 드론: 오른쪽 열 위 — 짐벌 전방 카메라, 아래 — 하방 매핑 카메라 (점검·이벤트 확인 중에는 짐벌도 아래를 본다)
     const d = sim.drones?.[0];
     if (d) {
-      const drone = (label, down, fwd, ahead) => ({ ref: { type: 'mover', id: d.id }, robot: d.id, label, kind: 'drone', mover: d,
-        pose: () => { const fx = Math.sin(d.heading), fz = Math.cos(d.heading), look = d.mode === 'event' || d.hover > 0;
+      const drone = (base, down, fwd, ahead) => ({ ref: { type: 'mover', id: d.id }, robot: d.id, get label() { return d.mission && d.arrived ? `${base} · 🔴 사고 현장 중계` : base; }, kind: 'drone', mover: d,
+        pose: () => { const fx = Math.sin(d.heading), fz = Math.cos(d.heading), look = d.mode === 'mission' || d.hover > 0;
           return { pos: new THREE.Vector3(d.x + fx * fwd, d.y - 0.15, d.z + fz * fwd), dir: new THREE.Vector3(fx, typeof down === 'function' ? down(look) : down, fz).normalize(), ahead }; } });
       out.splice(3, 0, drone('짐벌 카메라', (look) => (look ? -2.2 : -0.55), 0.3, 8));
       out.splice(7, 0, drone('하방 매핑 카메라', -12, 0.05, 6));
@@ -103,12 +103,12 @@ export class RobotCamWall {
       const sv = view?.stationViews.find((x) => x.st.id === ref.stationId), r = sv?.parts.robots?.[ref.idx];
       if (!r) return null;
       if (r.vla) { const up = new THREE.Vector3(); return { label: '손목 카메라 · VLA', pose: () => { const p = r.tip.getWorldPosition(new THREE.Vector3()); up.set(0, 1, 0).transformDirection(r.tip.parent.matrixWorld); return { pos: p.addScaledVector(up, -0.06), dir: up.clone(), ahead: 1.2 }; } }; }
-      if (r.kind === 'ammr') return { label: '머리 스테레오 카메라', pose: () => { const p = r.head.getWorldPosition(new THREE.Vector3()); const d = r.root.getWorldDirection(new THREE.Vector3()); d.y = -0.75; return { pos: p, dir: d.normalize(), ahead: 3 }; } };
+      if (r.kind === 'ammr' || r.kind === 'humanoid') return { label: '머리 스테레오 카메라', pose: () => { const p = r.head.getWorldPosition(new THREE.Vector3()); const d = r.root.getWorldDirection(new THREE.Vector3()); d.y = -0.75; return { pos: p, dir: d.normalize(), ahead: 3 }; } };
       return { label: '셀 상부 카메라', pose: () => { const p = r.root.getWorldPosition(new THREE.Vector3()); const c = new THREE.Vector3(sv.st.x, 1.2, sv.st.z); return { pos: p.add(new THREE.Vector3(0, 2.6, 0)), dir: c.sub(p).normalize(), ahead: 3 }; } };
     }
     const m = [...sim.movers, ...(sim.drones ?? [])].find((x) => x.id === ref.id);
     if (!m) return null;
-    if (m.kind === 'drone') return { label: '드론 짐벌 카메라', pose: () => { const fx = Math.sin(m.heading), fz = Math.cos(m.heading), look = m.mode === 'event' || m.hover > 0; return { pos: new THREE.Vector3(m.x + fx * 0.3, m.y - 0.15, m.z + fz * 0.3), dir: new THREE.Vector3(fx, look ? -2.2 : -0.55, fz).normalize(), ahead: 8 }; } };
+    if (m.kind === 'drone') return { label: '드론 짐벌 카메라', pose: () => { const fx = Math.sin(m.heading), fz = Math.cos(m.heading), look = m.mode === 'mission' || m.hover > 0; return { pos: new THREE.Vector3(m.x + fx * 0.3, m.y - 0.15, m.z + fz * 0.3), dir: new THREE.Vector3(fx, look ? -2.2 : -0.55, fz).normalize(), ahead: 8 }; } };
     if (m.kind === 'humanoid') return front(m, '헤드 카메라', 1.85, 0.22, 6, 0.28);
     if (m.kind === 'quadruped') return front(m, '전방 카메라', 0.62, 0.68, 6, 0.15);
     if (m.kind === 'carrier') return front(m, '전방 카메라', 0.42, 0.82, 5, 0.12);

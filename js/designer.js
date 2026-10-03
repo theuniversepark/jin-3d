@@ -199,7 +199,7 @@ export class LineDesigner {
           ${zone ? `<span class="ops cell-use" title="셀 용도">${esc(ZONE_CELLS[s.id]?.use ?? '')}</span>` : '<span class="ops"><button data-op="up" title="앞으로">↑</button><button data-op="down" title="뒤로">↓</button><button data-op="del" title="삭제">✕</button></span>'}
         </div>
         <div class="r">
-          <select data-f="kind" title="${!ammrOk && s.robot.kind === 'ammr' ? '이 셀은 피지컬AI 단계에서 AMMR — 레거시·자동화 단계에서는 협동로봇으로 운영' : '로봇 종류'}">${robotOpts(robotForMode(s.robot, mode).kind)}</select>${!ammrOk && s.robot.kind === 'ammr' ? '<small class="ammr-note" title="피지컬AI 단계에서는 AMMR">피지컬AI: AMMR</small>' : ''}
+          <select data-f="kind" title="${!ammrOk && ROBOT_KINDS[s.robot.kind]?.darkOnly ? `이 셀은 피지컬AI 단계에서 ${ROBOT_KINDS[s.robot.kind].short} — 레거시·자동화 단계에서는 협동로봇으로 운영` : '로봇 종류'}">${robotOpts(robotForMode(s.robot, mode).kind)}</select>${!ammrOk && ROBOT_KINDS[s.robot.kind]?.darkOnly ? `<small class="ammr-note" title="피지컬AI 단계에서는 ${ROBOT_KINDS[s.robot.kind].short}">피지컬AI: ${ROBOT_KINDS[s.robot.kind].short}</small>` : ''}
           <label>대수<input data-f="count" type="number" min="0" max="${MAX_ROBOTS}" value="${s.robot.count}" ${s.robot.kind === 'none' ? 'disabled' : ''} /></label>
           <label>기준<input data-f="cycle" type="number" min="2" max="40" step="0.5" value="${s.cycle}" />초</label>
           <span class="eff" data-eff="${i}"></span>

@@ -27,6 +27,8 @@ export const ROBOT_KINDS = {
   // AMR 기반 양팔 로봇 (Autonomous Mobile Manipulator Robot) — 이동 플랫폼 위 양팔, 한 대가 두 팔로 동시 작업
   ammr:        { label: 'AMR 기반 양팔 로봇 (AMMR)', short: 'AMMR', factor: 0.9, darkOnly: true },   // 피지컬AI 단계 전용
   gantry:      { label: '갠트리 로봇',      short: '갠트리', factor: 0.9 },
+  // 휴머노이드: 두 다리로 셀 작업 위치에 서서 양팔(각 6축)로 작업 — 사람 작업대 그대로 쓰는 범용성 대신 사이클은 협동로봇보다 조금 빠른 정도
+  humanoid:    { label: '휴머노이드 로봇',  short: '휴머노이드', factor: 1.1, darkOnly: true },   // 피지컬AI 단계 전용
 };
 
 export const LAYOUTS = {
@@ -145,8 +147,8 @@ export const cloneLine = (l) => JSON.parse(JSON.stringify(l));
 // (라인 설정에는 AMMR로 남겨 두어 피지컬AI 단계로 가면 다시 AMMR이 된다)
 export const AMMR_MODES = ['dark'];
 export const ammrAllowed = (modeKey) => AMMR_MODES.includes(modeKey);
-export const robotForMode = (robot, modeKey) => (robot?.kind === 'ammr' && !ammrAllowed(modeKey) ? { ...robot, kind: 'cobot' } : robot);
-const taskForMode = (s, modeKey) => (s.robot?.kind === 'ammr' && !ammrAllowed(modeKey) ? String(s.task ?? '').replace(/AMMR\s*양팔로\s*/, '양쪽 협동로봇이 ').replace(/옆\s*(부품\s*)?선반에서\s*\S+\s*가져와\s*/, '') : s.task);
+export const robotForMode = (robot, modeKey) => (ROBOT_KINDS[robot?.kind]?.darkOnly && !ammrAllowed(modeKey) ? { ...robot, kind: 'cobot' } : robot);   // 피지컬AI 전용 로봇(AMMR·휴머노이드)
+const taskForMode = (s, modeKey) => (ROBOT_KINDS[s.robot?.kind]?.darkOnly && !ammrAllowed(modeKey) ? String(s.task ?? '').replace(/AMMR\s*양팔로\s*/, '양쪽 협동로봇이 ').replace(/옆\s*(부품\s*)?선반에서\s*\S+\s*가져와\s*/, '') : s.task);
 export function effCycle(s, modeKey = 'smart') {
   const n = Math.max(1, s.robot?.count ?? 0);
   const kind = robotForMode(s.robot, modeKey)?.kind ?? 'none';

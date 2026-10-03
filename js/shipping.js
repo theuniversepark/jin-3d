@@ -133,7 +133,9 @@ export function planForklift(sim, f) {
       else { sim.fgStock += k; if (product) sim.fgBy[product] += k; t.reserved = 0; }   // 그 사이 트럭이 떠났으면 되돌린다
     } },
     { go: dock, via: [] },
-    { go: f.home },
+    // 복귀: 도크 앞 줄을 따라 곧장 대기 자리로 (통로까지 내려갔다 올라오지 않는다) — 대기 칸 동쪽 앞에서 서쪽으로 곧게 들어가 반듯이 주차
+    { go: { ...f.home, x: f.home.x + 1.6 }, via: [] },
+    { go: f.home, via: [] },
   ]);
   sim.log(m.agentActive ? 'act' : 'warn', `출하 지게차 배차 → ${t.id}`, {
     obs: sim.zone ? `구분 적재장 ${pName} ${avail}개 (기준 ${trigger}개)` : `완제품 ${avail}개`,

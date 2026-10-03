@@ -144,6 +144,9 @@ export class LLMController {
       product_mix: sim.zone ? sim.line.mix : null,
       commands: { estop_all: sim.cmd.estopAll, pstop_all: sim.cmd.pstopAll, feed_hold: sim.cmd.feedHold, evacuate: sim.cmd.evac, line_speed_pct: Math.round(sim.cmd.lineSpeed * 100),
         cells: sim.processing.map((st) => ({ id: st.id, estop: !!st.cmd?.estop, hold: st.cmd?.hold ?? null, safe_speed: !!st.cmd?.safe, speed_pct: Math.round((st.cmd?.override ?? 1) * 100) })) },
+      // 드론 현장 관찰: 사고 현장을 먼저 날아가 본 영상 분석 결과 — 대응 조치 수립 근거
+      drone: (sim.drones ?? []).map((d) => ({ id: d.id, task: d.task, battery: Math.round(d.battery), mission: d.mission ? { incident: d.mission.title, arrived: !!d.arrived } : null })),
+      incidents_open: sim.orch.incidents.filter((i) => i.status === 'open').map((i) => ({ type: i.type, title: i.title, age_s: Math.round(sim.time - i.t0), drone_observation: i.drone?.obs ?? null })),
       recent_events: sim.logs.slice(0, 8).map((l) => `[${fmt(l.t)}] ${l.title}`),
     };
   }

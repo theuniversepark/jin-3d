@@ -93,7 +93,7 @@ export class AIOSPipeline {
       this.seenInc.add(inc.id);
       const at = (kind) => inc.steps.find((st) => st.kind === kind)?.t;
       const dec = at('decide');
-      this.events.push({ t: r1(inc.t0), id: inc.id, type: inc.type, title: inc.title, source: inc.source, decide_s: dec != null ? r1(dec - inc.t0) : null, resolve_s: r1((inc.tEnd ?? s.time) - inc.t0), steps: inc.steps.length, model: this.version });
+      this.events.push({ t: r1(inc.t0), id: inc.id, type: inc.type, title: inc.title, source: inc.source, decide_s: dec != null ? r1(dec - inc.t0) : null, resolve_s: r1((inc.tEnd ?? s.time) - inc.t0), drone_s: inc.drone ? r1(inc.drone.dt) : null, drone_obs: inc.drone?.obs ?? null, steps: inc.steps.length, model: this.version });
       if (this.events.length > 500) this.events.shift();
     }
     if (this.total % CHUNK === 0) this.chunks.push({ id: `aios_${String(++this.chunkSeq).padStart(4, '0')}`, from: this.total - CHUNK, to: this.total, t: x.t });

@@ -700,7 +700,7 @@ function renderVla(force) {
   const deployed = robots.filter((R) => P.versionOf(R.uid) === P.label(P.latest)).length;
   const act = j?.phase ?? 'idle', shared = !!window.JIN3D_SHARED;
   const stage = (ic, title, val, sub, on) => `<div class="vs ${on ? 'on' : ''}"><i>${ic}</i><b>${title}</b><span>${val}</span><small>${sub}</small></div>`;
-  const kindKo = (k) => (k === 'ammr' ? 'AMMR' : k === 'cobot' ? '협동로봇' : '6축로봇');
+  const kindKo = (k) => (k === 'ammr' ? 'AMMR' : k === 'humanoid' ? '휴머노이드' : k === 'cobot' ? '협동로봇' : '6축로봇');
   vlaBody.innerHTML = `
     <div class="vla-flow">
       ${stage('🤖', '1 로봇 수집', `기록 중 ${recNow}대 · 누적 ${epRec.total}개`, `VLA 로봇 ${robots.length}대 · 작업 사이클 ${SAMPLE}번에 1번`, recNow > 0)}<b class="va">›</b>
@@ -877,14 +877,14 @@ function viewSense() {
   const resp = (e) => e.responder ?? (e.type === 'intrusion' ? '주변 셀 감속 · 원격 관제' : '-');
   return `<div class="fc-tiles">
       ${tile('현장 이벤트', `${L.length}건`, `감지 ${det.length} · 처리 ${done.length}`)}${tile('평균 감지 시간', fdur(avg(det.map((e) => e.tDetect - e.t0))), '발생 → 카메라 AI 인식')}${tile('평균 처리 시간', fdur(avg(done.map((e) => e.tClear - e.t0))), '발생 → 해소')}${tile('평균 추론 신뢰도', det.length ? avg(det.map((e) => e.conf)).toFixed(2) : '-')}
-      ${tile('사족보행 순찰 점검', `${st.scans ?? 0}회`, `예지정비 ${st.scan_예지정비 ?? 0} · 재보정 ${st.scan_재보정 ?? 0}`)}${tile('드론 순찰 지점', `${s.drones.reduce((a, d) => a + (d.visits ?? 0), 0)}곳`, `이벤트 상공 확인 ${s.drones.reduce((a, d) => a + (d.evChecks ?? 0), 0)}회`)}
+      ${tile('사족보행 순찰 점검', `${st.scans ?? 0}회`, `예지정비 ${st.scan_예지정비 ?? 0} · 재보정 ${st.scan_재보정 ?? 0}`)}${tile('드론 사고 현장 출동', `${s.stats.droneMissions ?? 0}회`, (() => { const ds = s.orch.incidents.filter((i) => i.drone).map((i) => i.drone.dt); return ds.length ? `평균 도착 ${fdur(avg(ds))} · 순찰 지점 ${s.drones.reduce((a, d) => a + (d.visits ?? 0), 0)}곳` : `순찰 지점 ${s.drones.reduce((a, d) => a + (d.visits ?? 0), 0)}곳`; })())}
     </div>
     <h4>현장 이벤트 처리 결과 <small>로봇 카메라 AI 감지 → 오케스트레이터 → 대응</small></h4><table class="vla-t"><thead><tr><th>발생</th><th>유형</th><th>감지 로봇</th><th>신뢰도</th><th>감지까지</th><th>드론 확인</th><th>대응</th><th>해소까지</th><th>상태</th></tr></thead><tbody>
-      ${L.slice(-8).reverse().map((e) => `<tr><td>${fclock(e.t0)}</td><td>${escV(e.label)}</td><td>${escV(e.detectedBy ?? '-')}</td><td>${e.conf?.toFixed(2) ?? '-'}</td><td>${e.detected ? fdur(e.tDetect - e.t0) : '-'}</td><td>${escV(e.droneBy ?? '-')}</td><td class="ins" title="${escV(resp(e))}">${escV(resp(e))}</td><td>${e.cleared && e.tClear != null ? fdur(e.tClear - e.t0) : '-'}</td><td class="${e.cleared ? 'p-done' : e.detected ? 'p-train' : 'p-rejected'}">${e.cleared ? '해소' : e.detected ? '대응 중' : '미감지'}</td></tr>`).join('') || '<tr><td colspan="9">아직 없음 — 하단 "⚠ 현장 이벤트"로 발생시킬 수 있습니다</td></tr>'}</tbody></table>
+      ${L.slice(-8).reverse().map((e) => `<tr><td>${fclock(e.t0)}</td><td>${escV(e.label)}</td><td>${escV(e.detectedBy ?? '-')}</td><td>${e.conf?.toFixed(2) ?? '-'}</td><td>${e.detected ? fdur(e.tDetect - e.t0) : '-'}</td><td>${escV(e.droneBy ?? '-')}${e.inc?.drone ? ` (+${fdur(e.inc.drone.dt)})` : ''}</td><td class="ins" title="${escV(resp(e))}">${escV(resp(e))}</td><td>${e.cleared && e.tClear != null ? fdur(e.tClear - e.t0) : '-'}</td><td class="${e.cleared ? 'p-done' : e.detected ? 'p-train' : 'p-rejected'}">${e.cleared ? '해소' : e.detected ? '대응 중' : '미감지'}</td></tr>`).join('') || '<tr><td colspan="9">아직 없음 — 하단 "⚠ 현장 이벤트"로 발생시킬 수 있습니다</td></tr>'}</tbody></table>
     <div class="vla-grid"><div><h4>사족보행 순찰 점검 <small>열화상·진동 스캔 결과</small></h4><table class="vla-t"><thead><tr><th>시각</th><th>로봇</th><th>셀</th><th>건강도</th><th>편차</th><th>결과</th></tr></thead><tbody>
       ${scans.slice(-8).reverse().map((x) => `<tr><td>${fclock(x.t)}</td><td>${escV(x.by)}</td><td>${escV(x.st)}</td><td>${x.health}%</td><td>${x.drift}%</td><td class="${x.result === '정상' ? 'p-done' : x.result === '점검 생략' ? '' : 'p-rejected'}">${escV(x.result)}</td></tr>`).join('') || '<tr><td colspan="6">아직 없음</td></tr>'}</tbody></table></div>
-    <div><h4>순찰 드론</h4><table class="vla-t"><thead><tr><th>드론</th><th>상태</th><th>배터리</th><th>순찰 지점</th><th>이벤트 확인</th><th>비행 시간</th></tr></thead><tbody>
-      ${s.drones.map((d) => `<tr><td><b class="uidc">${escV(d.uid ?? d.id)}</b></td><td class="ins" title="${escV(d.task)}">${escV(d.task)}</td><td>${Math.round(d.battery)}%</td><td>${d.visits ?? 0}곳</td><td>${d.evChecks ?? 0}회</td><td>${fdur(d.flight ?? 0)}</td></tr>`).join('') || '<tr><td colspan="6">드론 없음</td></tr>'}</tbody></table>
+    <div><h4>순찰 드론</h4><table class="vla-t"><thead><tr><th>드론</th><th>상태</th><th>배터리</th><th>순찰 지점</th><th>사고 현장 출동</th><th>비행 시간</th></tr></thead><tbody>
+      ${s.drones.map((d) => `<tr><td><b class="uidc">${escV(d.uid ?? d.id)}</b></td><td class="ins" title="${escV(d.task)}">${escV(d.task)}</td><td>${Math.round(d.battery)}%</td><td>${d.visits ?? 0}곳</td><td>${d.missions ?? 0}회</td><td>${fdur(d.flight ?? 0)}</td></tr>`).join('') || '<tr><td colspan="6">드론 없음</td></tr>'}</tbody></table>
       <h4>최근 드론 순찰</h4><table class="vla-t"><thead><tr><th>시각</th><th>드론</th><th>점검 지점</th><th>배터리</th></tr></thead><tbody>
       ${(s.droneVisits ?? []).slice(-6).reverse().map((v) => `<tr><td>${fclock(v.t)}</td><td>${escV(v.by)}</td><td>${escV(v.where)}</td><td>${v.battery}%</td></tr>`).join('') || '<tr><td colspan="4">아직 없음</td></tr>'}</tbody></table></div></div>`;
 }

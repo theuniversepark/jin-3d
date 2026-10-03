@@ -19,7 +19,7 @@ export function equipmentList(sim, view = null) {
   // 셀 로봇
   const legacy = sim.mode.key === 'traditional';
   for (const st of sim.processing) (st.robotUids ?? []).forEach((uid, i) => {
-    const kind = st.def.robot.kind, u = st.ammr?.[i], name = `${st.name.replace(/셀.*$/, '')} ${({ ammr: 'AMMR', cobot: '협동로봇', articulated: '6축로봇', scara: 'SCARA', gantry: '갠트리' })[kind] ?? kind}`;
+    const kind = st.def.robot.kind, u = st.ammr?.[i], name = `${st.name.replace(/셀.*$/, '')} ${({ ammr: 'AMMR', cobot: '협동로봇', articulated: '6축로봇', scara: 'SCARA', gantry: '갠트리', humanoid: '휴머노이드' })[kind] ?? kind}`;
     if (legacy) return add(uid, name, '셀 로봇', '수작업 대체', 'off');
     if (st.state === 'DOWN') return add(uid, name, '셀 로봇', '고장 정지', 'fault');
     if (['ESTOP', 'PSTOP', 'CSTOP'].includes(st.state)) return add(uid, name, '셀 로봇', ST_LABEL[st.state], 'stop');
@@ -49,7 +49,7 @@ export function equipmentList(sim, view = null) {
   for (const q of sim.quads) mover(q, `사족보행 ${q.id.slice(-1)}`, '로봇', (m) => m.charging ? [`충전 ${m.battery.toFixed(0)}%`, 'charge'] : m.scanning ? ['점검 중', 'maint'] : m.moving ? ['순찰 이동', 'run'] : m.task ? [short(m.task), 'run'] : ['대기', 'idle']);
   for (const d of sim.drones ?? []) {
     if (!d.uid) continue;
-    const [t, c] = d.mode === 'charge' ? [`충전 ${d.battery.toFixed(0)}%`, 'charge'] : d.mode === 'event' ? ['이벤트 확인', 'maint'] : d.mode === 'return' ? ['귀환', 'run'] : d.hover > 0 ? ['상공 점검', 'maint'] : d.y < 0.5 ? ['대기', 'idle'] : ['순찰 비행', 'run'];
+    const [t, c] = d.mode === 'charge' ? [`충전 ${d.battery.toFixed(0)}%`, 'charge'] : d.mode === 'mission' ? [d.arrived ? '사고 현장 중계' : '사고 현장 출동', 'maint'] : d.mode === 'return' ? ['귀환', 'run'] : d.hover > 0 ? ['상공 점검', 'maint'] : d.y < 0.5 ? ['대기', 'idle'] : ['순찰 비행', 'run'];
     add(d.uid, '순찰 드론', '로봇', halted && d.y > 0.5 ? '정지 비행' : t, halted && d.y > 0.5 ? 'stop' : c);
   }
   return out;

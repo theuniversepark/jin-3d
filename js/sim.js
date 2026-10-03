@@ -132,6 +132,13 @@ export class Mover {
   // · 앞 이동체가 할 일 없이 서 있고 내 목적지가 아니면: 옆으로 돌아간다
   // · 그 밖(같은 방향 대기열, 작업 중인 이동체)은 기다린다
   yieldTo(dir, dt) {
+    // 교통 관제 우선 통행권: 15초 넘게 막히거나 비켜서기를 30번 넘게 되풀이하면(교착·라이브락) 4초 동안 우선 통행 — 다른 이동체가 기다린다
+    if (this.passT > 0) { this.blockedOn = null; return false; }
+    if (this.blockT > 15 || this.detourPts > 30) {
+      this.passT = 4; this.blockT = 0; this.detourPts = 0; this.passes = (this.passes ?? 0) + 1;
+      if (this.path?.length) this.path = this.path.slice(-1);   // 쌓인 우회점을 버리고 목적지로 곧장
+      return false;
+    }
     const b = this.sense?.(this, dir);
     if (!b) { this.blockedOn = null; this.blockT = 0; return false; }
     this.blockedOn = b; this.blockT += dt;
@@ -170,6 +177,7 @@ export class Mover {
   setTask(name, steps) { this.task = name; this.steps = steps; this.path = null; this.detourPts = 0; }   // 이동 중 재지시되면 새 경로로
   update(dt) {
     this.moving = false; this.charging = false;
+    if (this.passT > 0 && !this.instant) this.passT -= dt;
     const st = this.steps[0];
     if (!st || !st.go) this.wantDir = null;
     if (!st) { this.task = null; return; }
@@ -192,14 +200,16 @@ export class Mover {
       if (st.wait <= 0) { st.done?.(); this.steps.shift(); }
     } else if (st.until) {
       if (st.task && this.task !== st.task) { st.prev = this.task; this.task = st.task; }   // 기다리는 동안 작업 표시를 바꾼다
-      if (st.until()) { if (st.prev) this.task = st.prev; this.steps.shift(); }
+      if (st.until()) { if (st.prev) this.task = st.prev; this.steps.shift(); if (this.steps.length && (this.instant = (this.instant ?? 0) + 1) < 8) return this.update(dt); }   // 시간이 안 드는 단계는 같은 틱에 이어서
     } else if (st.do) {
       st.do(); this.steps.shift();
+      if (this.steps.length && (this.instant = (this.instant ?? 0) + 1) < 8) return this.update(dt);
     } else if (st.charge) {
       this.charging = true;
       this.battery = Math.min(100, this.battery + dt * (this.chargeRate ?? 1.6));
       if (this.battery >= 99.5) this.steps.shift();
     }
+    this.instant = 0;
   }
 }
 
@@ -331,7 +341,7 @@ export class Simulation {
     this.movers.forEach((m, i) => { m.prio = (prio[m.kind] ?? 1) * 100 - i; m.sense = this.sense; });
     this.assignIds();
     // 피지컬AI: VLA 셀(6축 협동·산업용 로봇, AMMR)과 VLA 학습·배포 파이프라인
-    for (const st of this.processing) st.vlaCell = m.key === 'dark' && ['cobot', 'articulated', 'ammr'].includes(st.def.robot?.kind);
+    for (const st of this.processing) st.vlaCell = m.key === 'dark' && ['cobot', 'articulated', 'ammr', 'humanoid'].includes(st.def.robot?.kind);
     new VLAPipeline(this);
     new AIOSPipeline(this);   // 공장 운영 AI (데이터 수집 → 학습 → 트윈 검증 → 오케스트레이터 배포)
   }
@@ -446,11 +456,16 @@ export class Simulation {
       if (c) {
         c.state = 'toSrc'; c.slot = null;
         // 앞서 출발한 AMR이 투입 위치를 충분히 벗어날 때까지 진입로 끝에서 기다렸다가 들어간다
-        const via = amrDockVia(c), gate = via.pop(), out = this.stations[0].out;
+        // 진입로는 한 줄: 진입로 끝(게이트) 2.6m 뒤 대기 지점까지 와서, 게이트에 다른 AMR이 없을 때만 게이트로 들어간다
+        // (두 AMR이 같은 게이트를 두고 비켜서기를 되풀이하는 교착을 막는다)
+        const via = amrDockVia(c), gate = via.pop(), out = this.stations[0].out, queue = { x: gate.x, z: gate.z + 2.6, aisle: 'F' };
         c.setTask('투입 위치로', [
-          { go: { ...gate, aisle: 'F' }, via },
+          { go: queue, via },
+          { until: () => !cs.some((k) => k !== c && k.atGate), task: '투입 진입 대기열' },
+          { do: () => { c.atGate = true; } },
+          { go: { ...gate, aisle: 'F' }, via: [] },
           { until: () => (!out.items.length || out.items[out.items.length - 1].s > 3.4) && !cs.some((k) => k !== c && (k.state === 'docking' || k.state === 'atSrc')) },
-          { do: () => { c.state = 'docking'; } },
+          { do: () => { c.state = 'docking'; c.atGate = false; } },
           { go: AMR_DOCK, via: [] },
           { do: () => { c.state = 'atSrc'; c.heading = Math.PI / 2; } },
         ]);
@@ -802,7 +817,7 @@ export class Simulation {
     const o = this.orch;
     if (o.find(`rack:${st.id}`)) return;
     this.log('warn', `${st.name} 부품 선반 재고 없음`, { obs: 'AMMR이 가져갈 부품이 없음 — 보충 대기', act: st.partsReq ? '보충 휴머노이드 배정됨' : '보충 요청' });
-    const inc = o.open('parts', `rack:${st.id}`, `${st.name} 부품 선반 결품`, `${st.name} AMMR`);
+    const inc = o.open('parts', `rack:${st.id}`, `${st.name} 부품 선반 결품`, `${st.name} AMMR`, { where: { x: st.x, z: st.z } });
     o.step(inc, 'field', 'detect', 'AMMR 선반 카메라: 선반 재고 0 감지');
     o.step(inc, 'cell', 'self', '셀 자체 조치: 새 대상물 받지 않음 · 선반 앞 대기');
     o.later(0.5, () => o.step(inc, 'cell', 'report', '상위 보고: 선반 보충 필요'));
@@ -854,7 +869,7 @@ export class Simulation {
     st.c.fails++; this.stats.failures++;
     // 인시던트: 현장 감지 → 셀 자체 조치 → 상위 보고 → (판단 지연 후) 판단·명령 → 정비 출동
     const o = this.orch, who = m.techKind === 'humanoid' ? '정비 휴머노이드' : '정비원';
-    const inc = o.open('equipment', `fail:${st.id}`, `${st.name} 설비 고장`, st.name);
+    const inc = o.open('equipment', `fail:${st.id}`, `${st.name} 설비 고장`, st.name, { where: { x: st.x, z: st.z } });
     o.step(inc, 'field', 'detect', m.agentActive ? `IoT 알람 — 건강도 ${st.health.toFixed(0)}%, 진동·전류 이상, 가동 정지` : `설비 정지 — 작업자가 이상을 발견하기까지 약 ${m.alarmDelay}초`);
     o.step(inc, 'cell', 'self', m.agentActive ? '셀 자체 조치: 비상 정지 · 작업물 보류 · 자가 진단 → 재가동 불가' : '셀 자체 조치 없음 (수동 설비)');
     const pending = !!st.request;
@@ -1027,6 +1042,47 @@ export class Simulation {
     } else rec('정상');
   }
 
+  // ── 드론 현장 관찰 → 오케스트레이터 대응 보강 ─────────────────
+  // 드론이 사고 현장 상공에 도착하면 하방·짐벌 카메라 영상으로 현장 상황을 정리해 보고하고(관찰),
+  // 공장 운영 SW(오케스트레이터·AI)가 그 정보를 대응 조치 수립 근거로 쓴다(판단 보강·조치 조정)
+  droneObserve(inc) {
+    const near = (x, z, r) => this.movers.filter((m) => Math.hypot(m.x - x, m.z - z) < r);
+    const w = inc.where, ms = near(w.x, w.z, 5), carriers = ms.filter((m) => m.kind === 'carrier').length, people = ms.filter((m) => m.kind === 'worker' || m.kind === 'human').length;
+    if (inc.type === 'equipment') {
+      const st = this.processing.find((x) => `fail:${x.id}` === inc.key), tech = st?.request?.tech ?? this.techs.find((t) => t.task?.includes(st?.name ?? '#'));
+      const d = tech ? Math.round(Math.hypot(tech.x - st.x, tech.z - st.z)) : null;
+      return { text: `${st?.name ?? ''} 정지 · 연기·누유 없음 · 셀 주변 AMR ${carriers}대 정체${people ? ` · 사람 ${people}명` : ''}${d != null ? ` · 정비 로봇 ${d}m 거리` : ' · 정비 로봇 배정 대기'}`, carriers, people, st };
+    }
+    if (inc.type === 'field') {
+      const ev = inc.ev, sz = ev?.type === 'leak' ? '약 1.5m 원형 확산' : ev?.type === 'debris' ? '통로 위 물체 1개' : ev?.type === 'smoke' ? '희미한 연기 · 화염 없음' : ev?.type === 'intrusion' ? '사람 1명 · 출입구 쪽으로 이동 중' : '이상 영역';
+      return { text: `${ev?.label ?? '현장 이벤트'} · ${sz} · 주변 이동체 ${ms.length}대`, carriers, people };
+    }
+    if (inc.type === 'supply') return { text: `입고 도크 트럭 ${this.inbound?.docked ? '하차 중' : '없음'} · 창고 원자재 ${this.whRaw}박스 · 창고 앞 AGV 대기 ${this.vehicles.filter((v) => v.task?.includes('대기')).length}대`, carriers, people };
+    if (inc.type === 'parts') { const st = this.processing.find((x) => `rack:${x.id}` === inc.key); return { text: `${st?.name ?? ''} 부품 선반 비어 있음 · 보충 휴머노이드 ${this.helpers.filter((h) => h.carry).length}대 운반 중`, carriers, people }; }
+    return { text: '현장 이상 없음', carriers, people };
+  }
+  droneAssist(inc, d) {
+    const o = this.orch, obs = this.droneObserve(inc);
+    inc.drone = { by: d.id, tArrive: this.time, dt: this.time - inc.t0, obs: obs.text };
+    o.step(inc, 'field', 'detect', `🛸 ${d.id} 현장 도착 (+${(this.time - inc.t0).toFixed(1)}초) · 상공 영상 실시간 중계 — ${obs.text}`);
+    let dec = '';
+    if (inc.type === 'equipment' && obs.st) {
+      const st = obs.st;
+      if (st.state === 'DOWN' && !st.techOnSite && st.repairRemaining > 0) {   // 고장 부위·원인을 영상으로 먼저 파악 → 정비 로봇에 부품·공구 준비 지시
+        const before = st.repairRemaining; st.repairRemaining *= 0.85; st.repairTotal *= 0.85;
+        dec = `고장 부위 사전 파악 → 정비 로봇 부품·공구 준비 지시, 예상 수리 ${Math.round(before)}초 → ${Math.round(st.repairRemaining)}초`;
+      } else dec = '정비 진행 상황 확인 · 현재 조치 유지';
+      if (obs.carriers >= 2) dec += ` · 셀 앞 AMR ${obs.carriers}대 정체 → 투입 보류 유지`;
+    } else if (inc.type === 'field') {
+      const t = inc.ev?.type;
+      dec = t === 'leak' ? '누유 범위 확정 → 청소 범위·우회 경로 확정, 대응 휴머노이드에 위치 전달' : t === 'smoke' ? '열·연기 확산 없음 확인 → 보호정지는 가장 가까운 셀만 유지' : t === 'intrusion' ? '진입자 위치 추적 → 감속 구역 유지 · 원격 관제 경보' : '물체 위치 확정 → 제거 경로 전달';
+    } else if (inc.type === 'supply') dec = `입고 트럭 미도착 확인 → 공급 차질 확정 · 안전재고 운송 우선`;
+    else if (inc.type === 'parts') dec = '선반 결품 확인 → 보충 우선순위 상향';
+    o.step(inc, 'orch', 'decide', `판단 보강(${o.name} · 드론 영상): ${dec}`);
+    this.log('info', `${d.id} 사고 현장 중계 · ${inc.title}`, { obs: obs.text, dec: '드론 영상·현장 정보를 대응 근거로 반영', act: dec });
+    this.stats.droneMissions = (this.stats.droneMissions ?? 0) + 1;
+  }
+
   droneLog(d, where) { (this.droneVisits ??= []).push({ t: this.time, by: d.id, where, battery: Math.round(d.battery) }); if (this.droneVisits.length > 40) this.droneVisits.shift(); }
 
   // ── 현장 이벤트: 발생 → 로봇 카메라 AI 감지 → 자율 대응 ─────────────────
@@ -1042,7 +1098,8 @@ export class Simulation {
   detectFieldEvent(ev, by, conf) {
     if (ev.detected || ev.cleared) return;
     ev.detected = true; ev.detectedBy = by; ev.conf = conf; ev.tDetect = this.time;
-    const o = this.orch, inc = o.open('field', `ev:${ev.id}`, `현장 이벤트 · ${FIELD_EVENTS[ev.type].label}`, by);
+    const o = this.orch, inc = o.open('field', `ev:${ev.id}`, `현장 이벤트 · ${FIELD_EVENTS[ev.type].label}`, by, { where: { x: ev.x, z: ev.z } });
+    inc.ev = ev;
     ev.inc = inc;
     o.step(inc, 'field', 'detect', `${by} 카메라 AI 추론 — ${FIELD_EVENTS[ev.type].cls} 신뢰도 ${conf.toFixed(2)}`);
     o.step(inc, 'cell', 'self', ev.type === 'intrusion' ? '자체 조치: 주변 로봇 협동 감속 · 접근 금지 구역 표시' : '자체 조치: 감지 로봇 감속·우회 · 해당 구역 표시');
@@ -1146,7 +1203,7 @@ export class Simulation {
     this.supplyDisruptedUntil = Math.max(this.supplyDisruptedUntil, this.time + sec);
     const o = this.orch;
     if (o.find('supply')) return;
-    const inc = o.open('supply', 'supply', '자재 공급 차질', '자재창고');
+    const inc = o.open('supply', 'supply', '자재 공급 차질', '자재창고', { where: { x: -30, z: -14.5 } });   // 창고·입고 도크 상공
     o.step(inc, 'field', 'detect', `창고 출고 중단·공급사 납품 지연 감지 (WMS) — 입고 트럭 미도착, 복구 예상 ${Math.round(sec / 60)}분`);
     o.step(inc, 'cell', 'self', `투입 스테이션 자체 조치: 버퍼 재고 ${this.rawStock}개로 투입 유지`);
     o.later(0.5, () => o.step(inc, 'cell', 'report', `상위 보고: 재고 소진 예상 ${Math.round(this.rawStock * this.releaseInterval / 60)}분 · 라인 정지 위험`));

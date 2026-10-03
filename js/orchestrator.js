@@ -32,7 +32,7 @@ export class Orchestrator {
   get latency() { return this.sim.mode.orchLatency ?? { traditional: 40, smart: 3, dark: 1.5 }[this.sim.mode.key]; }
 
   open(type, key, title, source, opts = {}) {
-    const inc = { id: ++this.seq, type, key, title, source, t0: this.sim.time, steps: [], status: 'open', cellResolved: !!opts.cellResolved };
+    const inc = { id: ++this.seq, type, key, title, source, t0: this.sim.time, steps: [], status: 'open', cellResolved: !!opts.cellResolved, where: opts.where ?? null };   // where: 현장 위치 (드론 우선 출동)
     this.incidents.unshift(inc);
     if (this.incidents.length > 40) this.incidents.pop();
     this.onOpen?.(inc);
