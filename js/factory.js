@@ -8,6 +8,7 @@ import { INBOUND, WH, WH_RACK } from './receiving.js';
 import { DRONE_PAD, dronePad } from './drone.js';
 import { STAGES, INCIDENT_TYPES } from './orchestrator.js';
 import { NR } from './net5g.js';
+import { blenderOn, cloneAsset } from './blender.js';
 import { equipmentList, STATUS_CLASS } from './assets.js';
 import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, AMR_LANES, amrPark, ZONE_AMR, AMMR, AMMR_FETCH } from './line.js';
 
@@ -114,7 +115,26 @@ function makeStackLight() {
   return g;
 }
 
+// Blender 6축 팔 (RB20-1900 분위기의 독자 디자인): makeArm과 같은 관절 그룹·치수에 관절별 Blender 마디(Seg_*)를 배율 s로 붙인다
+function makeArmBlender(mat, s) {
+  const A = cloneAsset('arm6'), seg = (n, parent) => { const o = A.find(n); o.scale.setScalar(s); o.position.set(0, 0, 0); parent.add(o); return o; };
+  if (mat?.color && mat !== COBOT_MAT) A.mats.ArmAcc.color.copy(mat.color);   // 산업용 팔은 셀 색을 관절 링 색으로
+  const root = new THREE.Group();
+  seg('Seg_Base', root);
+  const turret = put(new THREE.Group(), 0, 0.4 * s, 0, root); seg('Seg_Turret', turret);
+  const shoulder = put(new THREE.Group(), 0, 0.42 * s, 0, turret); seg('Seg_Shoulder', shoulder);
+  const elbow = put(new THREE.Group(), 0, 1.1 * s, 0, shoulder); seg('Seg_Elbow', elbow);
+  const wrist = put(new THREE.Group(), 0, 0.9 * s, 0, elbow); seg('Seg_Wrist', wrist);
+  const wrist2 = put(new THREE.Group(), 0, 0, 0, wrist); seg('Seg_Wrist2', wrist2);
+  const flange = put(new THREE.Group(), 0, 0.13 * s, 0, wrist2); seg('Seg_Flange', flange);
+  const tip = put(new THREE.Object3D(), 0, 0.17 * s, 0, flange);
+  const pose = (yaw, a, b, c, d = 0, e = 0) => { turret.rotation.y = yaw; shoulder.rotation.x = a; elbow.rotation.x = b; wrist.rotation.x = c; wrist2.rotation.z = d; flange.rotation.y = e; };
+  const joints = () => [turret.rotation.y, shoulder.rotation.x, elbow.rotation.x, wrist.rotation.x, wrist2.rotation.z, flange.rotation.y];
+  pose(0, 0.2, 0.9, 0.5);
+  return { root, turret, shoulder, elbow, wrist, tip, pose, joints, blender: true };
+}
 function makeArm(mat, s = 1) {
+  if (blenderOn()) return makeArmBlender(mat, s);
   const root = new THREE.Group();
   put(cyl(0.34 * s, 0.42 * s, 0.4 * s, MAT.dark), 0, 0.2 * s, 0, root);
   const turret = put(new THREE.Group(), 0, 0.4 * s, 0, root);
@@ -204,6 +224,7 @@ function makeWorker(hat = 0xf2c230, vest = MAT.hiVis) {
 }
 
 function makeAGV(i) {
+  if (blenderOn()) return makeAGVBlender();
   const g = new THREE.Group();
   put(box(1.1, 0.32, 1.5, MAT.white), 0, 0.24, 0, g);
   put(box(1.14, 0.06, 1.54, MAT.dark), 0, 0.1, 0, g);
@@ -267,7 +288,55 @@ function makeEaxlePlate() {
   g.userData.bolts = bolts;
   return g;
 }
+// ── Blender 옵션 모델 (assets/blender/*.glb) — 코드가 쓰는 부분(상태등 재질·적재물·로터·경광등)은 3D 모델과 같은 이름으로 넘긴다
+function makeAGVBlender() {
+  const A = cloneAsset('agv'), g = new THREE.Group(); g.add(A.root);
+  const load = put(new THREE.Group(), 0, 0.44, -0.05, g);   // 팔레트·원자재 박스 (적재 시에만)
+  put(box(1.0, 0.12, 1.2, MAT.pallet), 0, 0.06, 0, load);
+  const crates = [];
+  for (let k = 0; k < 6; k++) crates.push(put(box(0.42, 0.3, 0.36, MAT.raw), -0.24 + (k % 2) * 0.48, 0.28, -0.4 + Math.floor(k / 2) * 0.4, load));
+  load.visible = false;
+  g.userData = { led: A.mats.LED, load, crates, blender: true };
+  return g;
+}
+function makeCarrierAMRBlender() {
+  const A = cloneAsset('amr'), g = new THREE.Group(); g.add(A.root);
+  g.userData = { led: A.mats.LED, blender: true };
+  return g;
+}
+function makeForkliftBlender() {
+  const A = cloneAsset('forklift'), g = new THREE.Group(); g.add(A.root);
+  const driver = makeWorker(0xf2c230); driver.scale.setScalar(0.85); put(driver, 0, 0.55, -0.45, g);
+  const beacon = put(box(0.22, 0.14, 0.22, emis(0xffb020, 2.5), false), 0, 2.24, -0.4, g); beacon.visible = false;
+  const load = put(new THREE.Group(), 0, 0.2, 1.3, g);
+  put(box(1.0, 0.12, 1.1, MAT.pallet), 0, 0.06, 0, load);
+  const crates = [];
+  for (let k = 0; k < 6; k++) crates.push(put(box(0.42, 0.3, 0.34, MAT.raw), -0.24 + (k % 2) * 0.48, 0.28, -0.36 + Math.floor(k / 2) * 0.36, load));
+  load.visible = false;
+  g.userData = { led: null, load, crates, roof: A.find('Guard'), driver, beacon, blender: true };
+  return g;
+}
+function makeDroneBlender() {
+  const A = cloneAsset('drone'), g = new THREE.Group(), body = put(new THREE.Group(), 0, 0, 0, g); body.add(A.root);
+  const rotors = [0, 1, 2, 3].map((i) => A.find(`Rotor_${i}`));
+  const beam = put(mesh(new THREE.ConeGeometry(1.6, 1, 28, 1, true), new THREE.MeshBasicMaterial({ color: 0x37e8ff, transparent: true, opacity: 0.08, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending }), false), 0, -0.5, 0, g);
+  beam.visible = false;
+  g.userData = { body, rotors, beam, strobe: { material: A.mats.STROBE }, navR: A.find('NavR'), navG: A.find('NavG'), blender: true };
+  return g;
+}
+// Blender 휴머노이드 (Atlas 분위기의 독자 디자인): 관절 빈 객체를 3D 모델과 같은 이름(body·armL/R·legL/R)으로 넘기고 팔꿈치·무릎을 더한다
+function makeHumanoidBlender(accent) {
+  const A = cloneAsset('humanoid'), g = new THREE.Group(); g.add(A.root);
+  A.mats.ACC.color.setHex(accent); A.mats.ACC.emissive.setHex(accent);
+  const body = A.find('Body');
+  const bin = put(box(0.42, 0.24, 0.32, std(0x2f6fd6)), 0, 1.0, 0.38, body);   // 부품 빈 (운반 중)
+  bin.visible = false;
+  g.userData = { body, armL: A.find('Shoulder_L'), armR: A.find('Shoulder_R'), legL: A.find('Hip_L'), legR: A.find('Hip_R'),
+    elbowL: A.find('Elbow_L'), elbowR: A.find('Elbow_R'), kneeL: A.find('Knee_L'), kneeR: A.find('Knee_R'), visor: A.mats.VISOR, bin, acc: A.mats.ACC, blender: true };
+  return g;
+}
 function makeCarrierAMR() {
+  if (blenderOn()) return makeCarrierAMRBlender();
   const g = new THREE.Group();
   put(box(0.95, 0.3, 1.45, MAT.white), 0, 0.22, 0, g);
   put(box(0.99, 0.07, 1.49, MAT.dark), 0, 0.08, 0, g);
@@ -290,6 +359,7 @@ function cellBase(g, len = 4.6) {
 }
 
 function makeForklift() {
+  if (blenderOn()) return makeForkliftBlender();
   const g = new THREE.Group();
   put(box(1.2, 0.6, 1.7, MAT.orange), 0, 0.55, -0.2, g);
   put(box(1.1, 0.5, 0.5, MAT.dark), 0, 0.55, -1.0, g);
@@ -352,6 +422,7 @@ function makeTruck(i) {
 
 // 순찰 드론 (쿼드콥터, 대각 약 1.1m): 몸체·암 4개·로터 4개·짐벌 카메라·항법등·착륙 스키드, 하방 관찰 빔
 function makeDrone() {
+  if (blenderOn()) return makeDroneBlender();
   const g = new THREE.Group(), body = put(new THREE.Group(), 0, 0, 0, g);
   const shell = std(0xe9edf2, { roughness: 0.35, metalness: 0.2 }), dark = MAT.dark;
   put(box(0.42, 0.14, 0.52, shell), 0, 0, 0, body);
@@ -381,6 +452,7 @@ function makeDrone() {
 
 // 휴머노이드 — makeWorker와 같은 body/armL/armR 구조라 같은 걷기·작업 동작을 쓴다 (다리는 legL/legR)
 function makeHumanoid(accent = 0xff8a2a) {
+  if (blenderOn()) return makeHumanoidBlender(accent);
   const g = new THREE.Group();
   const shell = std(0xe6e9ee, { roughness: 0.35, metalness: 0.2 });
   const joint = std(0x2a2f36, { roughness: 0.5, metalness: 0.4 });
@@ -418,7 +490,19 @@ function makeHumanoid(accent = 0xff8a2a) {
 }
 
 // 사족보행 로봇 — 등 위 센서 마스트(열화상·음향 카메라)로 순찰 점검
+// Blender 사족보행 (Spot 분위기의 독자 디자인): 관절 빈 객체(Body · Hip_i · Knee_i · Cam)를 3D 모델과 같은 이름·순서로 넘긴다
+function makeQuadrupedBlender() {
+  const A = cloneAsset('quadruped'), g = new THREE.Group(); g.add(A.root);
+  const legs = [0, 1, 2, 3].map((i) => ({ hip: A.find(`Hip_${i}`), knee: A.find(`Knee_${i}`) }));
+  const cam = A.find('Cam');
+  const scanMat = new THREE.MeshBasicMaterial({ color: 0xff7a3d, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const beam = put(new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.6, 18, 1, true), scanMat), 0, 0, 1.4, cam);
+  beam.rotation.x = -Math.PI / 2; beam.visible = false;
+  g.userData = { body: A.find('Body'), legs, cam, beam, blender: true };
+  return g;
+}
 function makeQuadruped() {
+  if (blenderOn()) return makeQuadrupedBlender();
   const g = new THREE.Group();
   const shell = std(0xf2c230, { roughness: 0.45 });
   const dark = std(0x23272c, { roughness: 0.5, metalness: 0.4 });
@@ -562,20 +646,27 @@ function makeRobot(kind, color, opts = {}) {
   if (kind === 'ammr') {
     // AMR 기반 양팔 로봇: 이동 플랫폼(바퀴·라이다) + 승강 몸통 + 양팔(각 6축) + 머리 카메라. 로컬 +z가 작업 쪽(통로)
     const root = new THREE.Group();
-    put(box(0.82, 0.3, 0.64, MAT.white), 0, 0.2, 0, root);
-    put(box(0.86, 0.07, 0.68, MAT.dark), 0, 0.06, 0, root);
-    for (const [x, z] of [[-0.34, 0.24], [0.34, 0.24], [-0.34, -0.24], [0.34, -0.24]]) put(cyl(0.08, 0.08, 0.06, MAT.rubber, 12), x, 0.07, z, root).rotation.z = Math.PI / 2;
-    const led = emis(0x2aa8ff, 2.2);
-    put(box(0.84, 0.04, 0.03, led, false), 0, 0.3, 0.33, root);
-    put(cyl(0.07, 0.07, 0.06, MAT.dark, 14), 0, 0.38, 0.24, root);                          // 라이다
-    const bin = put(box(0.36, 0.18, 0.26, std(0x2f6fd6)), 0, 0.44, -0.2, root); bin.visible = false;   // 선반에서 가져오는 부품 빈
-    const lift = put(new THREE.Group(), 0, 0.35, -0.05, root);
-    put(box(0.2, 0.62, 0.2, MAT.steel), 0, 0.31, 0, lift);
-    put(box(0.5, 0.3, 0.3, COBOT_MAT), 0, 0.72, 0, lift);                                    // 가슴
-    put(box(0.52, 0.05, 0.31, MAT.orange), 0, 0.6, 0, lift);
-    const head = put(new THREE.Group(), 0, 0.98, 0.02, lift);
-    put(box(0.2, 0.16, 0.18, MAT.dark), 0, 0, 0, head);
-    put(box(0.16, 0.05, 0.02, emis(0x37e8ff, 2), false), 0, 0.01, 0.1, head);                 // 스테레오 카메라
+    let led, bin, lift, head;
+    if (blenderOn()) {   // Blender AMMR (RB-Y1 분위기의 독자 디자인): 이동 베이스 · 몸통 기둥 · 가슴 · 카메라 머리. 팔은 아래에서 6축 팔(Blender 마디)로 단다
+      const A = cloneAsset('ammr'); root.add(A.root);
+      led = A.mats.LED; lift = A.find('Lift'); head = A.find('Head');
+      bin = put(box(0.36, 0.18, 0.26, std(0x2f6fd6)), 0, 0.44, -0.2, root); bin.visible = false;   // 선반에서 가져오는 부품 빈
+    } else {
+      put(box(0.82, 0.3, 0.64, MAT.white), 0, 0.2, 0, root);
+      put(box(0.86, 0.07, 0.68, MAT.dark), 0, 0.06, 0, root);
+      for (const [x, z] of [[-0.34, 0.24], [0.34, 0.24], [-0.34, -0.24], [0.34, -0.24]]) put(cyl(0.08, 0.08, 0.06, MAT.rubber, 12), x, 0.07, z, root).rotation.z = Math.PI / 2;
+      led = emis(0x2aa8ff, 2.2);
+      put(box(0.84, 0.04, 0.03, led, false), 0, 0.3, 0.33, root);
+      put(cyl(0.07, 0.07, 0.06, MAT.dark, 14), 0, 0.38, 0.24, root);                          // 라이다
+      bin = put(box(0.36, 0.18, 0.26, std(0x2f6fd6)), 0, 0.44, -0.2, root); bin.visible = false;   // 선반에서 가져오는 부품 빈
+      lift = put(new THREE.Group(), 0, 0.35, -0.05, root);
+      put(box(0.2, 0.62, 0.2, MAT.steel), 0, 0.31, 0, lift);
+      put(box(0.5, 0.3, 0.3, COBOT_MAT), 0, 0.72, 0, lift);                                    // 가슴
+      put(box(0.52, 0.05, 0.31, MAT.orange), 0, 0.6, 0, lift);
+      head = put(new THREE.Group(), 0, 0.98, 0.02, lift);
+      put(box(0.2, 0.16, 0.18, MAT.dark), 0, 0, 0, head);
+      put(box(0.16, 0.05, 0.02, emis(0x37e8ff, 2), false), 0, 0.01, 0.1, head);                 // 스테레오 카메라
+    }
     const arms = [-1, 1].map((sd) => {
       const a = makeArm(COBOT_MAT, 0.46);
       put(a.root, sd * 0.33, 0.7, 0, lift); a.root.rotation.z = -sd * 0.35;                   // 어깨에서 바깥쪽으로 약간 기울여 장착
@@ -639,23 +730,31 @@ function makeRobot(kind, color, opts = {}) {
   if (kind === 'humanoid') {
     // 휴머노이드 로봇: 두 다리로 셀 작업 위치에 서서 허리를 돌리며 양팔(각 6축)로 작업. 머리에 스테레오 카메라. 로컬 +z가 작업 쪽
     const root = new THREE.Group();
-    const shell = std(0xe6e9ee, { roughness: 0.35, metalness: 0.2 }), jm = std(0x2a2f36, { roughness: 0.5, metalness: 0.4 });
-    const legs = [-0.12, 0.12].map((x) => {
-      const hip = put(new THREE.Group(), x, 0.92, 0, root);
-      put(mesh(new THREE.CapsuleGeometry(0.08, 0.36, 4, 8), shell), 0, -0.22, 0, hip);
-      put(mesh(new THREE.SphereGeometry(0.075, 10, 8), jm), 0, -0.45, 0.01, hip);
-      put(mesh(new THREE.CapsuleGeometry(0.07, 0.34, 4, 8), shell), 0, -0.67, 0, hip);
-      put(box(0.13, 0.06, 0.24, jm), 0, -0.89, 0.04, hip);
-      return hip;
-    });
-    put(box(0.34, 0.16, 0.2, jm), 0, 0.98, 0, root);                                       // 골반
-    const torso = put(new THREE.Group(), 0, 1.0, 0, root);                                  // 허리 회전
-    put(mesh(new THREE.CapsuleGeometry(0.19, 0.3, 4, 10), shell), 0, 0.3, 0, torso);
-    const led = emis(0xff8a2a, 1.6); put(box(0.2, 0.1, 0.03, led, false), 0, 0.36, 0.2, torso);   // 가슴 상태등
-    put(cyl(0.05, 0.06, 0.08, jm), 0, 0.64, 0, torso);
-    const head = put(new THREE.Group(), 0, 0.8, 0, torso);
-    put(mesh(new THREE.SphereGeometry(0.15, 16, 12), shell), 0, 0, 0, head);
-    put(box(0.22, 0.06, 0.06, emis(0x37e8ff, 2.2), false), 0, 0.01, 0.12, head);             // 스테레오 카메라 (바이저)
+    const jm = std(0x2a2f36, { roughness: 0.5, metalness: 0.4 });
+    let legs, torso, head;
+    if (blenderOn()) {   // Blender 휴머노이드 몸체(다리·허리·머리 관절)에 셀 작업용 6축 양팔을 단다
+      const A = cloneAsset('humanoid'); root.add(A.root);
+      legs = [A.find('Hip_L'), A.find('Hip_R')]; torso = A.find('Waist'); head = A.find('Head');
+      A.find('Shoulder_L').visible = false; A.find('Shoulder_R').visible = false;
+    } else {
+      const shell = std(0xe6e9ee, { roughness: 0.35, metalness: 0.2 });
+      legs = [-0.12, 0.12].map((x) => {
+        const hip = put(new THREE.Group(), x, 0.92, 0, root);
+        put(mesh(new THREE.CapsuleGeometry(0.08, 0.36, 4, 8), shell), 0, -0.22, 0, hip);
+        put(mesh(new THREE.SphereGeometry(0.075, 10, 8), jm), 0, -0.45, 0.01, hip);
+        put(mesh(new THREE.CapsuleGeometry(0.07, 0.34, 4, 8), shell), 0, -0.67, 0, hip);
+        put(box(0.13, 0.06, 0.24, jm), 0, -0.89, 0.04, hip);
+        return hip;
+      });
+      put(box(0.34, 0.16, 0.2, jm), 0, 0.98, 0, root);                                       // 골반
+      torso = put(new THREE.Group(), 0, 1.0, 0, root);                                  // 허리 회전
+      put(mesh(new THREE.CapsuleGeometry(0.19, 0.3, 4, 10), shell), 0, 0.3, 0, torso);
+      const led = emis(0xff8a2a, 1.6); put(box(0.2, 0.1, 0.03, led, false), 0, 0.36, 0.2, torso);   // 가슴 상태등
+      put(cyl(0.05, 0.06, 0.08, jm), 0, 0.64, 0, torso);
+      head = put(new THREE.Group(), 0, 0.8, 0, torso);
+      put(mesh(new THREE.SphereGeometry(0.15, 16, 12), shell), 0, 0, 0, head);
+      put(box(0.22, 0.06, 0.06, emis(0x37e8ff, 2.2), false), 0, 0.01, 0.12, head);             // 스테레오 카메라 (바이저)
+    }
     const arms = [-1, 1].map((sd) => {
       put(mesh(new THREE.SphereGeometry(0.085, 10, 8), jm), sd * 0.25, 0.52, 0, torso);       // 어깨
       const a = makeArm(COBOT_MAT, 0.42);
@@ -2129,6 +2228,12 @@ export class FactoryView {
       }
       if (v.carry && ud.bin) { ud.armL.rotation.x = -1.2; ud.armR.rotation.x = -1.2; }
       if (ud.visor) ud.visor.emissive.setHex(v.task ? 0x37e8ff : 0x3dff8a);
+      if (ud.kneeL) {   // Blender 휴머노이드: 앞으로 내딛는 다리의 무릎을 굽히고, 팔꿈치는 걸음·작업·운반에 맞춰 굽힌다
+        const sw = moved ? Math.sin(t * 9) : 0;
+        ud.kneeL.rotation.x = Math.max(0, sw) * 0.7; ud.kneeR.rotation.x = Math.max(0, -sw) * 0.7;
+        const el = v.carry ? -0.5 : moved ? -0.35 : -0.12;
+        ud.elbowL.rotation.x = ud.armL.rotation.x < -0.5 && !v.carry ? -0.7 : el; ud.elbowR.rotation.x = ud.armR.rotation.x < -0.5 && !v.carry ? -0.7 : el;
+      }
     } else if (ud.arm) {
       const working = v.task && !moved;
       ud.arm.pose(Math.sin(t * 1.5) * 0.6, working ? 0.8 + Math.sin(t * 3) * 0.2 : 0.2, working ? 1.0 : 0.9, 0.5);

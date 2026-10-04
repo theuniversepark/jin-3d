@@ -29,6 +29,25 @@ npm start                       # = node server.mjs → http://localhost:8765
 API 키가 없어도 실행되며, 그때는 추론 기반 에이전트만 쓸 수 있습니다.
 ES 모듈을 쓰기 때문에 `index.html`을 파일로 바로 열면 동작하지 않습니다.
 
+## 렌더: Blender 모델 (기본)
+공장의 모든 로봇·시설·설비를 **Blender에서 모델링한 모델로 그립니다**. 앱을 열면 Blender 모델(glTF)을 먼저 불러온 뒤 공장을 한 번만 그리며(기본 도형 모델이 잠깐 보였다 바뀌지 않음), 모델 파일을 불러오지 못하면 운영 로그에 경고를 남기고 three.js 코드로 만든 기본 도형 모델로 계속 실행합니다. 이전의 Plain / Texture 선택 버튼은 없앴습니다(개발 확인용으로 `window.__twin.setRender('3d' | 'blender')`만 남김).
+- **Blender 모델**: **Blender 5.2에서 실제로 모델링·재질 적용해 glTF(.glb)로 내보낸 모델**로 바꿔 그립니다 — **운반 AMR 16대 · AGV · 지게차(입고·출하) · 순찰 드론 3대 · 휴머노이드 · 사족보행 · 6축 로봇 팔 · AMMR**. 모서리 라운드(Bevel)·부드러운 셰이딩·PBR 재질(금속·거칠기·발광)로 만들었고(예: AMR 리프트 기둥·지그 상판·위치 고정 핀·라이다·카스터, AGV 롤러 데크·경고 띠, 지게차 마스트·체인·포크·운전석·오버헤드 가드·타이어, 드론 암·모터·로터 블레이드·짐벌), 실내 환경광(RoomEnvironment, PBR 반사)을 켭니다.
+  - **휴머노이드(물류 휴머노이드 · 보조 휴머노이드 · 정비 휴머노이드 · 셀 작업 휴머노이드)**: Boston Dynamics 전동식 Atlas의 분위기(회색 외장 · 짙은 관절 액추에이터 · 앞을 보는 원형 얼굴판과 링 조명 · 등 배터리 팩)를 참고해 Blender로 새로 모델링한 독자 디자인입니다(실제 제품의 복제가 아니며 로고·상표 없음). 관절은 빈 객체(`Body · Waist · Head · Shoulder_L/R · Elbow_L/R · Hip_L/R · Knee_L/R`)로 만들어 기본 도형 모델과 같은 자리(어깨 1.52m · 고관절 0.92m)에 두었고, 기본 도형 모델에 없던 **팔꿈치·무릎**이 걸을 때 앞으로 내딛는 다리의 무릎이 굽고 작업·운반 자세에 맞춰 팔꿈치가 굽습니다. 얼굴 링 조명(재질 `VISOR`)은 상태색(작업 하늘색 · 대기 초록), 가슴 상태등(재질 `ACC`)은 역할색입니다. 셀 작업 휴머노이드는 이 몸체(다리·허리·머리)에 6축 양팔을 달아 씁니다. 미리보기: `assets/blender/preview_humanoid.png`.
+
+![Blender 휴머노이드](assets/blender/preview_humanoid.png)
+  - **사족보행 순찰 로봇**: Boston Dynamics Spot의 분위기(노란 상판·측면 외장 · 짙은 몸체 · 앞·옆·뒤 스테레오 카메라 · 뒤로 꺾인 무릎 · 페이로드 레일)를 참고해 Blender로 새로 모델링한 독자 디자인입니다(복제가 아니며 로고·상표 없음). 등 위 센서 마스트(열화상 렌즈 — 재질 `THERMAL` · 음향 카메라)와 점검 스캔 빔은 기본 도형 모델과 같습니다. 관절 빈 객체(`Body · Hip_0~3 · Knee_0~3 · Cam`)를 기본 도형 모델과 같은 순서·자리(몸통 0.55m · 다리 ±0.21 × ±0.36m)에 두어 대각 보행(trot)·센서 머리 회전이 그대로 동작하고, 정강이는 기본 무릎 각에서 발이 바닥에 닿도록 놓았습니다. 미리보기: `assets/blender/preview_quadruped.png`.
+
+![Blender 사족보행](assets/blender/preview_quadruped.png)
+  - **6축 로봇 팔 (모든 셀의 다관절·협동 로봇 · 팔레타이징 · AMMR·휴머노이드의 팔)**: Rainbow Robotics RB20-1900의 분위기(흰 원통 관절 하우징 · 짙은 관절 캡 · 가는 원통 링크 · 그리퍼)를 참고해 Blender로 새로 모델링한 독자 디자인입니다(복제가 아니며 로고·상표 없음). 관절마다 마디(`Seg_Base · Seg_Turret · Seg_Shoulder · Seg_Elbow · Seg_Wrist · Seg_Wrist2 · Seg_Flange`)를 따로 내보내 기본 도형 팔과 같은 관절 그룹·치수(베이스 0.4 · 어깨 0.42 · 상완 1.1 · 전완 0.9m × 배율)에 붙이므로 J1~J6 관절값 · 역기구학(팔레타이징) · 텔레메트리 · VLA가 그대로입니다. 관절 캡의 색 링(재질 `ArmAcc`)은 셀 색(산업용) 또는 파랑(협동)입니다.
+  - **AMMR 양팔 로봇**: Rainbow Robotics RB-Y1의 분위기(둥근 바퀴형 이동 베이스 · 접히는 몸통 기둥 · 흰 가슴 · 카메라 머리)를 참고한 독자 디자인입니다. 몸통 승강(`Lift`) · 머리 회전(`Head`) · 상태등(`LED`)은 기본 도형 모델과 같은 자리이고, 양팔은 위 6축 팔 마디로 가슴 양옆에 답니다.
+  - 동작은 기본 도형 모델과 같습니다: 상태등 색(AMR 대기 초록 · 투입 주황 · 운반 파랑), 적재물, 드론 로터 회전·기울기·항법등·스트로브·하방 빔, 자율 지게차 경광등. 코드가 쓰는 부분은 Blender에서 정해진 이름(재질 `LED`·`NAV_R`·`NAV_G`·`STROBE`, 노드 `Rotor_0~3`·`Guard`)으로 만들어 그대로 연결합니다.
+  - **나머지 로봇·시설·설비 전부(공정 설비·컨베이어·선반·디스플레이·서버·5G 기지국·CCTV·건물 등)**: 3단계 공장(레거시·자동화·피지컬AI)에 쓰이는 상자·원기둥·구 **279종**의 치수를 모두 모아 Blender가 같은 치수로 다시 만든 도형(모서리 라운드·곡면 세분화·부드러운 셰이딩) 라이브러리 `assets/blender/primitives.glb`로 바꿔 끼웁니다(피지컬AI 화면 기준 약 1,800개 메시). 메시의 위치·회전·부모(관절 그룹)와 재질은 그대로라 로봇 관절 동작·텔레메트리·VLA·클릭 선택이 영향을 받지 않고, 운영 중에 새로 생기는 모델(대상물·트럭 등)도 1.5초마다 바꿔 끼웁니다. 이미지 텍스처(도어트림·e-axle 사진, 글자판)와 다중 재질 메시는 UV·면 구분을 지키려고 그대로 둡니다.
+- **도형 치수 수집**: `npm run blender:collect` (= `electron tools/collect-primitives.cjs`) — 앱을 화면 없이 띄워 3단계 공장을 차례로 돌리며 쓰인 도형 치수를 `blender/primitives.json`으로 모읍니다(모델을 바꾸면 다시 실행).
+- **Blender 자산 만들기**: `npm run blender:assets` (= `blender -b --python blender/build_assets.py`) — Blender를 화면 없이 실행해 모델링 → `assets/blender/amr.glb · agv.glb · forklift.glb · drone.glb · humanoid.glb · quadruped.glb · arm6.glb · ammr.glb` · 도형 라이브러리 `primitives.glb`와 Eevee 미리보기 렌더 `assets/blender/preview.png`를 만듭니다. 좌표는 1단위 = 1m, 바닥 중심 원점, 앞쪽 = three.js +z(Blender −Y)로 3D 모델과 같은 자리·크기입니다. Blender는 개발 도구로만 쓰고 앱에는 들어가지 않습니다(설치: `brew install --cask blender`).
+- 검증: `npm test`(tests/blender.mjs, 36개 항목) — GLB 2.0 형식·Blender glTF exporter로 생성, 크기가 3D 모델과 같음(±0.25m, 바닥 원점), 코드가 쓰는 재질·노드 이름, 발광 재질, 미리보기 렌더, 도형 라이브러리(수집한 279종이 모두 이름으로 들어 있고 치수가 같음). 앱을 열면 AMR 16/16 · AGV·지게차 6/6 · 드론 3/3 · 보조 휴머노이드 2/2 · 사족보행 2/2 · 6축 팔 21대 · AMMR 8대가 Blender 모델로 바뀌고 도형 1,776개가 라이브러리 도형으로 바뀌며 환경광이 켜지는 것, 콘솔 오류 0을 확인했습니다.
+
+![Blender 자산 미리보기](assets/blender/preview.png)
+
 ## 화면 이동 (방향키)
 3D 화면에서 **방향키**를 누르면 화면 중앙 고정점(마우스 드래그 회전의 중심)이 화살표 방향으로 바닥 위를 이동합니다. 방향은 지금 보고 있는 화면 기준입니다 — **↑** 화면 안쪽(앞), **↓** 뒤, **←** 왼쪽, **→** 오른쪽. 누르고 있는 동안 계속 움직이고, 두 키를 함께 누르면 대각선으로, **Shift**를 함께 누르면 2.5배 빠르게 움직입니다. 속도는 시점 거리에 비례합니다(멀리서 볼수록 빠르게, 초당 시야 거리의 35%, 최소 6m/s). 카메라가 고정점과 함께 평행 이동하므로 보는 각도·확대는 그대로이고, 공장과 트럭 야드 밖으로 너무 멀리 나가지 않게 막습니다. 입력창에 글을 쓰는 중에는 동작하지 않습니다.
 
@@ -230,7 +249,7 @@ ES 모듈을 쓰기 때문에 `index.html`을 파일로 바로 열면 동작하�
 - **전송 경로·지연**: 피지컬AI는 오케스트레이터 → 셀 컨트롤러(OPC UA PubSub/TSN) 0.2초(비상정지 0.05초), 자동화는 MES → PLC 0.6초(0.3초), 레거시는 무전·구두 지시 후 작업자 조작 8초(3초).
 - **자동 명령**: 현장 이벤트에 오케스트레이터가 직접 명령을 보냅니다 — 안전구역 무단 진입이면 9m 안 셀에 안전 감속, 연기 의심이면 가장 가까운 셀에 보호정지를 걸고, 해소되면 감속 해제·운전 재개 명령을 보낸 뒤 셀의 완료 보고를 받아 인시던트를 닫습니다.
 - 명령마다 흐름도(명령 → 수신 확인 → 실행 → 완료 보고)와 명령 이력(전송·ACK·완료 경과 초)이 남고, 셀 라벨·텔레메트리 상태(비상정지·보호정지·사이클정지·자가진단·감속 25%·속도 %)에 반영됩니다. 하단 알림 띠가 비상정지·보호정지·대피·자가진단 상태를 알려 줍니다.
-- **검증**: `npm test` — 3단계 모두에서 비상정지 전송 지연, 30초 동안 이동체·컨베이어·셀 진행·AMMR·투입 완전 정지, 리셋 없이 재개 불가, 전체 정지 중 셀 리셋 거부, 정지 중 수리·보정 잠금, 리셋 → 자가진단 → 재가동, 셀 단위 비상정지(다른 라인 계속 생산), 중복 발령·자가진단 중 재발령, 대피 유지 등 72개 항목, 명령 규칙 20개 항목, 입고 물류 18개 항목(tests/logistics.mjs), 드론 우선 출동·여러 대 운용 9개 항목(tests/drone.mjs), CCTV 사각지대·AI 감지·CCTV 에이전트 이력 10개 항목(tests/cctv.mjs), 배터리 로봇 4개 항목(tests/battery.mjs), Private 5G 19개 항목(tests/net5g.mjs), 패킷 덤프 20개 항목(tests/pcap.mjs), Odoo 연동 18개 항목(tests/odoo.mjs), 기능 간 연동 11개 항목(tests/integration.mjs)을 확인합니다.
+- **검증**: `npm test` — 3단계 모두에서 비상정지 전송 지연, 30초 동안 이동체·컨베이어·셀 진행·AMMR·투입 완전 정지, 리셋 없이 재개 불가, 전체 정지 중 셀 리셋 거부, 정지 중 수리·보정 잠금, 리셋 → 자가진단 → 재가동, 셀 단위 비상정지(다른 라인 계속 생산), 중복 발령·자가진단 중 재발령, 대피 유지 등 72개 항목, 명령 규칙 20개 항목, 입고 물류 18개 항목(tests/logistics.mjs), 드론 우선 출동·여러 대 운용 9개 항목(tests/drone.mjs), CCTV 사각지대·AI 감지·CCTV 에이전트 이력 10개 항목(tests/cctv.mjs), 배터리 로봇 4개 항목(tests/battery.mjs), Private 5G 19개 항목(tests/net5g.mjs), 패킷 덤프 20개 항목(tests/pcap.mjs), Odoo 연동 18개 항목(tests/odoo.mjs), 기능 간 연동 11개 항목(tests/integration.mjs), Blender 자산 16개 항목(tests/blender.mjs)을 확인합니다.
 
 ## Odoo ERP 연동 (발주 · 재고 · 설비보전)
 하단 **🏢 Odoo** — ISA-95 레벨 4(ERP)를 Odoo로 연결합니다 (`js/odoo.js`, `server/odoo-gateway.mjs`). 공장 운영(FACOS, 레벨 3)은 지금처럼 실시간으로 판단·제어하고, 그 결과를 Odoo 데이터 모델로 기록합니다(자동화·피지컬AI 단계, 레거시는 수기 발주라 없음).
@@ -482,6 +501,8 @@ AGV·지게차, 운반 AMR, 정비 인력·휴머노이드, 사족보행 로봇,
 | `js/odoo.js` | Odoo ERP 연동(시뮬레이션 측): 구매오더·입고·내부 이동·생산 입고·출고·재고(로케이션별)·설비·정비요청 기록, 실시간 전송 이벤트 |
 | `server/odoo-gateway.mjs` | Odoo 실시간 게이트웨이: 이벤트 → Odoo 외부 API(JSON-RPC) 생성·확정·검증 |
 | `tests/ui-scroll.cjs` | UI 스크롤 검증(Electron): 모든 팝업 · 실제 휠 · 갱신 후 위치 유지 (`npm run test:ui`) |
+| `js/blender.js` | 렌더 옵션 3D / Blender: Blender glTF 자산 불러오기(GLTFLoader)·복제(대수별 상태등 재질)·실내 환경광 |
+| `blender/build_assets.py` | Blender 모델링 스크립트(bpy): AMR·AGV·지게차·드론 → assets/blender/*.glb + 미리보기 렌더 |
 | `js/pcap.js` | 패킷 덤프: MQTT 3.1.1 제어 패킷 · TCP 핸드셰이크·분할·ACK · IPv4/TCP 체크섬 → libpcap(.pcap) 파일 (Wireshark) |
 | `js/net5g.js` | Private 5G: 음영지역 없는 기지국 배치(3GPP InF 경로손실·탐욕적 덮개)·PCI 배정, 이동 로봇 5G 모뎀(UE)·A3 핸드오버·PDCP 버퍼 포워딩·업링크 집계 |
 | `js/cctvview.js` | CCTV 전광판(12×4m, CCTV 전체 분할 실시간 영상)·CCTV 영상 창, AI 오버레이(탐지 박스·분할·추적 ID·경보) |

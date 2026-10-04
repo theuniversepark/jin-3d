@@ -14,6 +14,7 @@ import { LineDesigner } from './designer.js';
 import { renderConcept } from './concept.js';
 import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
 import { PacketCapture } from './pcap.js';
+import { RENDER, loadBlenderAssets, applyRenderEnv, resetRenderEnv, primKey, blenderize } from './blender.js';
 import { ODOO_PRODUCTS, ODOO_LOCS } from './odoo.js';
 import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
 import { GateView } from './gateview.js';
@@ -155,6 +156,7 @@ const LOOK = {
 };
 
 function applyLook() {
+  applyRenderEnv(scene, renderer);   // Blender 옵션: 실내 환경광(PBR 반사)
   const L = LOOK[modeKey];
   scene.background = new THREE.Color(L.bg);
   scene.fog = new THREE.Fog(L.fog, 70, 160);
@@ -167,6 +169,16 @@ function applyLook() {
   renderer.toneMappingExposure = L.exposure;
   view.floorMat.color.setHex(L.floor);
   document.body.dataset.mode = modeKey;
+}
+
+// ── 렌더: Blender 모델(기본) ─────────────────
+// Blender에서 모델링한 glTF 모델로 그린다. setRender('3d')는 개발 확인용(window.__twin) — 화면만 다시 만들고 시뮬레이션은 그대로 이어감
+function setRender(style) {
+  RENDER.style = style; document.body.dataset.render = style;
+  if (!sim) return;
+  view.setup(sim, labelsOn, changedIds); view.selected = null; view.selectRobot(null);
+  camWall.setup(sim, view); cctvView.setup(sim, view);
+  applyLook(); RENDER.swapped = 0; blenderize(scene);
 }
 
 function start(key) {
@@ -183,7 +195,7 @@ function start(key) {
   window.__cctvRefresh?.();
   window.__netRefresh?.();   // 라인·단계가 바뀌면 CCTV 배치 요약도 다시
   if (typeof designer !== 'undefined' && designer) designer.render();   // AMMR 선택 가능 여부가 단계마다 다르다
-  applyLook();
+  applyLook(); blenderize(scene);
   llm.attach(sim, agent);
   ui.reset(sim, agent);
   ui.hideDetail();
@@ -808,7 +820,7 @@ function renderGnb() {
     </div>
     <div style="margin-top:4px">${I.log.map((h) => `${clk(h.t)} ${h.ue} PCI ${h.from} → ${h.to} · ${h.rsrpFrom} → ${h.rsrpTo}dBm · 중단 ${h.ms}ms · 포워딩 ${h.fwd}건`).join('<br>') || '최근 핸드오버 없음'}</div></div>`);
 }
-let netT = 0, pcapBoxT = 0;
+let netT = 0, pcapBoxT = 0, bzT = 0;
 window.__netRefresh = () => { if (!netCard.hidden) renderNetCard(); };
 netBtn.addEventListener('click', () => { const on = !netBtn.classList.contains('on'); netBtn.classList.toggle('on', on); view.setNetMap(on); netCard.hidden = !on; if (on) { cctvBtn.classList.remove('on'); view.setCCTVMap(false); cctvCard.hidden = true; renderNetCard(); } });
 cctvBtn.addEventListener('click', () => { if (cctvBtn.classList.contains('on') && netBtn.classList.contains('on')) { netBtn.classList.remove('on'); view.setNetMap(false); netCard.hidden = true; } });
@@ -948,6 +960,7 @@ function rebuildRenderer() {
   try { old.dispose(); } catch { /* 이미 잃은 컨텍스트 */ }
   camWall.renderer = r; camWall.panelRT = camWall.capRT = null;
   renderer.toneMappingExposure = old.toneMappingExposure;
+  resetRenderEnv(); applyRenderEnv(scene, renderer);   // 환경광 텍스처는 렌더러(GPU 컨텍스트)마다 다시 만든다
   makeComposer();
   glRebuilds++;
   glRecovered(`재생성(${glRebuilds}회)`);
@@ -977,6 +990,7 @@ function frame() {
     llm.update();
   }
   hub.tick(rdt);
+  bzT += rdt; if (bzT > 1.5) { bzT = 0; blenderize(scene); }   // Blender 옵션: 운영 중에 새로 생긴 모델(대상물·트럭 등)도 바꿔 끼운다
   pcapVideoTick(rdt);
   odooSyncTick(rdt);
   view.update(rdt, running, speed);
@@ -1012,7 +1026,12 @@ function frame() {
   labelRenderer.render(scene, camera);
 }
 
+// Blender 모델을 먼저 불러온 뒤 공장을 한 번만 그린다 (불러오지 못하면 기본 도형 모델로 계속)
+let blenderErr = null;
+await loadBlenderAssets().catch((e) => { blenderErr = e.message; });
+document.body.dataset.render = RENDER.loaded ? 'blender' : '3d';
 start('smart');
+if (blenderErr) sim.log('warn', 'Blender 모델을 불러오지 못함', { obs: blenderErr, act: '기본 도형 모델로 계속' });
 frame();
 
 designer = new LineDesigner({
@@ -1304,4 +1323,4 @@ function renderFacosView(force) {
 document.getElementById('closeFacos').addEventListener('click', () => { fcModal.classList.add('hidden'); fcView = null; });
 fcModal.addEventListener('click', (e) => { if (e.target === fcModal) { fcModal.classList.add('hidden'); fcView = null; } });
 
-window.__twin = { openGnb: (id) => openGnb(id), cctvView, epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };
+window.__twin = { primKey, setRender, RENDER, openGnb: (id) => openGnb(id), cctvView, epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };

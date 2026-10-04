@@ -9,6 +9,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 | three.js | 0.186.1 | MIT | https://github.com/mrdoob/three.js | 3D 렌더링 전체 (`vendor/three`) |
 | └ OrbitControls · CSS2DRenderer · EffectComposer · RenderPass · UnrealBloomPass · OutputPass | (three.js `examples/jsm`) | MIT | 같은 저장소 | 시점 조작, 라벨, 발광·후처리 |
 | └ WebGLRenderTarget · readRenderTargetPixels | (three.js 코어) | MIT | 같은 저장소 | 로봇 카메라 영상(관제 디스플레이 8분할, 로봇 정보 창 실시간 영상) |
+| └ GLTFLoader · RoomEnvironment (+ BufferGeometryUtils · SkeletonUtils) | (three.js `examples/jsm`) | MIT | 같은 저장소 | Blender 모델 렌더(기본) — glTF 모델 불러오기·실내 환경광 (`vendor/three/addons`) |
 | Electron | 44.5.1 | MIT | https://github.com/electron/electron | Mac 앱 셸 (Jin-3D.app) |
 | @electron/packager | 20.3.0 | BSD-2-Clause | https://github.com/electron/packager | Mac 앱 패키징 (`npm run package`) |
 | @anthropic-ai/sdk | 0.131.0 | MIT | https://github.com/anthropics/anthropic-sdk-typescript | Agent(Claude API) 호출 서버 |
@@ -23,6 +24,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 
 | 이름 | 라이선스 | 출처 | 쓰인 곳 |
 |---|---|---|---|
+| Blender 5.2 | GPL-2.0-or-later (프로그램) — 만든 결과물(모델·렌더)은 만든 사람의 것 | https://www.blender.org | `blender/build_assets.py`로 AMR·AGV·지게차·드론·휴머노이드·사족보행·6축 팔·AMMR 모델링과 기본 도형 라이브러리(`tools/collect-primitives.cjs`로 모은 치수 279종) → `assets/blender/*.glb`·미리보기 렌더 (Blender 프로그램은 앱에 포함하지 않음) |
 | aas-core3.0 (Python) | MIT | https://github.com/aas-core-works/aas-core3.0-python | 내보낸 AAS JSON·XML 표준 적합성 검증 |
 | Node.js · npm | MIT 등 | https://nodejs.org | 서버 실행, 시뮬레이션 자동 시험(`npm test`) |
 | Python 3 | PSF | https://python.org | 개발 보조 스크립트, AAS 검증 |
@@ -76,7 +78,9 @@ CCTV 영상 AI 파이프라인(`js/cctv.js` `AI_MODELS`, `js/cctvview.js`)은 �
 
 ## 6. 직접 작성한 부분
 
-**FACOS(공장 운영 SW) 전체** — 시뮬레이션 엔진, 운영 에이전트, 오케스트레이터, 상위 명령·지시 게이트, 대화 기반 해석기, 출하·입고 트럭·물류 창고·드론, 설비 현황판, VLA 조립 동작(역기구학), VLA 에피소드 기록·zip 데이터셋·학습·배포 파이프라인, AIOS 공장 운영 AI(운영 데이터셋·정책 학습·트윈 검증·오케스트레이터 배포), 로봇 카메라 영상(렌더 타깃), CCTV 사각지대 배치·CCTV 에이전트·전광판·AI 오버레이(위 5절 알고리즘의 출력 형식 재현), Private 5G 기지국 배치·핸드오버 시뮬레이션, MQTT/TCP/IP 패킷 덤프(pcap), Odoo ERP 연동(발주·재고·설비보전), AAS·AASX·OPC UA 메시지 생성기, 3D 모델(설비·로봇·트럭·드론 등), 화면 UI는 이 저장소에서 직접 작성했습니다. 외부 3D 모델 파일이나 외부 이미지는 위 로고 외에는 쓰지 않습니다.
+**로봇 외형 참고 (상표·디자인)** — 휴머노이드(Boston Dynamics 전동식 Atlas), 사족보행(Boston Dynamics Spot), 6축 팔(Rainbow Robotics RB20-1900), AMMR(Rainbow Robotics RB-Y1)은 각 제품의 **분위기만 참고해 Blender로 새로 모델링한 독자 디자인**입니다. 제조사의 3D 데이터·도면·이미지를 쓰지 않았고 로고·상표를 넣지 않았으며, 각 제품명·상표는 해당 회사의 것입니다(이 저장소와 제휴 관계 없음).
+
+**FACOS(공장 운영 SW) 전체** — 시뮬레이션 엔진, 운영 에이전트, 오케스트레이터, 상위 명령·지시 게이트, 대화 기반 해석기, 출하·입고 트럭·물류 창고·드론, 설비 현황판, VLA 조립 동작(역기구학), VLA 에피소드 기록·zip 데이터셋·학습·배포 파이프라인, AIOS 공장 운영 AI(운영 데이터셋·정책 학습·트윈 검증·오케스트레이터 배포), 로봇 카메라 영상(렌더 타깃), CCTV 사각지대 배치·CCTV 에이전트·전광판·AI 오버레이(위 5절 알고리즘의 출력 형식 재현), Private 5G 기지국 배치·핸드오버 시뮬레이션, MQTT/TCP/IP 패킷 덤프(pcap), Blender 모델링 스크립트와 그 결과 모델(assets/blender), Odoo ERP 연동(발주·재고·설비보전), AAS·AASX·OPC UA 메시지 생성기, 3D 모델(설비·로봇·트럭·드론 등), 화면 UI는 이 저장소에서 직접 작성했습니다. 외부 3D 모델 파일이나 외부 이미지는 위 로고 외에는 쓰지 않습니다.
 
 FACOS는 공장 운영용 오픈소스 프레임워크(ROS 2·Open-RMF·Eclipse BaSyx·Node-RED 등)를 쓰지 않고 이 저장소에서 직접 작성했습니다. 위 1절 라이브러리는 3D 화면·앱 실행·MQTT 전송·Claude API 호출·첨부 파일 읽기에만 쓰이고, 판단·운영 로직(오케스트레이터·에이전트·셀 게이트·명령 센터·VLA·AIOS·CCTV 에이전트·Private 5G)은 모두 직접 작성한 코드입니다. VLA·AIOS 학습은 신경망이 아니라 규칙 기반 정책 탐색이며, 효과는 시뮬레이션에서 측정한 값입니다.
 
