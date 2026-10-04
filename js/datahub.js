@@ -82,7 +82,8 @@ function buildAssets(sim, view) {
       if (r.kind === 'ammr') fields.push(   // AMMR 이동 플랫폼·선반 부품 왕복
         f('HoldingPart', '부품 파지', 'bool', null, () => !!st.ammr?.[i]?.carry),
         f('PlatformPhase', '이동 플랫폼 상태', 'string', null, () => st.ammr?.[i]?.phase ?? ''),
-        f('RackTrips', '부품 선반 왕복', 'int', 'count', () => st.ammr?.[i]?.trips ?? 0));
+        f('RackTrips', '부품 선반 왕복', 'int', 'count', () => st.ammr?.[i]?.trips ?? 0),
+        f('Battery', '배터리', 'double', '%', () => st.ammr?.[i]?.battery ?? null));
       if (r.tip2) {   // 양팔 로봇(AMMR)의 오른팔 TCP
         const tcp2 = () => { const w = r.tip2.getWorldPosition(r.tip2.position.clone()), b = r.root.getWorldPosition(r.root.position.clone()); return { x: (w.x - b.x) * 1000, y: -(w.z - b.z) * 1000, z: (w.y - b.y) * 1000 }; };
         fields.push(f('Tcp2X', '오른팔 TCP X', 'double', 'mm', () => tcp2().x), f('Tcp2Y', '오른팔 TCP Y', 'double', 'mm', () => tcp2().y), f('Tcp2Z', '오른팔 TCP Z', 'double', 'mm', () => tcp2().z));
@@ -103,6 +104,8 @@ function buildAssets(sim, view) {
         f('Speed', '주행 속도', 'double', 'm/s', () => m._speed ?? 0),
         f('Task', '작업', 'string', null, () => m.task ?? 'Idle'),
         f('Blocked', '진로 대기', 'boolean', null, () => !!m.blockedOn),
+        ...(m.battery != null && !extra.some((x) => x.idShort === 'Battery') ? [f('Battery', '배터리', 'double', '%', () => m.battery)] : []),
+        ...(sim.net?.ueOf(m) ? [f('ServingPCI', '5G 서빙 셀 PCI', 'int', null, () => sim.net.ueOf(m)?.servCell?.pci ?? null), f('RSRP', '5G RSRP', 'double', 'dBm', () => sim.net.ueOf(m)?.rsrp ?? null), f('Handovers', '5G 핸드오버', 'int', 'count', () => sim.net.ueOf(m)?.hoN ?? 0)] : []),
         ...extra,
       ],
     });
@@ -119,6 +122,12 @@ function buildAssets(sim, view) {
   for (const t of sim.techs) if (t.kind !== 'human') mobile(t, t.kind === 'humanoid' ? 'Humanoid' : 'MaintenanceRobot', t.kind === 'humanoid' ? '휴머노이드 (정비)' : '정비로봇', t.kind === 'humanoid' ? 'HUM_MNT' : 'MBOT');
   for (const h of sim.helpers) mobile(h, 'Humanoid', '휴머노이드 (부품 보충)', 'HUM_SUP', [f('CarryingBin', '부품 빈 운반', 'boolean', null, () => !!h.carry)]);
   for (const q of sim.quads) mobile(q, 'Quadruped', '사족보행 순찰', 'QUAD', [f('InspectionTarget', '점검 대상', 'string', null, () => q.scanning?.id ?? ''), f('Battery', '배터리', 'double', '%', () => q.battery)]);
+  // Private 5G 기지국 (gNB): PCI · 접속 단말 · 업링크 수신 · 핸드오버
+  if (sim.net?.on) sim.net.plan.cells.forEach((c, i) => {
+    const cs = () => sim.net.cellStats[i];
+    assets.push({ id: c.id.replace(/-/g, '_'), kind: 'Gnb5G', name: `5G 기지국 ${c.id} (PCI ${c.pci})`, nameplate: plate(c.id, '5G NR 소형 셀 (gNB)'), tech: { EquipmentId: c.id, PCI: c.pci, Band: 'n79 4.75GHz', Bandwidth: '100MHz', TxPower: '24dBm', PositionX: c.x, PositionZ: c.z },
+      fields: [f('ConnectedUEs', '접속 단말', 'int', 'count', () => sim.net.ues.filter((u) => u.serv === i).length), f('UplinkMessages', '업링크 수신', 'int', 'count', () => cs().rx), f('UplinkBytes', '업링크 수신량', 'double', 'byte', () => cs().rxB), f('HandoverIn', '핸드오버 들어옴', 'int', 'count', () => cs().hoIn), f('HandoverOut', '핸드오버 나감', 'int', 'count', () => cs().hoOut)] });
+  });
   return assets;
 }
 

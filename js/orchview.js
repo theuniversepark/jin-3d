@@ -78,6 +78,13 @@ export class OrchView {
     </div>`;
   }
 
+  // 주기 갱신(0.25초)으로 내용을 다시 그릴 때 스크롤 위치를 지킨다 — 바뀐 것이 없으면 다시 그리지 않는다
+  put(el, html, scrollers = []) {
+    if (!el || el.dataset.h === html) return;
+    const keep = scrollers.map((q) => { const n = q === ':self' ? el : el.querySelector(q); return n ? [q, n.scrollTop, n.scrollLeft] : null; }).filter(Boolean);
+    el.innerHTML = html; el.dataset.h = html;
+    for (const [q, top, left] of keep) { const n = q === ':self' ? el : el.querySelector(q); if (n) { n.scrollTop = top; n.scrollLeft = left; } }
+  }
   render() {
     if (!this.sim || !this.open) return;
     if (this.built !== `${this.tab}:${this.sim.mode.key}`) this.build();
@@ -94,7 +101,7 @@ export class OrchView {
         <span class="oi-ic">${T.icon}</span><span class="oi-t">${esc(i.title)}</span>
         <span class="oi-m">${clock(i.t0)} · ${Math.round(dur)}초</span><span class="oi-s">${st[0]}</span></button>`;
     }).join('') || '<div class="oi-empty">아직 인시던트가 없습니다. ⚡ 설비 고장 주입, ⛔ 자재 공급 차질, ⚠ 현장 이벤트(피지컬AI)로 발생시키거나 명령 콘솔에서 명령을 보내 보세요.</div>';
-    this.el.querySelector('[data-body]').innerHTML = `<div class="orch-list">${items}</div><div class="orch-flow">${inc ? this.flow(inc, now) : ''}</div>`;
+    this.put(this.el.querySelector('[data-body]'), `<div class="orch-list">${items}</div><div class="orch-flow">${inc ? this.flow(inc, now) : ''}</div>`, ['.orch-list', '.sw-wrap']);
   }
 
   renderCmd() {
@@ -117,7 +124,7 @@ export class OrchView {
       if (k && k.override !== 1) tags.push([`속도 ${Math.round(k.override * 100)}%`, 'info']);
       return `<div class="cs-row ${this.target === st.id ? 'sel' : ''}"><span>${esc(st.name)}</span><b class="chip s-${st.state}">${esc(ST_LABEL[st.state] ?? st.state)}</b>${tags.filter(([t]) => t !== ST_LABEL[st.state]).map(([t, c]) => `<em class="tg ${c}">${t}</em>`).join('') || (tags.length ? '' : '<em class="tg">정상 운전</em>')}</div>`;
     }).join('');
-    this.el.querySelector('[data-state]').innerHTML = (flags.length ? `<div class="cs-flags">${flags.map(([t, c]) => `<em class="tg ${c}">${t}</em>`).join('')}</div>` : '') + rows;
+    this.put(this.el.querySelector('[data-state]'), (flags.length ? `<div class="cs-flags">${flags.map(([t, c]) => `<em class="tg ${c}">${t}</em>`).join('')}</div>` : '') + rows, [':self']);
     const hist = K.list.slice(0, 14).map((c) => {
       const C = COMMANDS[c.code], at = (st) => c.history.find((h) => h.state === st);
       const pipe = ['sent', 'ack', 'done'].map((st) => { const h = at(st); return `<span class="cp ${h ? 'on' : ''}">${CMD_STATE[st]}${h ? ` +${(h.t - c.t).toFixed(1)}s` : ''}</span>`; }).join('<b>›</b>');
@@ -127,7 +134,7 @@ export class OrchView {
         <span class="ch-m">${clock(c.t)} · ${esc(c.by)}${c.why ? ` · ${esc(c.why)}` : ''}</span>
         <span class="ch-p">${rej ? `<span class="cp rej">거부 · ${esc(c.note ?? '')}</span>` : pipe}</span></button>`;
     }).join('') || '<div class="oi-empty">아직 보낸 명령이 없습니다. 왼쪽에서 대상과 명령을 고르세요. 현장 이벤트(사람 진입·연기)가 생기면 오케스트레이터가 자동으로 긴급 명령을 보냅니다.</div>';
-    this.el.querySelector('[data-hist]').innerHTML = hist;
+    this.put(this.el.querySelector('[data-hist]'), hist, [':self']);
   }
 
   flow(inc, now) {

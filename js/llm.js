@@ -148,6 +148,11 @@ export class LLMController {
       drone: (sim.drones ?? []).map((d) => ({ id: d.id, task: d.task, battery: Math.round(d.battery), mission: d.mission ? { incident: d.mission.title, arrived: !!d.arrived } : null })),
       incidents_open: sim.orch.incidents.filter((i) => i.status === 'open').map((i) => ({ type: i.type, title: i.title, age_s: Math.round(sim.time - i.t0), drone_observation: i.drone?.obs ?? null })),
       recent_events: sim.logs.slice(0, 8).map((l) => `[${fmt(l.t)}] ${l.title}`),
+      // 현장 감시 · 통신 · 에너지 · ERP — 판단 근거 (CCTV 에이전트 보고, 5G 링크, 배터리 부족 로봇, Odoo 발주·정비요청)
+      cctv: sim.cctvAgent ? { cameras: sim.cctv.cams.length, blind_spots: sim.cctv.stats.blind, open_events: sim.cctvAgent.history.filter((h) => h.status === 'open').map((h) => ({ no: h.no, kind: h.kind, cam: h.cam, label: h.label, conf: h.conf })) } : null,
+      network_5g: sim.net?.on ? (() => { const Q = sim.net.summary(); return { cells: sim.net.plan.cells.length, ues: Q.ues, handovers: Q.ho, ho_fail: Q.hoFail, rlf: Q.rlf, uplink_lost: Q.lost, weakest_rsrp_dbm: r1(Math.min(...sim.net.ues.map((u) => u.rsrp))) }; })() : null,
+      low_battery: [...sim.vehicles, ...sim.carriers, ...sim.helpers, ...sim.techs.filter((t) => t.kind === 'humanoid'), ...sim.quads, ...(sim.drones ?? [])].filter((m) => m.battery != null && m.battery < 35).map((m) => ({ id: m.id, battery: Math.round(m.battery), charging: !!(m.charging || m.chgNow) })),
+      erp: sim.erp?.on ? (() => { const E = sim.erp.stats(); return { purchase_orders_open: E.poOpen, maintenance_requests_open: sim.erp.db.mr.filter((m) => m.stage !== 'done').map((m) => ({ ref: m.ref, equipment: m.equipmentName, type: m.type, stage: m.stage })), rack_stock: { raw: sim.erp.quant.rackRaw.raw, parts: sim.erp.quant.rackParts.parts } }; })() : null,
     };
   }
 

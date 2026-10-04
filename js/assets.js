@@ -52,5 +52,7 @@ export function equipmentList(sim, view = null) {
     const [t, c] = d.mode === 'charge' ? [`충전 ${d.battery.toFixed(0)}%`, 'charge'] : d.mode === 'mission' ? [d.arrived ? '사고 현장 중계' : '사고 현장 출동', 'maint'] : d.mode === 'return' ? ['귀환', 'run'] : d.hover > 0 ? ['상공 점검', 'maint'] : d.y < 0.5 ? ['대기', 'idle'] : ['순찰 비행', 'run'];
     add(d.uid, '순찰 드론', '로봇', halted && d.y > 0.5 ? '정지 비행' : t, halted && d.y > 0.5 ? 'stop' : c);
   }
+  // Private 5G 기지국 (gNB): PCI · 접속 단말 (자동화·피지컬AI)
+  if (sim.net?.on) sim.net.plan.cells.forEach((c, i) => { const n = sim.net.ues.filter((u) => u.serv === i).length; add(c.id, `5G 기지국 PCI ${c.pci}`, '통신', `정상 · 단말 ${n}대`, n ? 'run' : 'idle'); });
   return out;
 }

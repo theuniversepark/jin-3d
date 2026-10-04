@@ -87,6 +87,8 @@ export class OdooBridge {
     const po = { id: this.db.po.length + 1, name: this.name('po'), partner: SUPPLIER, date_order: this.now(), date_planned: order.due, state: 'purchase', lines: lines.map((l) => ({ ...l, received: 0 })), amount: lines.reduce((a, l) => a + l.qty * l.price, 0), receipt: null, truck: null };
     const pk = { id: this.db.picking.length + 1, name: this.name('in'), type: 'incoming', origin: po.name, partner: SUPPLIER, from: 'vendor', to: null, state: 'assigned', created: this.now(), done: null, lines: lines.map((l) => ({ product: l.product, qty: l.qty, done: 0, to: l.product === 'raw' ? 'rackRaw' : 'rackParts' })) };
     po.receipt = pk.name; this.db.po.unshift(po); this.db.picking.unshift(pk); this.byOrder.set(order, { po, pk });
+    // 자재 공급 차질 인시던트가 열려 있으면 타임라인에 발주 번호를 남긴다
+    const sup = this.sim.orch?.find('supply'); if (sup) this.sim.orch.step(sup, 'exec', 'act', `ERP(Odoo) 구매오더 ${po.name} 확정 (${lines.map((l) => `${ODOO_PRODUCTS[l.product].code} ${l.qty}`).join(' · ')}) — 납품 재개 시 입고`);
     this.emit({ type: 'po.create', key: po.name, partner: SUPPLIER, lines: lines.map(({ product, qty, price }) => ({ product, qty, price })), receipt: pk.name });
     this.note('po', `${po.name} 구매오더 확정 — ${lines.map((l) => `${ODOO_PRODUCTS[l.product].code} ${l.qty}`).join(' · ')} → 입고 예정 ${pk.name}`);
   }
@@ -164,12 +166,18 @@ export class OdooBridge {
     const e = this.equipmentOf(st.id) ?? this.equipmentOf(st.uid); if (!e) return;
     const open = this.byStation.get(st.id);
     if (open && open.stage !== 'done') {   // 진행 중 요청이 있으면 유형만 갱신 (예방 → 긴급)
-      if (kind === 'repair' && open.type !== 'corrective') { open.type = 'corrective'; open.name = `${st.name} 설비 고장 (예방정비 중 전환)`; this.emit({ type: 'mr.update', key: open.ref, mtype: 'corrective', name: open.name }); }
+      if (kind === 'repair' && open.type !== 'corrective') {
+        open.type = 'corrective'; open.name = `${st.name} 설비 고장 (예방정비 중 전환)`; this.emit({ type: 'mr.update', key: open.ref, mtype: 'corrective', name: open.name });
+        const inc = this.sim.orch?.find(`fail:${st.id}`); if (inc) { open.incident = inc.id; inc.erp = open.ref; this.sim.orch.step(inc, 'orch', 'act', `ERP(Odoo) 정비요청 ${open.ref} 긴급으로 전환`); }
+      }
       return;
     }
     const type = kind === 'repair' ? 'corrective' : 'preventive';
     const mr = { id: this.db.mr.length + 1, ref: this.name('mr'), name: kind === 'repair' ? `${st.name} 설비 고장` : `${st.name} ${kind === 'pm' ? '예지·예방 정비' : kind === 'cal' ? '재보정' : '정비'}`, equipment: e.serial_no, equipmentName: e.name, type, stage: 'new', request_date: this.now(), start: null, close: null, duration: 0, tech: null, description: reason || (kind === 'repair' ? `건강도 ${st.health.toFixed(0)}% · 가동 정지` : `건강도 ${st.health.toFixed(0)}% · RUL 기반 정비 지시`) };
     this.db.mr.unshift(mr); this.byStation.set(st.id, mr); e.requests++; e.open++;
+    // 오케스트레이터 인시던트와 연결: 고장 인시던트 타임라인에 ERP 정비요청 번호를 남긴다
+    const inc = this.sim.orch?.find(`fail:${st.id}`);
+    if (inc && type === 'corrective') { mr.incident = inc.id; inc.erp = mr.ref; this.sim.orch.step(inc, 'orch', 'act', `ERP(Odoo) 긴급 정비요청 ${mr.ref} 생성 — 설비 ${e.serial_no}`); }
     this.emit({ type: 'mr.create', key: mr.ref, name: mr.name, equipment: e.serial_no, mtype: type, description: mr.description });
     this.note('mr', `${mr.ref} ${type === 'corrective' ? '긴급' : '예방'} 정비요청 — ${mr.name}`);
   }
@@ -183,6 +191,8 @@ export class OdooBridge {
     mr.stage = 'done'; mr.close = this.now(); mr.duration = (mr.close - mr.request_date) / 3600;
     const e = this.equipmentOf(mr.equipment); if (e) { e.open = Math.max(0, e.open - 1); e.downtime += mr.duration; }
     this.emit({ type: 'mr.stage', key: mr.ref, stage: 'done', duration: Math.round(mr.duration * 1000) / 1000 });
+    const inc = mr.incident ? this.sim.orch?.incidents.find((i) => i.id === mr.incident) : null;
+    if (inc && inc.status === 'open') this.sim.orch.step(inc, 'exec', 'act', `ERP(Odoo) 정비요청 ${mr.ref} 완료 (${Math.round(mr.duration * 60)}분)`);
     this.note('mr', `${mr.ref} 정비 완료 — ${mr.name} (${Math.round(mr.duration * 60)}분)`);
   }
 
