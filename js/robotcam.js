@@ -7,7 +7,7 @@ import { makeAlarmFx, blinkAlarmFx, ALARM_COLOR } from './factory.js';
 
 export const COLS = 4, ROWS = 2;
 const TW = 384, TH = 256, W = COLS * TW, H = ROWS * TH;   // 4×2 분할 (오른쪽 열: 순찰 드론 짐벌·하방 카메라)
-const DISPLAY = { x: 10.6, y: 5.1, z: -19.15, w: 12, h: 4 };   // 중앙 관제 화면(x -2, 12×4) 바로 오른쪽(테두리 사이 0.3m), 같은 높이·크기로 벽 기둥 앞에 설치
+const DISPLAY = { x: 2.325, y: 5.1, z: -19.15, w: 12, h: 4 };   // 뒷벽 왼쪽 두 번째 기둥(x −36) ~ 오른쪽 네 번째 기둥(x 9) 사이 CCTV 전광판·관제 화면·로봇 디스플레이를 같은 간격(0.525m)으로
 const FONT = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
 const CLS_COLOR = { 설비: '#37a0ff', 협동로봇: '#2bd4c6', AMR: '#3ddc84', AGV: '#3ddc84', 휴머노이드: '#b89bff', 사족보행: '#f5d36b', 사람: '#ff5a5a', 누유: '#ff7a3d', 이물질: '#f5b82e', 연기: '#ff5a5a' };
 const hash = (s) => { let h = 2166136261; for (const c of String(s)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0) / 4294967295; };

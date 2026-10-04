@@ -40,9 +40,9 @@ export class PatrolDrone {
     const sink = s.stations[s.stations.length - 1], src = s.stations[0];
     pts.push({ x: sink.x, z: sink.z, name: '구분 적재장 상공', scan: sink });
     pts.push({ x: 26.5, z: -14.5, name: '출하 도크 상공' });
-    pts.push({ x: -26, z: -12.5, name: '자재창고 상공' });
+    pts.push({ x: -45, z: -1.6, name: '자재창고 상공' });
     pts.push({ x: src.x, z: src.z, name: '자재 투입 상공', scan: src });
-    pts.push({ x: -34, z: -14.5, name: '입고 도크 상공' });
+    pts.push({ x: -48, z: -14.5, name: '입고 도크 상공' });
     // 여러 대면 순찰 경로를 이어진 구간으로 나눠 맡는다 (드론 i → i번째 구간)
     if (this.fleet <= 1) return pts;
     const k = Math.ceil(pts.length / this.fleet);

@@ -19,6 +19,9 @@ import { EpisodeRecorder, buildEpisodesZip, EP_HZ, SAMPLE } from './vla.js';
 import { buildAiosZip, HEADS as AIOS_HEADS, FEATURES as AIOS_FEATURES, SAMPLE_S as AIOS_SAMPLE_S, CHUNK as AIOS_CHUNK, TRAIN_MIN as AIOS_TRAIN_MIN } from './aios.js';
 import { zipStore } from './aasx.js';
 import { DRONE_SIZING } from './drone.js';
+import { CCTVView, CCTV_CLASSES } from './cctvview.js';
+import { AI_MODELS } from './cctv.js';
+import { NR, STACK } from './net5g.js';
 import { OrchView } from './orchview.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
@@ -45,9 +48,9 @@ host.appendChild(labelRenderer.domElement);
 const scene = new THREE.Scene();
 
 // ── 카메라: 3D 원근 ─────────────────
-const target = new THREE.Vector3(1, 0, 1);
+const target = new THREE.Vector3(-5.5, 0, 1);   // 건물 가운데 (생산동 + 왼쪽 물류 확장동)
 const persp = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 400);
-persp.position.set(-4, 40, 52);
+persp.position.set(-10.5, 45, 58);
 const ctlP = new OrbitControls(persp, labelRenderer.domElement);
 ctlP.target.copy(target); ctlP.enableDamping = true; ctlP.maxPolarAngle = Math.PI * 0.47; ctlP.minDistance = 8; ctlP.maxDistance = 120;
 labelRenderer.domElement.style.pointerEvents = 'auto';
@@ -60,7 +63,7 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.8);
 sun.position.set(-20, 40, 25);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -45, right: 45, top: 30, bottom: -30, near: 1, far: 120 });
+Object.assign(sun.shadow.camera, { left: -58, right: 45, top: 30, bottom: -30, near: 1, far: 120 });
 sun.shadow.bias = -0.0005;
 scene.add(sun);
 const fill = new THREE.DirectionalLight(0x9ec9ff, 0.4);
@@ -85,6 +88,7 @@ makeComposer();
 const view = new FactoryView(scene);
 const hub = new DataHub();
 const camWall = new RobotCamWall(scene, renderer);   // 로봇 비전 관제 디스플레이 (피지컬AI 단계)
+const cctvView = new CCTVView(scene, () => camWall.renderer, scene);   // CCTV 전광판 · CCTV 영상 창
 const epRec = new EpisodeRecorder(view, camWall, hub);   // VLA 에피소드 기록기 (피지컬AI 단계)
 view.epRec = epRec;
 const orchView = new OrchView(document.getElementById('orchPanel'), document.getElementById('orchBadge'));   // 오케스트레이터 인시던트 흐름도
@@ -171,8 +175,11 @@ function start(key) {
   view.selected = null;
   hub.reset(sim, view);
   camWall.setup(sim, view);
+  cctvView.setup(sim, view);
   epRec.attach(sim);
   orchView.attach(sim);
+  window.__cctvRefresh?.();
+  window.__netRefresh?.();   // 라인·단계가 바뀌면 CCTV 배치 요약도 다시
   if (typeof designer !== 'undefined' && designer) designer.render();   // AMMR 선택 가능 여부가 단계마다 다르다
   applyLook();
   llm.attach(sim, agent);
@@ -422,6 +429,8 @@ labelRenderer.domElement.addEventListener('pointerup', (e) => {
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;
   ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
+  // CCTV 전광판 칸을 누르면 그 CCTV 영상 창
+  if (cctvView.group.visible) { const b = ray.intersectObject(cctvView.screen, false)[0]; if (b?.uv) { const id = cctvView.boardCamAt(b.uv); if (id) { openCctv(id); return; } } }
   // 로봇 비전 관제 화면의 영상 칸을 누르면 그 로봇을 선택한다
   if (camWall.group.visible) {
     const w = ray.intersectObject(camWall.screen, false)[0];
@@ -433,6 +442,7 @@ labelRenderer.domElement.addEventListener('pointerup', (e) => {
   }
   // 로봇(셀 로봇·AMR·AGV·휴머노이드·사족보행)을 누르면 관절·센서 텔레메트리, 설비를 누르면 설비 상세
   const hit = view.pick(ray.intersectObjects(view.pickTargets(), true));
+  if (hit?.type === 'cctv') { openCctv(hit.id); return; }
   if (hit && hit.type !== 'station') {
     view.selected = hit.type === 'cell' ? hit.stationId : null;
     view.selectRobot(hit); ui.showRobot(); robotTimer = 1;
@@ -489,6 +499,78 @@ function placeRobotPanel() {
   if (!hit(rects[other]) || dist(rects[other]) > dist(rects[now])) detailEl.classList.toggle('side-right', other === 'right');
 }
 
+// ── CCTV 커버리지 지도 (바닥 색 · 감시 반경 · 요약 카드) ─────────────────
+const cctvBtn = document.getElementById('btnCctv'), cctvCard = document.getElementById('cctvCard');
+function renderCctvCard() {
+  const p = sim.cctv, S = p.stats, dark = modeKey === 'dark';
+  cctvCard.innerHTML = `<b>📹 CCTV ${p.cams.length}대 · 사각지대 ${S.blind}곳 (${((1 - S.coverage) * 100).toFixed(1)}%)</b>
+    <span>건물 안 천장 돔 ${S.inside}대 · 트럭 야드 실외 PTZ ${S.outside}대 · 바닥 ${S.points.toLocaleString('ko-KR')}개 지점(1m) 중 ${(S.coverage * 100).toFixed(1)}% 감시 · 2대 이상 이중 감시 ${(S.redundancy * 100).toFixed(0)}%</span>
+    <span>${dark ? '피지컬AI: CCTV 에이전트가 영상 AI 분석으로 현장 이벤트 2초 안 감지 → 메인 오케스트레이터 보고 · 이력 관리' : 'CCTV 녹화·관제 (AI 영상 분석은 피지컬AI 단계)'} · 바닥 빨강 = 사각지대 · 연두 = 1대 · 초록 = 2대 이상</span>
+    <span><button type="button" id="cctvOpen">📺 CCTV 영상·이벤트 이력 열기</button> 카메라·전광판을 눌러도 열립니다</span>`;
+  document.getElementById('cctvOpen').onclick = () => openCctv(sim.cctv.cams[0].id);
+}
+window.__cctvRefresh = () => { if (!cctvCard.hidden) renderCctvCard(); };
+cctvBtn.addEventListener('click', () => { const on = !cctvBtn.classList.contains('on'); cctvBtn.classList.toggle('on', on); view.setCCTVMap(on); cctvCard.hidden = !on; if (on) renderCctvCard(); });
+
+// ── Private 5G: 기지국 배치·커버리지·핸드오버·무손실 업링크 요약 카드 ─────────────────
+const netBtn = document.getElementById('btnNet5g'), netCard = document.getElementById('net5gCard');
+function renderNetCard() {
+  const net = sim.net;
+  if (!net?.on) { netCard.innerHTML = `<b>📶 Private 5G</b><span>레거시 공장은 5G 특화망이 없습니다 (자동화·피지컬AI 단계에서 운영)</span>`; return; }
+  const P = net.plan, S = P.stats, Q = net.summary(), n = (v) => Math.round(v).toLocaleString('ko-KR');
+  const kinds = {}; for (const u of net.ues) kinds[u.kindLabel] = (kinds[u.kindLabel] ?? 0) + 1;
+  netCard.innerHTML = `<b>📶 Private 5G 특화망 · 기지국 ${P.cells.length}대 · 음영지역 ${S.holes}곳</b>
+    <span>${NR.band} ${NR.fc}GHz · ${NR.bwMHz}MHz · 천장 소형 셀 ${NR.txDbm}dBm — 건물 안 ${n(S.points)}개 지점(2m) 최저 RSRP <b class="ok">${S.minRsrp.toFixed(1)}dBm</b> (설계 ${NR.design} · 최소 ${NR.require}) · 평균 ${S.avgRsrp.toFixed(1)} · SINR ≥ 0dB ${(S.sinrOk * 100).toFixed(0)}% · 핸드오버 겹침 영역 ${(S.hoZone * 100).toFixed(0)}%</span>
+    <span class="pci">PCI ${P.cells.map((c) => `${c.id.slice(4)}:${c.pci}`).join(' · ')} — 셀마다 고유 · 이웃 셀 PSS(PCI mod 3) 최적 배정 (같은 mod 3 경계 ${((S.mod3.conflictBorder / S.mod3.border) * 100).toFixed(1)}%, 모서리 접촉만)</span>
+    <span>5G 모뎀 ${Q.ues}대 (${Object.entries(kinds).map(([k, v]) => `${k} ${v}`).join(' · ')}) — 핸드오버 <b>${n(Q.ho)}</b>회 · 성공 <b class="ok">${(Q.hoOk * 100).toFixed(1)}%</b> · 평균 중단 ${Q.avgHoMs.toFixed(0)}ms · 핑퐁 ${Q.pingpong} · 무선 링크 실패 ${Q.rlf}</span>
+    <span>업링크 MQTT ${n(Q.sent)}건 (${(Q.bytes / 1e6).toFixed(1)}MB) → 브로커 도착 ${n(Q.delivered)}건 · 전송 중 ${Q.inflight} · <b class="ok">유실 ${Q.lost}건</b> · 핸드오버 버퍼 포워딩 ${n(Q.fwd)}건</span>
+    <span>${STACK}</span>
+    <div class="ho">${net.log.slice(0, 8).map((h) => `${[3600, 60, 1].map((d, i) => String(Math.floor((Math.floor(h.t) + 8 * 3600) / d) % (i ? 60 : 24)).padStart(2, '0')).join(':')} ${h.ue} PCI ${h.from} → ${h.to} (${h.rsrpFrom} → ${h.rsrpTo}dBm) · 중단 ${h.ms}ms · 포워딩 ${h.fwd}건 ${h.ok ? '✓' : '✗'}`).join('<br>') || '핸드오버 기록 없음'}</div>`;
+}
+let netT = 0;
+window.__netRefresh = () => { if (!netCard.hidden) renderNetCard(); };
+netBtn.addEventListener('click', () => { const on = !netBtn.classList.contains('on'); netBtn.classList.toggle('on', on); view.setNetMap(on); netCard.hidden = !on; if (on) { cctvBtn.classList.remove('on'); view.setCCTVMap(false); cctvCard.hidden = true; renderNetCard(); } });
+cctvBtn.addEventListener('click', () => { if (cctvBtn.classList.contains('on') && netBtn.classList.contains('on')) { netBtn.classList.remove('on'); view.setNetMap(false); netCard.hidden = true; } });
+
+// ── CCTV 영상 창: 실시간 영상 + AI 검출 + CCTV 에이전트 이벤트 이력 ─────────────────
+const cctvPanel = document.getElementById('cctvPanel'), cctvCv = document.getElementById('cctvCanvas');
+let cctvSel = null, cctvT = 0, cctvOnlyThis = false;
+function openCctv(id) { cctvSel = id; cctvPanel.hidden = false; cctvT = 1; renderCctvPanel(true); }
+document.getElementById('cctvClose').addEventListener('click', () => { cctvPanel.hidden = true; cctvSel = null; });
+cctvPanel.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-cctv]'); if (!b) return;
+  const a = b.dataset.cctv, cams = sim.cctv.cams, i = cams.findIndex((c) => c.id === cctvSel);
+  if (a === 'prev' || a === 'next') { cctvSel = cams[(i + (a === 'next' ? 1 : cams.length - 1)) % cams.length].id; renderCctvPanel(true); }
+  else if (a === 'left' || a === 'right') cctvView.pan(cctvSel, a === 'left' ? 0.6 : -0.6);
+  else if (a === 'only') { cctvOnlyThis = !cctvOnlyThis; renderCctvPanel(true); }
+  else if (a === 'go') { openCctv(b.dataset.cam); }
+  else if (a === 'csv') {
+    const rows = [['번호', '시각', '구분', '카메라', '위치', '클래스', '모델', '신뢰도', '인시던트', '상태', '처리 시간(초)', '결과', '비고']];
+    for (const r of sim.cctvAgent?.history ?? []) rows.push([r.no, hub.iso(r.t), { report: '감지·보고', verify: '교차 확인', record: '영상 확보' }[r.kind], r.cam, cctvView.place(sim.cctv.cams.find((c) => c.id === r.cam) ?? {}), r.cls, AI_MODELS[r.model]?.name ?? '', r.conf ?? '', r.inc ? `#${r.inc.id} ${r.inc.title}` : '', r.status === 'open' ? '진행 중' : '종료', r.dur != null ? r.dur.toFixed(1) : '', r.result ?? '', r.note ?? '']);
+    const csv = '\ufeff' + rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const a2 = document.createElement('a'); a2.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a2.download = `CCTV_이벤트이력_${epRec.runId}.csv`; a2.click(); setTimeout(() => URL.revokeObjectURL(a2.href), 4000);
+  }
+});
+function renderCctvPanel(force) {
+  if (!cctvSel || cctvPanel.hidden) return;
+  const res = cctvView.renderPanel(cctvSel, cctvCv); if (!res) return;
+  const c = res.cam, ag = sim.cctvAgent, dark = modeKey === 'dark';
+  document.getElementById('cctvTitle').textContent = `📹 ${c.id} · ${res.place}`;
+  document.getElementById('cctvSub').textContent = `${c.region === 'inside' ? '천장 돔 카메라 (어안 360° · 디워핑 뷰)' : '실외 PTZ 돔 카메라'} · 설치 높이 ${c.y}m · 감시 반경 ${c.R}m · 위치 x ${c.x.toFixed(1)}, z ${c.z.toFixed(1)}`;
+  const cnt = {}; for (const d of res.dets) cnt[d.cls] = (cnt[d.cls] ?? 0) + 1;
+  document.getElementById('cctvDet').innerHTML = dark
+    ? `<div class="cc-models">${Object.entries(AI_MODELS).map(([k, m]) => `<span class="cc-m${res.dets.some((d) => d.model === k) ? ' on' : ''}" style="--c:${m.color}" title="${escV(m.desc)}">${escV(m.name)}</span>`).join('')}</div>
+       <div class="cc-cnt">${Object.entries(cnt).map(([k, n]) => `<b style="color:${CCTV_CLASSES[k]?.color}">${CCTV_CLASSES[k]?.ko ?? k} ${n}</b>`).join(' · ') || '검출 없음'} <small>(트랙 ID·신뢰도는 영상 상자에)</small></div>`
+    : '<div class="cc-cnt">녹화·관제 — AI 영상 분석(객체 검출·추적·이상 분할·연기 검출·침입 규칙)과 CCTV 에이전트는 피지컬AI 단계</div>';
+  if (!force && cctvPanel.querySelector('.cc-hist:hover')) return;   // 이력을 보는 동안은 표를 고정
+  const st = ag?.stats(), hist = (ag?.history ?? []).filter((r) => !cctvOnlyThis || r.cam === c.id || r.cams?.includes(c.id)).slice(0, 40);
+  document.getElementById('cctvHist').innerHTML = !ag?.on ? '<p class="vla-note">CCTV 에이전트는 피지컬AI 단계에서 동작합니다.</p>' : `
+    <div class="cc-hh"><b>CCTV 에이전트 이벤트 이력</b><small>전체 ${st.total}건 · 감지·보고 ${st.reports} · 교차 확인 ${st.verify} · 영상 확보 ${st.records} · 진행 중 ${st.open} — 대응·관리는 메인 오케스트레이터</small>
+      <button type="button" data-cctv="only" class="${cctvOnlyThis ? 'on' : ''}">이 카메라만</button><button type="button" data-cctv="csv" ${window.JIN3D_SHARED ? 'disabled' : ''}>⬇ CSV</button></div>
+    <div class="cc-hist"><table class="vla-t"><thead><tr><th>번호</th><th>시각</th><th>구분</th><th>카메라</th><th>클래스 · 모델</th><th>신뢰도</th><th>오케스트레이터 인시던트</th><th>상태 · 처리</th></tr></thead><tbody>
+    ${hist.map((r) => `<tr><td>${r.no}</td><td>${fclock(r.t)}</td><td class="${r.kind === 'report' ? 'p-rejected' : ''}">${{ report: '감지·보고', verify: '교차 확인', record: '영상 확보' }[r.kind]}</td><td><button type="button" class="cc-cam" data-cctv="go" data-cam="${r.cam}">${r.cam}</button></td><td class="ins" title="${escV(r.note)}">${escV(r.cls)} · ${escV(AI_MODELS[r.model]?.name ?? '')}</td><td>${r.conf != null ? r.conf.toFixed(2) : '-'}</td><td class="ins" title="${escV(r.inc?.title ?? '')}">${r.inc ? `#${r.inc.id} ${escV(r.inc.title)}` : '-'}</td><td class="${r.status === 'open' ? 'p-train' : 'p-done'}" title="${escV(r.result ?? '')}">${r.status === 'open' ? '진행 중' : `종료 · ${fdur(r.dur)}`}</td></tr>`).join('') || '<tr><td colspan="8">아직 없음 — 하단 "⚠ 현장 이벤트"로 발생시킬 수 있습니다</td></tr>'}</tbody></table></div>`;
+}
+
 // ── 양쪽 패널 숨기기/보이기 (버튼 ◀ ▶, 단축키 [ ]) — 상태는 브라우저에 기억 ─────────────────
 const sidePanels = { left: document.getElementById('tglLeft'), right: document.getElementById('tglRight') };
 function setSide(side, hide) {
@@ -503,11 +585,34 @@ for (const side of ['left', 'right']) {
   setSide(side, h);
   sidePanels[side].addEventListener('click', () => setSide(side, !document.body.classList.contains(`hide-${side}`)));
 }
+// 방향키: 화면 중앙 고정점(회전 중심)을 화면 방향 기준으로 바닥 위에서 이동 — ↑↓ 앞뒤, ←→ 좌우, Shift = 빠르게
+const panKeys = new Set();
 addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
   if (e.key === '[') setSide('left', !document.body.classList.contains('hide-left'));
   else if (e.key === ']') setSide('right', !document.body.classList.contains('hide-right'));
+  else if (e.key.startsWith('Arrow')) { panKeys.add(e.key); e.preventDefault(); }
 });
+addEventListener('keyup', (e) => { if (e.key.startsWith('Arrow')) panKeys.delete(e.key); });
+addEventListener('blur', () => { panKeys.clear(); shiftHeld = false; });
+const panF = new THREE.Vector3(), panR = new THREE.Vector3(), panD = new THREE.Vector3();
+function keyPan(rdt, shift) {
+  if (!panKeys.size) return;
+  const cam = controls.object, tg = controls.target;
+  panF.subVectors(tg, cam.position).setY(0);
+  if (panF.lengthSq() < 1e-6) panF.set(0, 0, -1).applyQuaternion(cam.quaternion).setY(0);   // 위에서 똑바로 내려다볼 때
+  panF.normalize(); panR.set(-panF.z, 0, panF.x);
+  const f = (panKeys.has('ArrowUp') ? 1 : 0) - (panKeys.has('ArrowDown') ? 1 : 0), r = (panKeys.has('ArrowRight') ? 1 : 0) - (panKeys.has('ArrowLeft') ? 1 : 0);
+  if (!f && !r) return;
+  const sp = Math.max(6, cam.position.distanceTo(tg) * 0.35) * (shift ? 2.5 : 1) * rdt;   // 멀리서 볼수록 빠르게 (초당 시야 거리의 35%)
+  panD.copy(panF).multiplyScalar(f).addScaledVector(panR, r).normalize().multiplyScalar(sp);
+  // 공장·트럭 야드 밖으로 너무 멀리 가지 않게
+  panD.x = Math.max(-100, Math.min(70, tg.x + panD.x)) - tg.x; panD.z = Math.max(-55, Math.min(35, tg.z + panD.z)) - tg.z;
+  tg.add(panD); cam.position.add(panD);
+}
+let shiftHeld = false;
+addEventListener('keydown', (e) => { if (e.key === 'Shift') shiftHeld = true; });
+addEventListener('keyup', (e) => { if (e.key === 'Shift') shiftHeld = false; });
 
 // ── 하단 시나리오 버튼 경보: 고장·공급 차질·현장 이벤트가 진행 중이면 해당 버튼이 깜빡이고 건수를 보여 준다 ─────────────────
 const alarmBtns = { fault: document.getElementById('btnFault'), supply: document.getElementById('btnSupply'), event: document.getElementById('btnEvent') };
@@ -534,7 +639,7 @@ function watchContext(r) {
   r.domElement.addEventListener('webglcontextlost', (e) => {
     e.preventDefault();
     if (r !== renderer) return;
-    glLost = true; camWall.lost = true; glNote.hidden = false;
+    glLost = true; camWall.lost = true; cctvView.lost = true; glNote.hidden = false;
     console.warn('[Jin-3D] WebGL 컨텍스트 손실 — 복구 대기');
     clearTimeout(glTimer); glTimer = setTimeout(rebuildRenderer, 1500);
   });
@@ -544,7 +649,7 @@ function watchContext(r) {
   });
 }
 function glRecovered(how) {
-  glLost = false; camWall.lost = false; glNote.hidden = true;
+  glLost = false; camWall.lost = false; cctvView.lost = false; glNote.hidden = true;
   composer.setSize(innerWidth, innerHeight);
   scene.traverse((o) => { if (o.material) for (const m of [].concat(o.material)) m.needsUpdate = true; });
   console.info(`[Jin-3D] WebGL 컨텍스트 ${how} 완료`);
@@ -570,7 +675,7 @@ watchContext(renderer);
 // 창이 다시 보일 때 컨텍스트가 조용히 사라져 있는 경우도 잡는다
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && !glLost && renderer.getContext().isContextLost()) {
-    glLost = true; camWall.lost = true; glNote.hidden = false; rebuildRenderer();
+    glLost = true; camWall.lost = true; cctvView.lost = true; glNote.hidden = false; rebuildRenderer();
   }
 });
 
@@ -592,6 +697,8 @@ function frame() {
   }
   hub.tick(rdt);
   view.update(rdt, running, speed);
+  keyPan(rdt, shiftHeld);
+  netT += rdt; if (netT > 1 && !netCard.hidden) { netT = 0; renderNetCard(); }
   controls.update();
   uiTimer += rdt; screenTimer += rdt;
   if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); gateView.tick(); updateAlarmButtons(); updateCmdUI(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
@@ -606,12 +713,14 @@ function frame() {
     if (box) box.hidden = !shown;
   }
   if (view.telemetry && ui.robotMode) placeRobotPanel();
-  if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought); }
+  if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought, { hub: hub.stats(), msgs: hub.msgs, bytes: hub.bytes }); }
   epRec.update();
   vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); renderAios(); aiosUpload(); renderFacos(); renderFacosView(); }
+  cctvT += rdt; if (cctvSel && cctvT > 0.12) { cctvT = 0; renderCctvPanel(); }
   if (!glLost) {
     try {
       camWall.update(rdt);
+      cctvView.update(rdt);
       composer.render();
     } catch (e) { if (!frame.errAt || performance.now() - frame.errAt > 5000) { frame.errAt = performance.now(); console.error('[Jin-3D] 렌더 오류', e); } }
   }
@@ -817,7 +926,7 @@ function renderFacos() {
     ['📡', '명령 센터', cmd[0], cmd[1], 'btnOrch', '상위 긴급·제어 명령: 전송 → 셀 ACK → 실행 → 완료, 인터록 (js/commands.js)'],
     ['🚦', '셀·게이트', `가동 ${busy}/${cells.length}${down ? ` · 고장 ${down}` : ''} · 판별 ${gates}`, down ? 'warn' : 'ok', 'facos:cell', '셀 컨트롤러 · 분류·포장 게이트 판별 → 로봇 역할(주 작업/보조) 결정 (js/sim.js)'],
     ['🧠', 'VLA', `${V.label(V.latest)} · ${vrob}대${V.job ? ` · ${VLA_PH[V.job.phase] ?? ''}` : ''}`, V.job ? 'act' : 'ok', 'btnVla', '로봇 VLA 추론 모델 — 에피소드 → 학습 → 평가 → 카나리 → OTA 배포 (js/vla.js)'],
-    ['👁', '현장 감지', evs ? `이벤트 ${evs}건` : `드론 ${s.drones.length} · 사족 ${s.quads.length}`, evs ? 'warn' : 'ok', 'facos:sense', '로봇 비전 AI 이벤트 감지 · 순찰 드론 · 사족보행 열화상·진동 점검 (js/robotcam.js · js/drone.js)'],
+    ['👁', '현장 감지', evs ? `이벤트 ${evs}건` : `CCTV ${s.cctv.cams.length} · 드론 ${s.drones.length} · 사족 ${s.quads.length}`, evs ? 'warn' : 'ok', 'facos:sense', '사각지대 없는 CCTV AI 영상 분석 · 로봇 비전 AI 이벤트 감지 · 순찰 드론 · 사족보행 열화상·진동 점검 (js/cctv.js · js/robotcam.js · js/drone.js)'],
     ['🗄', 'DataHub', mq.available ? `MQTT ${mq.sent.toLocaleString('ko-KR')}건` : `AAS · 수집 ${hub.samples.length}`, mq.available && mq.failed ? 'warn' : 'ok', 'btnData', '기준 시계(UTC) · AAS · OPC UA PubSub over MQTT · AASX 저장 (js/datahub.js)'],
   ];
   const html = `<button type="button" class="fc-brand" title="FACOS — 피지컬AI 공장 운영 SW (누르면 접기/펴기)"><b>FACOS</b><small>공장 운영 SW</small></button>` + L.map(([ic, nm, val, cls, open, tip], i) =>
@@ -878,7 +987,7 @@ function viewSense() {
   const resp = (e) => e.responder ?? (e.type === 'intrusion' ? '주변 셀 감속 · 원격 관제' : '-');
   return `<div class="fc-tiles">
       ${tile('현장 이벤트', `${L.length}건`, `감지 ${det.length} · 처리 ${done.length}`)}${tile('평균 감지 시간', fdur(avg(det.map((e) => e.tDetect - e.t0))), '발생 → 카메라 AI 인식')}${tile('평균 처리 시간', fdur(avg(done.map((e) => e.tClear - e.t0))), '발생 → 해소')}${tile('평균 추론 신뢰도', det.length ? avg(det.map((e) => e.conf)).toFixed(2) : '-')}
-      ${tile('사족보행 순찰 점검', `${st.scans ?? 0}회`, `예지정비 ${st.scan_예지정비 ?? 0} · 재보정 ${st.scan_재보정 ?? 0}`)}${tile('드론 사고 현장 출동', `${s.stats.droneMissions ?? 0}회`, (() => { const ds = s.orch.incidents.filter((i) => i.drone).map((i) => i.drone.dt); return ds.length ? `평균 도착 ${fdur(avg(ds))} · 순찰 지점 ${s.drones.reduce((a, d) => a + (d.visits ?? 0), 0)}곳` : `순찰 지점 ${s.drones.reduce((a, d) => a + (d.visits ?? 0), 0)}곳`; })())}
+      ${tile('CCTV (사각지대 없음)', `${s.cctv.cams.length}대`, `감시 ${(s.cctv.stats.coverage * 100).toFixed(1)}% · 이중 감시 ${(s.cctv.stats.redundancy * 100).toFixed(0)}% · CCTV 감지 ${L.filter((e) => e.cctv).length}건`)}${tile('사족보행 순찰 점검', `${st.scans ?? 0}회`, `예지정비 ${st.scan_예지정비 ?? 0} · 재보정 ${st.scan_재보정 ?? 0}`)}${tile('드론 사고 현장 출동', `${s.stats.droneMissions ?? 0}회`, (() => { const ds = s.orch.incidents.filter((i) => i.drone).map((i) => i.drone.dt); return ds.length ? `평균 도착 ${fdur(avg(ds))} · 순찰 지점 ${s.drones.reduce((a, d) => a + (d.visits ?? 0), 0)}곳` : `순찰 지점 ${s.drones.reduce((a, d) => a + (d.visits ?? 0), 0)}곳`; })())}
     </div>
     ${(() => { const Z = DRONE_SIZING, ps = s.dronePatrolStats(), arr = s.orch.incidents.filter((i) => i.drone).map((i) => i.drone.dt).sort((a, b) => a - b), none = s.drones.length && !s.drones.some((d) => d.available);
       return `<div class="fc-card"><h4>🛸 드론 운용 대수 산정 <small>시설 크기(순찰 주기) · 인시던트 출동률 기준 → <b>${Z.chosen}대 운영</b> (현재 ${s.drones.length}대)</small></h4>
@@ -908,4 +1017,4 @@ function renderFacosView(force) {
 document.getElementById('closeFacos').addEventListener('click', () => { fcModal.classList.add('hidden'); fcView = null; });
 fcModal.addEventListener('click', (e) => { if (e.target === fcModal) { fcModal.classList.add('hidden'); fcView = null; } });
 
-window.__twin = { epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };
+window.__twin = { cctvView, epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };

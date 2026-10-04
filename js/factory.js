@@ -4,8 +4,10 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RobotTelemetry } from './telemetry.js';
 import { BELT_Y, LOC, chgLoc, FG_CAP, RAW_CAP, ST_LABEL } from './sim.js';
 import { YARD } from './shipping.js';
-import { INBOUND, WH } from './receiving.js';
+import { INBOUND, WH, WH_RACK } from './receiving.js';
 import { DRONE_PAD, dronePad } from './drone.js';
+import { STAGES, INCIDENT_TYPES } from './orchestrator.js';
+import { NR } from './net5g.js';
 import { equipmentList, STATUS_CLASS } from './assets.js';
 import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, AMR_LANES, amrPark, ZONE_AMR, AMMR, AMMR_FETCH } from './line.js';
 
@@ -82,7 +84,7 @@ function floorTexture() {
   g.strokeStyle = 'rgba(40,44,50,0.55)'; g.lineWidth = 2;
   for (let i = 0; i <= 512; i += 128) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i, 512); g.stroke(); g.beginPath(); g.moveTo(0, i); g.lineTo(512, i); g.stroke(); }
   const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(19, 10); t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(22.25, 10); t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
   return t;
 }
@@ -1080,12 +1082,14 @@ export class FactoryView {
   buildBuilding() {
     const r = this.root;
     const floorMat = new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 0.85, metalness: 0.05 });
-    const floor = put(mesh(new THREE.PlaneGeometry(76, 40), floorMat, false), 0, 0, 0, r);
+    // 바닥: 생산동(x −38 ~ 38) + 왼쪽 물류 확장동(x −51 ~ −38) — 하나의 건물, 사이 벽 없음
+    const floor = put(mesh(new THREE.PlaneGeometry(89, 40), floorMat, false), -6.5, 0, 0, r);
     floor.rotation.x = -Math.PI / 2;
     this.floorMat = floorMat;
     // AGV 통로
     const laneGeo = (w, d) => new THREE.PlaneGeometry(w, d);
-    const lanes = [[0, 9, 70, 2.6], [0, -9, 70, 2.6], [-33, 0, 2.6, 20.6], [35, 0, 2.6, 20.6]];
+    // 앞쪽 통로는 확장동 물류존(AGV 원자재 상차·부품 피킹)까지 이어지고, 왼쪽 세로 통로는 동선 계산의 교차 통로(x −35.5)와 같은 자리
+    const lanes = [[-7, 9, 84, 2.6], [-1, -9, 72, 2.6], [-35.5, 0, 2.6, 20.6], [35, 0, 2.6, 20.6]];   // 입고 지게차 운행 구간은 바닥 초록 전용 표시로만 구분
     for (const [x, z, w, d] of lanes) {
       const l = put(new THREE.Mesh(laneGeo(w, d), MAT.lane), x, 0.005, z, r); l.rotation.x = -Math.PI / 2; l.receiveShadow = true;
       for (const s of [-1, 1]) {
@@ -1096,37 +1100,34 @@ export class FactoryView {
     }
     // 벽체·기둥
     // 뒷벽: 출하 도크 문 2개(폭 4.6m · 높이 4.9m)만 트럭 상차용으로 열고 나머지는 외벽 (입고 도크와 같은 방식)
-    put(box(57, 8, 0.3, MAT.wall), -9.5, 4, -20, r);
+    put(box(70, 8, 0.3, MAT.wall), -16, 4, -20, r);
     const doorW = 4.6, spans = [[19, YARD.bays[0] - doorW / 2], [YARD.bays[0] + doorW / 2, YARD.bays[1] - doorW / 2], [YARD.bays[1] + doorW / 2, 38]];
     for (const [a, b] of spans) put(box(b - a, 8, 0.3, MAT.wall), (a + b) / 2, 4, -20, r);
     for (const bx of YARD.bays) put(box(doorW, 8 - 4.9, 0.3, MAT.wall), bx, 4.9 + (8 - 4.9) / 2, -20, r);
     put(box(19, 0.3, 0.32, MAT.steel), 28.5, 0.15, -20, r);
-    // 왼쪽 벽: 입고 도크 문(z −16.8~−12.2, 높이 4.9m)만 트럭 하차용으로 열고 나머지는 외벽
+    // 왼쪽 벽(확장동 x −51): 입고 도크 문(z −16.8~−12.2, 높이 4.9m)만 트럭 하차용으로 열고 나머지는 외벽
+    // 왼쪽 벽은 그림자를 드리우지 않는다 (해가 왼쪽에서 비쳐 물류 확장동 바닥을 크게 덮던 그림자 제거 — 바닥은 다른 그림자를 그대로 받음)
     { const dz0 = INBOUND.dockZ - 2.3, dz1 = INBOUND.dockZ + 2.3;
-      put(box(0.3, 8, dz0 + 20, MAT.wall), -38, 4, (-20 + dz0) / 2, r);
-      put(box(0.3, 8, 20 - dz1, MAT.wall), -38, 4, (dz1 + 20) / 2, r);
-      put(box(0.3, 8 - 4.9, 4.6, MAT.wall), -38, 4.9 + (8 - 4.9) / 2, INBOUND.dockZ, r);
-      put(box(0.32, 0.3, 14, MAT.steel), -38, 0.15, -13, r);
+      const W = INBOUND.wallX, lw = put(new THREE.Group(), 0, 0, 0, r);
+      put(box(0.3, 8, dz0 + 20, MAT.wall), W, 4, (-20 + dz0) / 2, lw);
+      put(box(0.3, 8, 20 - dz1, MAT.wall), W, 4, (dz1 + 20) / 2, lw);
+      put(box(0.3, 8 - 4.9, 4.6, MAT.wall), W, 4.9 + (8 - 4.9) / 2, INBOUND.dockZ, lw);
+      put(box(0.32, 0.3, 14, MAT.steel), W, 0.15, -13, lw);
       // 입고 도크: 말아 올린 셔터·문틀·도크 레벨러·범퍼·표지
-      put(cyl(0.32, 0.32, 4.6, MAT.dark, 16), -37.85, 4.75, INBOUND.dockZ, r).rotation.x = Math.PI / 2;
-      put(box(0.14, 0.25, 4.8, MAT.yellow), -37.75, 4.6, INBOUND.dockZ, r);
-      for (const sd of [-1, 1]) put(box(0.2, 4.6, 0.18, MAT.yellow), -37.8, 2.3, INBOUND.dockZ + sd * 2.35, r);
-      put(box(1.4, 0.08, 2.6, MAT.steel), -37.2, 0.04, INBOUND.dockZ, r);
-      for (const sd of [-1, 1]) put(box(0.25, 0.5, 0.35, MAT.rubber), -38.3, 1.0, INBOUND.dockZ + sd * 1.15, r);
-      put(makeSignSprite('입고 도크', '#3ddc84', 3.2), -37.6, 5.6, INBOUND.dockZ, r); }
+      put(cyl(0.32, 0.32, 4.6, MAT.dark, 16), W + 0.15, 4.75, INBOUND.dockZ, lw).rotation.x = Math.PI / 2;
+      put(box(0.14, 0.25, 4.8, MAT.yellow), W + 0.25, 4.6, INBOUND.dockZ, lw);
+      for (const sd of [-1, 1]) put(box(0.2, 4.6, 0.18, MAT.yellow), W + 0.2, 2.3, INBOUND.dockZ + sd * 2.35, lw);
+      put(box(1.4, 0.08, 2.6, MAT.steel), W + 0.8, 0.04, INBOUND.dockZ, lw);
+      for (const sd of [-1, 1]) put(box(0.25, 0.5, 0.35, MAT.rubber), W - 0.3, 1.0, INBOUND.dockZ + sd * 1.15, lw);
+      put(makeSignSprite('입고 도크', '#3ddc84', 3.2), W + 0.4, 5.6, INBOUND.dockZ, lw);
+      lw.traverse((o) => (o.castShadow = false)); }
     put(box(0.3, 8, 40, MAT.wall), 38, 4, 0, r);
-    for (let x = -36; x <= 36; x += 9) put(box(0.6, 8, 0.6, MAT.steel), x, 4, -19.6, r);
-    put(box(76, 0.5, 0.35, MAT.accent), 0, 7.7, -19.8, r);
+    for (let x = -45; x <= 36; x += 9) put(box(0.6, 8, 0.6, MAT.steel), x, 4, -19.6, r);
+    put(box(89, 0.5, 0.35, MAT.accent), -6.5, 7.7, -19.8, r);
     // 천장 형광등 기구는 두지 않는다 — 공장 밝기는 환경광·주광·보조광(main.js LOOK)으로 단계별로 유지
-    // 캠틱종합기술원 사인 — 뒷벽, 중앙 관제 화면 왼쪽 빈 칸. 로고 글자가 흰색이라 남색 백보드 위에 붙인 백라이트 사인으로 만든다
-    // 벽 기둥(9m 간격, x=-18·-9) 사이에 들어가도록 폭 8m, 관제 화면과 같은 중심 높이(5.1m)
-    const sign = put(new THREE.Group(), -13.5, 5.1, -19.78, r);
-    put(box(8.0, 2.95, 0.12, std(0x0c2048, { roughness: 0.5, metalness: 0.2 })), 0, 0, 0, sign);
-    put(box(8.0, 0.08, 0.14, MAT.accent), 0, -1.52, 0, sign);
+    // 뒷벽 관제 화면 왼쪽(12×4m)에는 CCTV 전광판(js/cctvview.js)이 걸린다 — 캠틱 로고는 앞쪽 바닥 표시에 남긴다
     const logoTex = new THREE.TextureLoader().load('assets/camtic_logo.png');
     logoTex.colorSpace = THREE.SRGBColorSpace; logoTex.anisotropy = 8;
-    // 흰 글자가 블룸으로 번지지 않게 밝기를 조금 낮춘다
-    put(new THREE.Mesh(new THREE.PlaneGeometry(7.4, 7.4 * 187 / 550), new THREE.MeshBasicMaterial({ map: logoTex, color: 0xcfd3d8, transparent: true, depthWrite: false })), 0, 0, 0.07, sign);
     // 바닥 표시 — 앞쪽 AGV 충전소(x -15~-3)와 사족보행·정비 휴머노이드 대기 구역(x 6~14) 사이. 카메라 쪽에서 바로 읽히는 방향
     const floorLogo = put(new THREE.Group(), 1.2, 0, 13.6, r);
     const flatOn = (w, d, mat, y) => { const m = put(new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat), 0, y, 0, floorLogo); m.rotation.x = -Math.PI / 2; m.receiveShadow = true; return m; };
@@ -1143,7 +1144,6 @@ export class FactoryView {
       put(makeSignSprite(`출하 도크 ${i + 1}`, '#f2c230', 3.2), bx, 5.6, -19.6, r);
     }
     this.buildYard();
-    this.buildSlogans();
     this.buildFacadeSigns();
     this.buildBoard();
   }
@@ -1177,6 +1177,94 @@ export class FactoryView {
     B.tex.needsUpdate = true;
   }
 
+  // CCTV: 사각지대 없는 배치(js/cctv.js)대로 천장 돔·외벽·기둥 카메라를 달고, 커버리지 지도(바닥 색: 빨강 사각지대 · 연두 1대 · 초록 2대 이상)를 준비한다
+  buildCCTV(sim) {
+    if (this.cctvG) this.root.remove(this.cctvG);
+    const plan = sim.cctv, g = this.cctvG = put(new THREE.Group(), 0, 0, 0, this.root);
+    const body = std(0xe9edf2, { roughness: 0.4 }), dark = std(0x16191d, { roughness: 0.25, metalness: 0.4 }), led = emis(0xff3b3b, 2);
+    this.cctvLeds = [];
+    for (const c of plan.cams) {
+      const cg = put(new THREE.Group(), c.x, 0, c.z, g); cg.userData.cctvId = c.id;
+      put(new THREE.Mesh(new THREE.SphereGeometry(0.7, 8, 6), new THREE.MeshBasicMaterial({ visible: false })), 0, c.y, 0, cg);   // 누르기 쉬운 선택 영역
+      if (c.kind === 'dome') {   // 천장 돔: 천장(8m)에서 내려온 짧은 브래킷 + 돔
+        put(cyl(0.04, 0.04, 8 - c.y, MAT.steel, 6), 0, (8 + c.y) / 2, 0, cg);
+        put(cyl(0.2, 0.2, 0.08, body, 16), 0, c.y, 0, cg);
+        const d = put(mesh(new THREE.SphereGeometry(0.16, 16, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), dark), 0, c.y - 0.03, 0, cg);
+        void d;
+      } else {
+        if (c.kind === 'pole') put(cyl(0.09, 0.12, c.y, MAT.steel, 8), 0, c.y / 2, 0, cg);
+        else put(box(0.5, 0.12, 0.12, MAT.steel), 0, c.y + 0.1, 0, cg).rotation.y = c.face ?? 0;   // 외벽 브래킷
+        put(cyl(0.24, 0.24, 0.12, body, 16), 0, c.y + 0.12, 0, cg);
+        put(mesh(new THREE.SphereGeometry(0.2, 16, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), dark), 0, c.y + 0.06, 0, cg);
+      }
+      const l = put(box(0.05, 0.05, 0.05, led, false), 0.14, c.kind === 'dome' ? c.y + 0.02 : c.y + 0.2, 0, cg); this.cctvLeds.push(l);
+    }
+    // 커버리지 지도 (구역별 캔버스, 1m = 1칸)
+    this.cctvMap = put(new THREE.Group(), 0, 0, 0, g); this.cctvMap.visible = !!this.cctvOn;
+    for (const r of Object.values(plan.regions)) {
+      if (!r.pts.length) continue;
+      const xs = r.pts.map((p) => p.x), zs = r.pts.map((p) => p.z), x0 = Math.min(...xs), x1 = Math.max(...xs), z0 = Math.min(...zs), z1 = Math.max(...zs);
+      const W = Math.round(x1 - x0) + 1, H = Math.round(z1 - z0) + 1, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      const c2 = cv.getContext('2d');
+      r.pts.forEach((p, i) => { const n = r.count[i]; c2.fillStyle = n === 0 ? 'rgba(255,60,60,0.85)' : n === 1 ? 'rgba(170,230,90,0.55)' : 'rgba(40,200,120,0.42)'; c2.fillRect(Math.round(p.x - x0), Math.round(p.z - z0), 1, 1); });
+      const tex = new THREE.CanvasTexture(cv); tex.magFilter = THREE.NearestFilter; tex.colorSpace = THREE.SRGBColorSpace;
+      const m = put(new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false })), (x0 + x1) / 2, 0.05, (z0 + z1) / 2, this.cctvMap);
+      m.rotation.x = -Math.PI / 2; m.renderOrder = 2;
+    }
+    // 카메라마다 감시 반경 원
+    for (const c of plan.cams) {
+      const ring = put(new THREE.Mesh(new THREE.RingGeometry(c.R - 0.12, c.R, 64), new THREE.MeshBasicMaterial({ color: c.region === 'inside' ? 0x37e8ff : 0xf5b82e, transparent: true, opacity: 0.35, depthWrite: false })), c.x, 0.06, c.z, this.cctvMap);
+      ring.rotation.x = -Math.PI / 2;
+    }
+  }
+  setCCTVMap(on) { this.cctvOn = on; if (this.cctvMap) this.cctvMap.visible = on; }
+
+  // Private 5G: 천장 소형 셀(gNB) — 무선 유닛·안테나 2개·상태등, 커버리지 지도(RSRP 색) · PCI 표시 · 로봇 ↔ 서빙 셀 연결선
+  build5G(sim) {
+    if (this.netG) this.root.remove(this.netG);
+    const net = sim.net, g = this.netG = put(new THREE.Group(), 0, 0, 0, this.root);
+    g.visible = !!net?.on; this.netLinks = null; if (!net?.on) return;
+    const plan = net.plan, body = std(0xf2f4f7, { roughness: 0.45 }), ant = std(0x2b3036, { roughness: 0.5 });
+    this.netLeds = [];
+    for (const c of plan.cells) {
+      const cg = put(new THREE.Group(), c.x, 0, c.z, g); cg.userData.gnbId = c.id;
+      put(cyl(0.035, 0.035, 8 - (c.y + 0.2), MAT.steel, 6), 0, (8 + c.y + 0.2) / 2, 0, cg);   // 천장 브래킷
+      put(box(0.55, 0.32, 0.38, body), 0, c.y + 0.05, 0, cg);                                   // 무선 유닛 (RU)
+      for (const sd of [-1, 1]) put(box(0.08, 0.42, 0.16, ant), sd * 0.2, c.y - 0.28, 0, cg);    // 안테나
+      const led = emis(0x3dff8a, 2.2); this.netLeds.push(put(box(0.06, 0.04, 0.02, led, false), 0.18, c.y + 0.12, 0.2, cg));
+      put(makeSignSprite(`5G ${c.id} · PCI ${c.pci}`, '#b89bff', 2.6), 0, c.y - 0.85, 0, cg).userData.netLabel = true;
+    }
+    // 커버리지 지도: 2m 칸마다 최강 셀 RSRP 색 (−70 이상 진초록 … −100 미만 빨강 = 음영지역)
+    this.netMap = put(new THREE.Group(), 0, 0, 0, g); this.netMap.visible = !!this.netOn;
+    { const xs = plan.pts.map((p) => p.x), zs = plan.pts.map((p) => p.z), x0 = Math.min(...xs), x1 = Math.max(...xs), z0 = Math.min(...zs), z1 = Math.max(...zs);
+      const W = Math.round((x1 - x0) / 2) + 1, H = Math.round((z1 - z0) / 2) + 1, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      const c2 = cv.getContext('2d');
+      plan.pts.forEach((p, i) => { const v = plan.best[i]; c2.fillStyle = v >= -70 ? 'rgba(30,170,90,0.55)' : v >= -75 ? 'rgba(90,205,95,0.5)' : v >= NR.design ? 'rgba(190,230,90,0.5)' : v >= -90 ? 'rgba(245,184,46,0.6)' : v >= NR.require ? 'rgba(255,138,61,0.7)' : 'rgba(255,50,50,0.85)'; c2.fillRect(Math.round((p.x - x0) / 2), Math.round((p.z - z0) / 2), 1, 1); });
+      const tex = new THREE.CanvasTexture(cv); tex.magFilter = THREE.NearestFilter; tex.colorSpace = THREE.SRGBColorSpace;
+      const m = put(new THREE.Mesh(new THREE.PlaneGeometry(W * 2, H * 2), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false })), (x0 + x1) / 2, 0.055, (z0 + z1) / 2, this.netMap);
+      m.rotation.x = -Math.PI / 2; m.renderOrder = 2; }
+    // 로봇(5G 모뎀) ↔ 서빙 셀 연결선 — 핸드오버 직후 1.5초는 흰색으로 깜빡인다
+    const n = net.ues.length, geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 6), 3)); geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 6), 3));
+    this.netLinks = put(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85, depthWrite: false })), 0, 0, 0, this.netMap);
+    this.netLinks.frustumCulled = false;
+    for (const sp of g.children) sp.traverse?.((o) => { if (o.userData.netLabel) o.visible = !!this.netOn; });
+    g.traverse((o) => (o.castShadow = false));
+  }
+  setNetMap(on) { this.netOn = on; if (this.netMap) this.netMap.visible = on; this.netG?.traverse((o) => { if (o.userData.netLabel) o.visible = on; }); }
+  updateNetLinks() {
+    const net = this.sim?.net; if (!this.netOn || !this.netLinks || !net?.on) return;
+    const P = this.netLinks.geometry.attributes.position, C = this.netLinks.geometry.attributes.color, cells = net.plan.cells, t = net.sim.time;
+    const PAL = [[0.37, 0.91, 1], [0.72, 0.61, 1], [0.24, 0.86, 0.52], [0.96, 0.72, 0.18], [1, 0.48, 0.24], [0.35, 0.66, 1]];
+    net.ues.forEach((u, i) => {
+      const p = u.pos(), c = cells[u.hoUntil >= 0 ? u.hoTarget : u.serv] ?? cells[0], y = p.y ?? 1;
+      P.setXYZ(i * 2, p.x, y + 0.6, p.z); P.setXYZ(i * 2 + 1, c.x, c.y - 0.3, c.z);
+      const flash = u.hos[0] && t - u.hos[0].t < 1.5 && Math.floor(t * 8) % 2 === 0, col = u.hoUntil >= 0 || flash ? [1, 1, 1] : PAL[c.pci % 3 * 2 % PAL.length + (c.idx % 2)] ?? PAL[0];
+      C.setXYZ(i * 2, ...col); C.setXYZ(i * 2 + 1, ...col);
+    });
+    P.needsUpdate = true; C.needsUpdate = true;
+  }
+
   // 건물 외벽 3면(뒷벽·왼쪽 벽·오른쪽 벽 바깥) 건물 사인 — "피지컬AI 실증 메타팩토리"
   // 남색 백보드 + 흰 글자 + 하늘색 띠. 벽 바깥 0.2m에 붙이고 바깥을 향한다 (앞면은 열려 있어 사인 없음)
   buildFacadeSigns() {
@@ -1199,7 +1287,7 @@ export class FactoryView {
     // 뒷벽 바깥 가운데 (x 0, 출하 도크 문 위쪽을 피한 폭) — 바깥(−z)을 향함
     const back = put(make(26, H), 0, Y, -20.2, this.root); back.rotation.y = Math.PI;
     // 왼쪽 벽 바깥 가운데 (z 0, 입고 도크 문 z −16.8~−12.2를 비켜 폭 22m) — 바깥(−x)을 향함
-    const left = put(make(22, H), -38.2, Y, 0, this.root); left.rotation.y = -Math.PI / 2;
+    const left = put(make(22, H), INBOUND.wallX - 0.2, Y, 0, this.root); left.rotation.y = -Math.PI / 2; left.castShadow = false;
     // 오른쪽 벽 바깥 — 바깥(+x)을 향함
     const right = put(make(26, H), 38.2, Y, 0, this.root); right.rotation.y = Math.PI / 2;
     this.facadeSigns = [back, left, right];
@@ -1256,34 +1344,6 @@ export class FactoryView {
     this.boardTex.needsUpdate = true;
   }
 
-  // 벽면 슬로건 현수막 (단계별 하나만 보임): 레거시 — 캠틱 로고와 출하 도크 사이, 자동화 — 중앙 관제 화면과 출하 도크 사이
-  // 판 크기는 글자에 맞춘다: 글자 높이 f(m) 기준으로 좌우 여백 0.9f, 위아래 여백 0.55f, 줄 간격 1.3f — 두 현수막 글자 크기가 같다
-  buildSlogans() {
-    const r = this.root, FONT = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
-    const banner = (lines, x0, x1, { bg, fg, accent, stripe }, f = 1.0) => {
-      const m = document.createElement('canvas').getContext('2d'); m.font = `900 100px ${FONT}`;
-      const tw = Math.max(...lines.map((l) => m.measureText(l).width)) / 100 * f;
-      const w = Math.min(x1 - x0, tw + 1.8 * f), h = lines.length * 1.3 * f + 1.1 * f;
-      const g = put(new THREE.Group(), (x0 + x1) / 2, 5.1, -19.12, r);
-      const px = 2048 / w, c = document.createElement('canvas'); c.width = 2048; c.height = Math.round(h * px);
-      const x = c.getContext('2d'), band = 0.16 * f * px;
-      x.fillStyle = bg; x.fillRect(0, 0, c.width, c.height);
-      x.fillStyle = accent; x.fillRect(0, 0, c.width, band); x.fillRect(0, c.height - band, c.width, band);
-      if (stripe) for (let i = -band * 2; i < c.width; i += band * 3) { x.fillStyle = stripe; x.beginPath(); x.moveTo(i, c.height - band); x.lineTo(i + band * 1.2, c.height - band); x.lineTo(i + band * 2.2, c.height); x.lineTo(i + band, c.height); x.fill(); }
-      x.font = `900 ${f * px}px ${FONT}`; x.fillStyle = fg; x.textAlign = 'center'; x.textBaseline = 'middle';
-      lines.forEach((l, i) => x.fillText(l, c.width / 2, (0.55 * f + 0.65 * f + i * 1.3 * f) * px));
-      const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
-      put(box(w + 0.2, h + 0.2, 0.08, MAT.dark), 0, 0, -0.06, g);
-      put(new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.8 })), 0, 0, 0, g);
-      g.visible = false;
-      return g;
-    };
-    // 레거시: 숙련 기술을 강조하는 전통 공장 현수막 (흰 바탕 · 빨간 글씨, 한 줄)
-    this.sloganLegacy = banner(['우리의 숙련된 기술이 곧 회사의 경쟁력입니다!'], -8.8, 18.4, { bg: '#f4f1ea', fg: '#c8202a', accent: '#1d3f8f' });
-    // 자동화: 설비 점검·안전 수칙 현수막 (남색 바탕 · 흰 글씨 · 노랑 안전 띠, 두 줄)
-    this.sloganSmart = banner(['설비 점검은 철저하게,', '안전 수칙은 엄격하게'], 4.6, 18.4, { bg: '#123a7a', fg: '#ffffff', accent: '#f2c230', stripe: '#1b1b1b' });
-  }
-
   // 건물 밖 트럭 야드 (뒷벽 바깥, 검은 외부): 아스팔트·도크 접안선·대기 자리·진출입 도로
   buildYard() {
     const r = this.root;
@@ -1295,17 +1355,17 @@ export class FactoryView {
     for (const bx of YARD.bays) for (const sd of [-1, 1]) flat(0.15, 12, line, bx + sd * 1.7, -26.4, 0.02);
     for (const sd of [-1, 1]) for (let z = -21; z > -33; z -= 1.6) flat(0.12, 0.8, white, YARD.waitX + sd * 1.6, z, 0.02);
     // 입고 트럭 야드 (왼쪽 벽 바깥): 바닥, 남북 도로(북행 입차·남행 출차), 서쪽 진입로, 도크 앞 정차선, 표시
-    flat(42, 42, std(0x2b3036, { roughness: 0.95 }), -59, -24, -0.01);   // 서쪽으로 돌아 도크 중심선에 서는 공간까지
+    flat(42, 42, std(0x2b3036, { roughness: 0.95 }), -72, -24, -0.01);   // 서쪽으로 돌아 도크 중심선에 서는 공간까지
     flat(9, 36, std(0x24282d, { roughness: 0.95 }), INBOUND.roadX, -24, 0.0);
-    flat(108, 7, std(0x24282d, { roughness: 0.95 }), -47, INBOUND.roadZ, 0.0);
-    for (let x = -100; x < 7; x += 4) flat(2, 0.15, white, x, INBOUND.roadZ, 0.02);
+    flat(140, 7, std(0x24282d, { roughness: 0.95 }), -63, INBOUND.roadZ, 0.0);
+    for (let x = -132; x < 7; x += 4) flat(2, 0.15, white, x, INBOUND.roadZ, 0.02);
     for (let z = -38; z < -6; z += 4) flat(0.15, 2, white, INBOUND.roadX, z, 0.02);
-    for (const sd of [-1, 1]) flat(12, 0.15, line, -44.2, INBOUND.dockZ + sd * 1.7, 0.02);
+    for (const sd of [-1, 1]) flat(12, 0.15, line, INBOUND.wallX - 6.2, INBOUND.dockZ + sd * 1.7, 0.02);
     { const c2 = document.createElement('canvas'); c2.width = 1024; c2.height = 128;
       const g2 = c2.getContext('2d'); g2.fillStyle = 'rgba(61,220,132,0.95)'; g2.font = '700 64px "Apple SD Gothic Neo", "Noto Sans KR", sans-serif'; g2.textAlign = 'center'; g2.textBaseline = 'middle';
       g2.fillText('입고 트럭 야드 · 입고 도크', 512, 64);
       const t2 = new THREE.CanvasTexture(c2); t2.colorSpace = THREE.SRGBColorSpace;
-      const m2 = flat(14, 1.75, new THREE.MeshBasicMaterial({ map: t2, transparent: true, depthWrite: false }), -47, -21.5, 0.03); m2.rotation.z = 0; }
+      const m2 = flat(14, 1.75, new THREE.MeshBasicMaterial({ map: t2, transparent: true, depthWrite: false }), -60, -21.5, 0.03); m2.rotation.z = 0; }
     const tx = document.createElement('canvas'); tx.width = 1024; tx.height = 128;
     const c = tx.getContext('2d'); c.fillStyle = 'rgba(242,194,48,0.95)'; c.font = '700 64px "Apple SD Gothic Neo", "Noto Sans KR", sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
     c.fillText('출하 트럭 야드 · 도크 1 · 대기 · 도크 2', 512, 64);
@@ -1316,12 +1376,13 @@ export class FactoryView {
   buildAreas() {
     const r = this.root;
     // 자재 공급 차질 경보: 자재창고 랙 주변
-    this.whAlarm = put(makeAlarmFx(12.4, 4.6, 5.2), -26, 0, -16.5, r);
+    this.whAlarm = put(makeAlarmFx(12.4, 4.6, 5.2), WH_RACK.x + 0.6, 0, WH_RACK.z, r); this.whAlarm.rotation.y = Math.PI / 2;
     // 물류 선반(자재창고 랙): 왼쪽 2열 × 3단 = 원자재 6칸, 오른쪽 2열 × 3단 = 부품 6칸 (한 칸 = 입고 팔레트 1개)
     // 원자재 칸은 박스 2단(20박스씩 = AGV 1회분), 부품 칸은 부품 빈 6개(40개씩) — 재고만큼 차고 배달할수록 줄어든다
-    const rack = new THREE.Group(); put(rack, -26, 0, -16.5, r);
+    // 왼쪽 확장동 물류존: 선반을 왼쪽 벽에 붙여 남북으로 세운다 (로컬 −x 원자재 → 남쪽, +x 부품 → 북쪽, 앞면 = 동쪽)
+    const rack = new THREE.Group(); put(rack, WH_RACK.x, 0, WH_RACK.z, r); rack.rotation.y = Math.PI / 2;
     this.whRawSlots = []; this.whPartSlots = []; this.whOut = false;
-    this.whSign = put(makeSignSprite('⛔ 출고 중단 · 공급 차질', '#ff8a1f', 7.5), -26, 7.4, -15.5, r); this.whSign.visible = false;
+    this.whSign = put(makeSignSprite('⛔ 출고 중단 · 공급 차질', '#ff8a1f', 7.5), WH_RACK.x + 1.2, 7.4, WH_RACK.z, r); this.whSign.visible = false;
     for (const x of [-5, -2.5, 0, 2.5, 5]) for (const z of [-1, 1]) put(box(0.12, 5, 0.12, MAT.accent), x, 2.5, z, rack);
     for (const y of [0.3, 1.9, 3.5]) {
       put(box(10.2, 0.1, 2.1, MAT.steel), 0, y, 0, rack);
@@ -1340,14 +1401,15 @@ export class FactoryView {
     // 원자재 칸이 아래 단부터 차도록 정렬 (단 → 열)
     this.whRawSlots.sort((a, b) => a.y - b.y); this.whPartSlots.sort((a, b) => a.y - b.y);
     // 선반 앞 표지
-    put(makeSignSprite('원자재', '#c9d2dc', 2.2), -28.5, 5.3, -15.3, r);
-    put(makeSignSprite('부품', '#5aa9ff', 2.2), -23.5, 5.3, -15.3, r);
-    // 물류 선반 재고 현황판 (랙 위 뒷벽): 재고 막대 · 입고 순환 상태 · 입출고 횟수
+    put(makeSignSprite('원자재', '#c9d2dc', 2.2), WH_RACK.x + 1.2, 5.3, WH_RACK.z + 2.5, r);
+    put(makeSignSprite('부품', '#5aa9ff', 2.2), WH_RACK.x + 1.2, 5.3, WH_RACK.z - 2.5, r);
+    // 물류 선반 재고 현황판 (선반 위 왼쪽 벽, 동쪽을 향함): 재고 막대 · 입고 순환 상태 · 입출고 횟수
     const sc = document.createElement('canvas'); sc.width = 1536; sc.height = 420;
     this.whBoard = { cv: sc, tex: new THREE.CanvasTexture(sc), key: '' }; this.whBoard.tex.colorSpace = THREE.SRGBColorSpace; this.whBoard.tex.anisotropy = 8;
-    const bd = put(new THREE.Group(), -26, 6.25, -19.2, r);
+    const bd = put(new THREE.Group(), INBOUND.wallX + 0.3, 6.25, WH_RACK.z, r); bd.rotation.y = Math.PI / 2;
     put(box(10.4, 2.95, 0.12, std(0x0b0d10, { roughness: 0.5, metalness: 0.4 })), 0, 0, -0.07, bd);
     put(new THREE.Mesh(new THREE.PlaneGeometry(10, 2.73), new THREE.MeshBasicMaterial({ map: this.whBoard.tex, toneMapped: false })), 0, 0, 0, bd);
+    bd.traverse((o) => (o.castShadow = false));   // 왼쪽 벽에 붙은 재고 현황판도 그림자 없음
     // 드론 이착륙·충전 패드 (피지컬AI 단계에서만 보임)
     // 드론마다 이착륙·충전 패드 (H1·H2·H3…, 3m 간격) — 운용 대수만큼 보인다
     this.dronePads = [0, 1, 2, 3].map((i) => {
@@ -1399,7 +1461,7 @@ export class FactoryView {
     put(box(2.9, 0.9, 0.06, MAT.dark), 0, 2.45, 0, signG);
     put(new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.8), new THREE.MeshStandardMaterial({ map: textTex(['🔧 정비실', 'MAINTENANCE STATION'], 2.8, 0.8, { bg: '#1d3f8f', fg: '#ffffff', sub: '#f2c230' }), roughness: 0.6 })), 0, 2.45, 0.035, signG);
     // 관제/서버
-    const srv = (this.server = put(new THREE.Group(), -2, 0, -17.5, r));
+    const srv = (this.server = put(new THREE.Group(), LOC.CTRL.x, 0, -17.5, r));   // 관제 서버 랙: 중앙 관제 디스플레이 가운데 아래
     this.serverLeds = [];
     for (const x of [-1.6, -0.5, 0.6, 1.7]) {
       const rk = put(box(0.9, 2.3, 1.0, MAT.dark), x, 1.15, 0, srv);
@@ -1409,15 +1471,16 @@ export class FactoryView {
         put(box(0.6, 0.04, 0.02, m, false), 0, -0.8 + k * 0.32, 0.51, rk);
       }
     }
-    this.serverPos = new THREE.Vector3(-2, 2.6, -17);
+    this.serverPos = new THREE.Vector3(LOC.CTRL.x, 2.6, -17);
     // 디지털 트윈 대형 화면
-    const c = document.createElement('canvas'); c.width = 1024; c.height = 340;
+    const c = document.createElement('canvas'); c.width = 2016; c.height = 448;   // 18×4m (4.5:1)
     this.screenCanvas = c;
     this.screenTex = new THREE.CanvasTexture(c); this.screenTex.colorSpace = THREE.SRGBColorSpace;
     const scrMat = new THREE.MeshBasicMaterial({ map: this.screenTex, toneMapped: false });
-    // 벽 기둥 앞(z -19.15)에 설치 — 오른쪽 로봇 비전 관제 화면과 같은 크기·높이·테두리 (js/robotcam.js DISPLAY)
-    this.screen = put(new THREE.Mesh(new THREE.PlaneGeometry(12, 4), scrMat), -2, 5.1, -19.15, r);
-    put(new THREE.Mesh(new THREE.BoxGeometry(12.3, 4.3, 0.12), std(0x14181e, { roughness: 0.6, metalness: 0.3 })), 0, 0, -0.08, this.screen);
+    // 벽 기둥 앞(z -19.15)에 설치 — 18×4m: 높이는 양옆 CCTV 전광판·로봇 디스플레이(12×4m)와 같고 폭만 1.5배
+    // 뒷벽 왼쪽 두 번째 기둥(x −36) ~ 오른쪽 네 번째 기둥(x 9) 사이: CCTV 전광판(x −29.325) → 관제 화면 → 로봇 디스플레이(x 2.325), 기둥·화면 사이 간격 모두 0.525m
+    this.screen = put(new THREE.Mesh(new THREE.PlaneGeometry(18, 4), scrMat), LOC.CTRL.x, 5.1, -19.15, r);
+    put(new THREE.Mesh(new THREE.BoxGeometry(18.3, 4.3, 0.12), std(0x14181e, { roughness: 0.6, metalness: 0.3 })), 0, 0, -0.08, this.screen);
     // 관제 데스크
     put(box(3.5, 0.8, 1.0, MAT.white), LOC.CTRL.x, 0.4, LOC.CTRL.z - 1.4, srv.parent);
   }
@@ -1489,11 +1552,13 @@ export class FactoryView {
     if (isZone(sim.line)) this.buildZoneDeco(sim);
     this.iot.visible = mode !== 'traditional';
     this.server.visible = mode !== 'traditional';
+    for (const f of this.facadeSigns) f.visible = mode === 'dark';   // 외벽 "피지컬AI 실증 메타팩토리" 사인은 피지컬AI 단계에서만
     this.screen.visible = mode !== 'traditional';
-    this.sloganLegacy.visible = mode === 'traditional';
     this.buildLogistics(sim);
+    this.buildCCTV(sim);
+    this.build5G(sim);
+    this.cctvG.traverse((o) => (o.castShadow = false));   // 천장 CCTV(카메라·지지대)는 바닥에 그림자를 드리우지 않는다
     this.techMarks.human.visible = sim.mode.techKind !== 'humanoid'; this.techMarks.humanoid.visible = sim.mode.techKind === 'humanoid';
-    this.sloganSmart.visible = mode === 'smart';
 
     // 컨베이어 (경로를 따라 직선 구간별로 생성, 코너는 겹쳐서 이음). 미사용 분기는 멈춘 채 어둡게
     const idle = sim.idleLinks.map((l) => ({ from: l.from, to: l.to, path: l.path, idle: true }));
@@ -1587,6 +1652,7 @@ export class FactoryView {
         const u = o.userData;
         if (u.robotIdx != null && u.stationId) return { type: 'cell', stationId: u.stationId, idx: u.robotIdx };
         if (u.moverId) return { type: 'mover', id: u.moverId };
+        if (u.cctvId) return { type: 'cctv', id: u.cctvId };
         if (u.itemId != null) {
           const it = [...this.sim.conveyors.flatMap((c) => c.items.map((e) => e.item)), ...this.sim.processing.map((st) => st.item)].find((x) => x?.id === u.itemId);
           if (it?.carrier) return { type: 'mover', id: it.carrier.id };
@@ -1598,7 +1664,7 @@ export class FactoryView {
     return null;
   }
   pickTargets() {
-    return [...this.stationViews.map((s) => s.group), this.dyn];
+    return [...this.stationViews.map((s) => s.group), this.dyn, ...(this.cctvG ? [this.cctvG] : [])];
   }
   selectRobot(ref) {
     this.telemetry = ref ? new RobotTelemetry(this, ref) : null;
@@ -1784,6 +1850,8 @@ export class FactoryView {
     const t = this.time, mode = sim.mode.key;
     this.handleEvents();
     this.syncItems();
+    this.updateNetLinks();
+    if (this.netLeds) { const on = Math.floor(t * 2) % 2 === 0; for (const l of this.netLeds) l.material.emissiveIntensity = on ? 2.4 : 1.2; }
 
     // 컨베이어 벨트 스크롤
     const beltMove = simRunning ? (1.1 * rdt * simSpeed) / 0.5 : 0;
@@ -2278,15 +2346,15 @@ export class FactoryView {
     const AMBER = '245,166,35', GREEN = '61,220,132';
     const legacy = sim.mode.key === 'traditional', agv = sim.mode.vehicleKind === 'agv';
     // 물류존: 자재창고 랙 · AGV 상차 · 부품 랙 피킹
-    area(-28.8, -18.6, -20.6, -11.4, AMBER, '📦 물류존', agv ? '자재창고 · AGV 자재 상차 · 부품 랙 피킹' : '자재창고 · 지게차 자재 상차 · 부품 랙', -24.7, -12.2, 6.4);
+    area(-46.3, -6.9, -40.6, 4.3, AMBER, '📦 물류존', agv ? '자재창고 · AGV 자재 상차 · 부품 랙 피킹' : '자재창고 · 지게차 자재 상차 · 부품 랙', -42.4, 3.7, 3.4);
     // 입고 지게차 전용 영역: 입고 도크 ↔ 창고 랙 왼쪽 입고 칸 ↔ 대기 — 뒤쪽 통로·세로 통로와 떨어져 있어 로봇 이동 경로와 겹치지 않는다
-    { const Z = INBOUND.zone; area(Z.x0, Z.z0, Z.x1, Z.z1, GREEN, `🚚 입고 ${sim.mode.key === 'dark' ? '자율 ' : ''}지게차 전용`, '로봇 통행 금지 · 도크 ↔ 창고 입고 칸', (Z.x0 + Z.x1) / 2, Z.z1 - 0.6, 5.6); }
+    { const Z = INBOUND.zone; area(Z.x0, Z.z0, Z.x1, Z.z1, GREEN, `🚚 입고 ${sim.mode.key === 'dark' ? '자율 ' : ''}지게차 전용`, '로봇 통행 금지 · 도크 ↔ 선반 입고 면', (Z.x0 + Z.x1) / 2, Z.z1 - 0.6, 4.0); }
     // 입고 지게차 주차 칸 (대기 자리, 도크 쪽을 향해 반듯이 주차)
     { const rc = sim.forklifts?.find((f) => f.receiver); if (rc) { const hx = rc.home.x, hz = rc.home.z, pl = new THREE.MeshBasicMaterial({ color: 0xf2f5f8 });
-      for (const sd of [-1, 1]) flat(2.9, 0.1, pl, hx - 0.15, hz + sd * 0.9, 0.02);   // 동쪽(선반 쪽) 끝선, 서쪽으로 들어온다
-      flat(0.1, 1.9, pl, hx + 1.3, hz, 0.02); } }
+      for (const sd of [-1, 1]) flat(0.1, 2.9, pl, hx + sd * 0.9, hz + 0.15, 0.02);   // 북쪽(뒷벽 쪽) 끝선, 남쪽에서 들어온다
+      flat(1.9, 0.1, pl, hx, hz - 1.3, 0.02); } }
     // 물류 대기: 부품 보충 휴머노이드 (피지컬AI)
-    if (sim.helpers?.length) area(-20.2, -13.6, -16.2, -11.4, GREEN, '물류 대기', '부품 보충 휴머노이드', -18.2, -11.95, 3.8);
+    if (sim.helpers?.length) area(-40.4, -6.9, -37.0, 4.3, GREEN, '물류 대기', '부품 보충 휴머노이드', -38.7, 3.7, 3.0);   // 물류존(x −46.3 ~ −40.6)과 오른쪽 로봇 통로(x −36.8~) 사이, 위·아래를 물류존과 맞춤
     // 물류 대기: AGV(레거시는 지게차) 대기·충전 — 충전 패드 4칸과 충전 기둥
     area(-15.6, 12.0, -2.8, 15.5, GREEN, agv ? '🔋 물류 대기 · AGV 충전' : '물류 대기 · 지게차', agv ? '자재 공급 AGV 대기·자동 충전' : '자재 운반 지게차 대기 (유인)', -9.2, 16.25, 6.5);
     // 사족보행 충전 스테이션 (피지컬AI): 도킹 충전기 + 상태등 (충전 중 초록 점멸, 대기 파랑)
@@ -2368,29 +2436,118 @@ export class FactoryView {
     }
   }
 
-  drawScreen(k, agentLine) {
-    const c = this.screenCanvas, g = c.getContext('2d');
+  // 중앙 관제 화면 (2016×448 = 18×4m): 왼쪽 — 핵심 지표·셀 상태·AI 판단, 오른쪽 — 이벤트 알람 · 처리 과정 · 결과
+  drawScreen(k, agentLine, data = null) {
+    if (data) this.dataInfo = data;
+    const c = this.screenCanvas, g = c.getContext('2d'), sim = this.sim, F = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
+    const blink = Math.floor(performance.now() / 600) % 2 === 0;
+    const fit = (txt, w) => { let t = String(txt); if (g.measureText(t).width <= w) return t; while (t.length > 1 && g.measureText(t + '…').width > w) t = t.slice(0, -1); return t + '…'; };
+    const mmss = (sec) => { sec = Math.max(0, Math.round(sec)); return sec >= 3600 ? `${Math.floor(sec / 3600)}시간 ${Math.floor(sec / 60) % 60}분` : sec >= 60 ? `${Math.floor(sec / 60)}분 ${sec % 60}초` : `${sec}초`; };
     g.fillStyle = '#04121f'; g.fillRect(0, 0, c.width, c.height);
-    g.strokeStyle = 'rgba(55,232,255,0.15)';
+    g.strokeStyle = 'rgba(55,232,255,0.10)'; g.lineWidth = 1;
     for (let x = 0; x < c.width; x += 32) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, c.height); g.stroke(); }
-    g.fillStyle = '#37e8ff'; g.font = 'bold 30px sans-serif';
-    g.fillText(`DIGITAL TWIN · ${this.sim.mode.label}`, 28, 48);
+    // ── 왼쪽 (x 26~926): 지표 · 셀 상태 · 누적 데이터 · AI 학습 · AI 판단
+    g.fillStyle = '#37e8ff'; g.font = `800 28px ${F}`; g.textBaseline = 'alphabetic';
+    g.fillText(`DIGITAL TWIN · ${sim.mode.label}`, 26, 38);
+    const s0 = Math.floor(sim.time) + 8 * 3600; g.fillStyle = '#7fb8cc'; g.font = `600 21px ${F}`; g.textAlign = 'right';
+    g.fillText([s0 / 3600 % 24, s0 / 60 % 60, s0 % 60].map((v) => String(Math.floor(v)).padStart(2, '0')).join(':'), 926, 38); g.textAlign = 'left';
     const tiles = [['UPH', k.uphRecent.toFixed(0)], ['OEE', (k.OEE * 100).toFixed(1) + '%'], ['WIP', k.wip], ['POWER', k.powerKW.toFixed(0) + 'kW']];
     tiles.forEach(([a, b], i) => {
-      const x = 28 + i * 245;
-      g.fillStyle = 'rgba(55,232,255,0.08)'; g.fillRect(x, 70, 225, 110);
-      g.fillStyle = '#7fb8cc'; g.font = '22px sans-serif'; g.fillText(a, x + 16, 102);
-      g.fillStyle = '#ffffff'; g.font = 'bold 48px sans-serif'; g.fillText(b, x + 16, 160);
+      const x = 26 + i * 226;
+      g.fillStyle = 'rgba(55,232,255,0.08)'; g.fillRect(x, 50, 212, 72);
+      g.fillStyle = '#7fb8cc'; g.font = `600 18px ${F}`; g.fillText(a, x + 12, 72);
+      g.fillStyle = '#ffffff'; g.font = `800 36px ${F}`; g.fillText(fit(b, 190), x + 12, 112);
     });
-    this.sim.processing.forEach((st, i) => {
-      const x = 28 + i * 196;
-      const col = { BUSY: '#3ddc84', DOWN: '#ff5a5a', ESTOP: '#ff5a5a', PSTOP: '#f5b82e', MAINT: '#f5b82e', BLOCKED: '#f5b82e' }[st.state] ?? '#5b7080';
-      g.fillStyle = col; g.fillRect(x, 200, 180, 10);
-      g.fillStyle = '#cfe6f0'; g.font = '20px sans-serif'; g.fillText(st.name.slice(0, 9), x, 238);
-      g.fillStyle = '#7fb8cc'; g.font = '18px sans-serif'; g.fillText(`건강도 ${st.health.toFixed(0)}%`, x, 264);
+    // 셀 상태: 한 줄(최대 6칸, 넘치면 두 줄)
+    const P = sim.processing, per = Math.min(6, P.length) || 1, rows = Math.ceil(P.length / per), cw = 900 / per, rh = rows > 1 ? 44 : 60;
+    P.forEach((st, i) => {
+      const x = 26 + (i % per) * cw, y = 134 + Math.floor(i / per) * rh;
+      const col = { BUSY: '#3ddc84', DOWN: '#ff5a5a', ESTOP: '#ff5a5a', PSTOP: '#f5b82e', MAINT: '#f5b82e', BLOCKED: '#f5b82e', NOPARTS: '#f5b82e' }[st.state] ?? '#5b7080';
+      g.fillStyle = col; g.fillRect(x, y, cw - 10, 6);
+      g.fillStyle = '#cfe6f0'; g.font = `700 ${rows > 1 ? 17 : 19}px ${F}`; g.fillText(fit(st.name, cw - 12), x, y + 26);
+      if (rows === 1) { g.fillStyle = '#7fb8cc'; g.font = `500 16px ${F}`; g.fillText(fit(`${ST_LABEL[st.state] ?? st.state} · 건강도 ${st.health.toFixed(0)}%`, cw - 12), x, y + 50); }
+      else { g.fillStyle = col; g.font = `500 14px ${F}`; g.textAlign = 'right'; g.fillText(`${st.health.toFixed(0)}%`, x + cw - 12, y + 26); g.textAlign = 'left'; }
     });
-    g.fillStyle = '#37e8ff'; g.font = '20px sans-serif';
-    g.fillText('AI ▸ ' + agentLine, 28, 312);
+    // 누적 데이터 · AI 학습 (두 칸)
+    const BY = 206, BH = 196, num = (n) => Math.round(n).toLocaleString('ko-KR');
+    const size = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e3).toFixed(0)} KB`);
+    const box = (x, w, title, color, rowsTxt) => {
+      g.fillStyle = 'rgba(55,232,255,0.06)'; g.fillRect(x, BY, w, BH); g.fillStyle = color; g.fillRect(x, BY, w, 3);
+      g.font = `800 20px ${F}`; g.fillStyle = color; g.fillText(title, x + 12, BY + 28);
+      rowsTxt.forEach(([a, b, cl], i) => {
+        const y = BY + 56 + i * 28;
+        g.font = `500 16px ${F}`; g.fillStyle = '#7fb8cc'; g.fillText(fit(a, 150), x + 12, y);
+        g.font = `700 17px ${F}`; g.fillStyle = cl ?? '#e8edf2'; g.fillText(fit(b, w - 172), x + 164, y);
+      });
+    };
+    const D = this.dataInfo ?? {}, H = D.hub ?? {}, ep = this.epRec, V = sim.vla, A = sim.aios;
+    const epB = ep?.dataBytes ?? 0, aiB = A?.on ? A.bytes ?? 0 : 0, msgB = D.bytes ?? 0;
+    box(26, 440, '🗄 누적 데이터', '#37e8ff', [
+      ['총 데이터량', `${size(msgB + epB + aiB)} · ${mmss(sim.time)} 수집`],
+      ['설비 데이터 포인트', `${num(H.points ?? 0)}개 (자산 ${H.assets ?? 0} · 필드 ${H.fields ?? 0})`],
+      ['OPC UA·AAS 메시지', `${num(D.msgs ?? 0)}건 · ${size(msgB)}`],
+      ['이벤트 기록', `${num(H.events ?? 0)}건 · 인시던트 ${sim.orch?.seq ?? 0}건`],
+      ...(sim.mode.key === 'dark' ? [['VLA 에피소드', `${num(ep?.total ?? 0)}개 · 약 ${size(epB)}`], ['AIOS 운영 샘플', `${num(A?.total ?? 0)}개 · 묶음 ${A?.chunks?.length ?? 0} · ${size(aiB)}`]] : [['AI 학습 데이터', '피지컬AI 단계에서 수집']]),
+    ]);
+    const PH = { train: '학습 중', eval: '평가 중', canary: '카나리 배포', rollout: 'OTA 배포 중', twin: '트윈 검증', shadow: '섀도 모드', verify: '배포 효과 확인' };
+    const vJob = V?.job, aJob = A?.job, vLast = V?.jobs?.find((x) => x !== vJob), aLast = A?.jobs?.find((x) => x !== aJob);
+    const res = (j, kind) => !j ? '아직 없음' : j.phase === 'done' ? `${j.label} ${kind === 'v' ? `검증 ${j.val}% · ` : ''}배포 완료` : j.phase === 'rejected' ? `${j.label} 기준 미달 · 배포 안 함` : j.phase === 'rollback' ? `${j.label} 롤백` : `${j.label} ${PH[j.phase] ?? j.phase}`;
+    const okRate = V?.allEps ? Math.round((V.okEps / V.allEps) * 100) : null;
+    box(486, 440, '🧠 AI 학습', '#b89bff', sim.mode.key !== 'dark' ? [
+      ['AI 학습', '피지컬AI 단계에서 운영'], ['현재 단계', `${sim.mode.label} — 데이터 수집·관제`], ['VLA (로봇 추론)', '규칙 기반 로봇 프로그램'], ['AIOS (공장 운영)', 'MES 규칙 기반 운영'],
+    ] : [
+      ['VLA 로봇 모델', `${V?.label(V.latest) ?? 'v1.0'} · 에피소드 성공률 ${okRate ?? '-'}%`],
+      ['VLA 학습', vJob ? `${vJob.label} ${PH[vJob.phase] ?? vJob.phase}${vJob.phase === 'train' ? ` ${vJob.epoch}/${vJob.epochs} 에폭 · loss ${vJob.loss.at(-1) ?? '-'}` : vJob.phase === 'rollout' ? ` ${vJob.rollout.length}대` : ''}` : `대기 · 새 에피소드 ${V?.newEps ?? 0}/${V?.trainAt ?? 0}`, vJob ? '#f5d36b' : null],
+      ['VLA 최근 결과', res(vLast, 'v'), vLast?.phase === 'done' ? '#7dffb0' : null],
+      ['AIOS 운영 모델', `${A?.version ?? 'v1.0'} · 모델 ${A?.models?.length ?? 1}개 등록`],
+      ['AIOS 학습', aJob ? `${aJob.label} ${PH[aJob.phase] ?? aJob.phase}${aJob.phase === 'train' ? ` ${aJob.epoch ?? 0}/${aJob.epochs} 에폭` : ''}` : `대기 · 새 샘플 ${A?.newSamples ?? 0}/${A?.trainAt ?? 0}`, aJob ? '#f5d36b' : null],
+      ['AIOS 최근 결과', res(aLast, 'a'), aLast?.phase === 'done' ? '#7dffb0' : null],
+    ]);
+    g.fillStyle = '#37e8ff'; g.font = `600 18px ${F}`;
+    g.fillText(fit('AI 판단 ▸ ' + agentLine, 900), 26, 432);
+    // ── 오른쪽: 이벤트 알람 · 처리 과정 · 결과 (x 960~1996)
+    const X = 960, W = 1036, inc = sim.orch?.incidents ?? [];
+    const open = inc.filter((i) => i.status === 'open'), done = inc.filter((i) => i.status !== 'open' && sim.time - (i.tEnd ?? 0) < 600);
+    g.fillStyle = 'rgba(55,232,255,0.25)'; g.fillRect(X - 16, 14, 2, 420);
+    g.font = `800 28px ${F}`; g.fillStyle = open.length ? (blink ? '#ff5a5a' : '#ff9a3d') : '#3ddc84';
+    g.fillText(open.length ? `🚨 이벤트 알람 ${open.length}건 처리 중` : '✅ 이벤트 없음 · 정상 운영', X, 42);
+    g.font = `600 19px ${F}`; g.fillStyle = '#7fb8cc'; g.textAlign = 'right';
+    g.fillText(fit(`${sim.orch?.name ?? ''} · 최근 10분 종료 ${done.length}건`, 520), X + W, 42); g.textAlign = 'left';
+    const list = [...open, ...done].slice(0, 3);
+    if (!list.length) {
+      g.fillStyle = '#5b7080'; g.font = `500 22px ${F}`;
+      g.fillText('설비 고장 · 자재 공급 차질 · 현장 이벤트가 생기면 여기에 알람과 처리 과정, 결과가 표시됩니다', X, 120);
+    }
+    const CH = 120;
+    list.forEach((it, n) => {
+      const y = 56 + n * (CH + 6), isOpen = it.status === 'open', T = INCIDENT_TYPES[it.type] ?? { label: it.type, icon: '•' };
+      const accent = isOpen ? (blink ? '#ff5a5a' : '#ff9a3d') : '#3ddc84';
+      g.fillStyle = isOpen ? 'rgba(255,70,70,0.10)' : 'rgba(61,220,132,0.07)'; g.fillRect(X, y, W, CH);
+      g.fillStyle = accent; g.fillRect(X, y, 7, CH);
+      if (isOpen) { g.strokeStyle = accent; g.lineWidth = 2; g.strokeRect(X + 1, y + 1, W - 2, CH - 2); }
+      // 1줄: 종류 · 제목 · 경과/소요
+      g.font = `800 23px ${F}`; g.fillStyle = '#ffffff';
+      g.fillText(fit(`${T.icon} #${it.id} ${it.title}`, W - 300), X + 20, y + 29);
+      g.textAlign = 'right'; g.font = `700 20px ${F}`; g.fillStyle = accent;
+      g.fillText(isOpen ? `진행 중 · 경과 ${mmss(sim.time - it.t0)}` : `완료 · 소요 ${mmss((it.tEnd ?? sim.time) - it.t0)}`, X + W - 14, y + 29); g.textAlign = 'left';
+      // 2줄: 처리 단계 진행 표시 (감지 → … → 완료 확인)
+      const kinds = new Set(it.steps.map((st) => st.kind)), stages = STAGES.filter((sg) => sg.key !== 'self' || kinds.has('self'));
+      const last = stages.reduce((a, sg, i) => (kinds.has(sg.key) ? i : a), -1), sw = (W - 34) / stages.length;
+      stages.forEach((sg, i) => {
+        const x = X + 20 + i * sw, on = kinds.has(sg.key) || i < last, cur = isOpen && i === last;
+        g.fillStyle = on ? (cur ? accent : isOpen ? '#37e8ff' : '#3ddc84') : 'rgba(127,184,204,0.18)'; g.fillRect(x, y + 40, sw - 8, 7);
+        g.font = `${cur ? 800 : 600} 16px ${F}`; g.fillStyle = on ? '#e8edf2' : '#5b7080'; g.fillText(fit(sg.label, sw - 10), x, y + 66);
+      });
+      // 3줄: 진행 중이면 최근 처리 과정, 끝났으면 결과
+      const st = it.steps[it.steps.length - 1], LANE = { field: '현장', cell: '셀', orch: '오케스트레이터', exec: '실행' };
+      g.font = `600 19px ${F}`; g.fillStyle = isOpen ? '#cfe6f0' : '#7dffb0';
+      g.fillText(fit(isOpen ? `▸ ${LANE[st?.lane] ?? ''} · ${st?.text ?? '감지됨'}` : `결과 ▸ ${st?.text ?? '처리 완료'}`, W - 36), X + 20, y + 91);
+      g.font = `500 16px ${F}`; g.fillStyle = '#7fb8cc';
+      const prev = it.steps.slice(-3, -1).map((x) => x.text).join('  ›  ');
+      g.fillText(fit(`${T.label}${it.source ? ` · ${it.source}` : ''}${prev ? `  |  ${prev}` : ''}`, W - 36), X + 20, y + 113);
+    });
+    const more = open.length + done.length - list.length;
+    if (more > 0) { g.font = `600 18px ${F}`; g.fillStyle = '#7fb8cc'; g.textAlign = 'right'; g.fillText(`외 ${more}건 — 하단 오케스트레이터 버튼에서 전체 흐름 보기`, X + W, 444); g.textAlign = 'left'; }
     this.screenTex.needsUpdate = true;
   }
 }

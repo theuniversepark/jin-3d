@@ -49,6 +49,7 @@ export class AIOSPipeline {
   }
   label(v) { return `v1.${v}`; }
   get version() { return this.label(this.latest); }
+  get trainAt() { return TRAIN_MIN * this.backoff; }   // 다음 자동 학습까지 필요한 새 샘플 수
   apply(p) { for (const h of HEADS) this.sim.mode[h.key] = p[h.key]; }
 
   // sim.log 훅: 운영 의사결정(에이전트·오케스트레이터)을 이벤트로 모은다
@@ -86,7 +87,7 @@ export class AIOSPipeline {
     const last = this.samples.at(-1);
     if (last) last.next_t = x.t;
     this.samples.push(x); if (this.samples.length > KEEP) this.samples.shift();
-    this.total++; this.newSamples++;
+    this.total++; this.newSamples++; this.bytes = (this.bytes ?? 0) + JSON.stringify(x).length;   // AI-ready 샘플 누적 바이트
     // 끝난 인시던트 → 이벤트 (감지부터 판단·완료까지 걸린 시간)
     for (const inc of s.orch.incidents) {
       if (inc.status !== 'resolved' || this.seenInc.has(inc.id)) continue;

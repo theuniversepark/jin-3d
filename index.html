@@ -11,6 +11,16 @@
 </head>
 <body data-mode="smart">
   <div id="viewport"></div>
+  <div id="cctvCard" hidden></div>
+  <div id="net5gCard" hidden></div>
+  <section id="cctvPanel" class="cc-panel" hidden aria-label="CCTV 영상">
+    <div class="cc-head"><div><h3 id="cctvTitle">CCTV</h3><small id="cctvSub"></small></div>
+      <span class="cc-ptz"><button type="button" data-cctv="prev" title="이전 카메라">◀ 카메라</button><button type="button" data-cctv="left" title="PTZ 왼쪽">⟲</button><button type="button" data-cctv="right" title="PTZ 오른쪽">⟳</button><button type="button" data-cctv="next" title="다음 카메라">카메라 ▶</button></span>
+      <button type="button" id="cctvClose" title="닫기">✕</button></div>
+    <canvas id="cctvCanvas" width="640" height="360"></canvas>
+    <div id="cctvDet"></div>
+    <div id="cctvHist"></div>
+  </section>
   <div id="facos" class="dark-only-flex" aria-label="FACOS 공장 운영 SW 계층 상태"></div>
   <div id="glNote" hidden>3D 화면 복구 중… (그래픽 컨텍스트 재연결)</div>
 
@@ -124,6 +134,8 @@
     <button id="btnEvent" class="dark-only" title="누유·이물질·무단 진입·연기 의심 중 하나를 로봇 카메라 앞에 발생시킵니다 — 로봇 영상 AI 추론으로 감지해 자율 대응합니다">⚠ 현장 이벤트</button>
     <button id="btnLabels" class="on">🏷 라벨</button>
     <button id="btnOrch" title="설비 고장·공급 차질·현장 이벤트의 처리 흐름과, 셀 현장으로 보내는 긴급·제어 명령 콘솔">🛰 오케스트레이터 <b class="badge" id="orchBadge" hidden></b></button>
+    <button id="btnNet5g" title="Private 5G 특화망 — 음영지역 없는 기지국(PCI) 배치, RSRP 커버리지 지도, 로봇 ↔ 서빙 셀 연결선·핸드오버">📶 5G</button>
+    <button id="btnCctv" title="사각지대 없는 CCTV 배치 — 커버리지 지도(빨강 사각지대 · 연두 1대 · 초록 2대 이상)와 감시 반경">📹 CCTV</button>
     <button id="btnData" title="AAS · OPC UA PubSub over MQTT 데이터 연동과 파일 저장">📡 데이터 연동</button>
     <button id="btnConcept">🧭 진화 컨셉</button>
     <button id="btnCompare" class="primary">📊 3단계 8시간 비교</button>
@@ -191,7 +203,7 @@
     </div>
   </div>
 
-  <div class="hint" id="hint">설비를 클릭하면 상세 정보 · 드래그 회전 · 휠 확대</div>
+  <div class="hint" id="hint">설비를 클릭하면 상세 정보 · 드래그 회전 · 휠 확대 · 방향키 이동(Shift 빠르게)</div>
 
   <script>
     // GitHub Pages 같은 정적 호스팅: 서버(Claude·MQTT)가 없으므로 호출하지 않는다. 파일 저장은 그대로 된다.

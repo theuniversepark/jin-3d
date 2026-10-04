@@ -2,11 +2,14 @@
 // 가상 센서값(토크·모터 온도·전류·힘/토크 센서·라이다·IMU 등)을 계산한다.
 // 관절값과 위치는 화면에 그려지는 모델 값 그대로이고, 센서값은 움직임·부하·설비 상태로 계산한 시뮬레이션 값이다.
 import * as THREE from 'three';
-import { moverRadius } from './sim.js';
+import { moverRadius, BATTERY } from './sim.js';
+import { NR } from './net5g.js';
 import { AMMR } from './line.js';
 const AMMR_PHASE = { work: '작업 위치 (셀 도킹)', turnOut: '부품 선반 쪽으로 회전', driveOut: '부품 선반으로 주행', pick: '선반에서 양팔 피킹', turnIn: '셀 쪽으로 회전', driveIn: '부품을 들고 작업 위치로 복귀' };
 
 const DEG = 180 / Math.PI;
+const BATT_CHG = { agv: '충전 패드', carrier: '정차 위치 무선 충전', humanoid: '대기 구역 무선 충전', quadruped: '충전 스테이션 도킹', drone: '이착륙장 무선 충전', ammr: '작업 위치 도킹 접점' };
+const hm = (min) => (min >= 60 ? `${Math.floor(min / 60)}시간 ${Math.round(min % 60)}분` : `${Math.max(1, Math.round(min))}분`);
 const HIST = 120;              // 차트에 남기는 샘플 수 (0.1초 간격 → 12초)
 const AMBIENT = 24;            // 주변 온도 °C
 export const REC_DT = 1;       // 정밀 기록 간격 (시뮬레이션 초)
@@ -74,7 +77,7 @@ export class RobotTelemetry {
       put('MotorCurrentTotal', '모터 전류 합계', 'A', (this.tq ?? []).reduce((a, b) => a + b, 0) * 0.06);
       put('BaseVibrationRMS', '베이스 진동 RMS', 'mm/s', 0.6 + (100 - st.health) * 0.045 + (busy ? 0.4 : 0));
       const au = R.robot.dual ? st.ammr?.[this.ref.idx] : null;
-      if (au) { put('HoldingPart', '부품 파지', null, au.carry, 'bool'); put('PlatformPhase', '이동 플랫폼 상태', null, au.phase, 'string'); put('PlatformOffset', '작업 위치에서 이동 거리', 'm', au.pos * (au.travel ?? AMMR.pickZ - AMMR.slotZ)); put('RackStock', '부품 선반 재고', 'pcs', st.parts ?? null, 'int'); }
+      if (au) { put('Battery', '배터리', '%', au.battery); put('HoldingPart', '부품 파지', null, au.carry, 'bool'); put('PlatformPhase', '이동 플랫폼 상태', null, au.phase, 'string'); put('PlatformOffset', '작업 위치에서 이동 거리', 'm', au.pos * (au.travel ?? AMMR.pickZ - AMMR.slotZ)); put('RackStock', '부품 선반 재고', 'pcs', st.parts ?? null, 'int'); }
       if (R.robot.kind === 'cobot') put('NearestMoverDistance', '최근접 이동체 거리 (안전 감시)', 'm', this.nearestMover(R.robot.root.getWorldPosition(v3())));
       return out;
     }
@@ -92,8 +95,9 @@ export class RobotTelemetry {
       put('OperationState', '운행 상태', null, m.state, 'string');
       put('LinePhase', '현재 구간', null, m.state === 'line' ? m.lineInfo?.phase ?? '' : '', 'string');
       put('Payload', '탑재물', null, it ? (it.scrap ? 'empty(reject)' : `${it.product ?? 'part'}#${it.id}`) : 'empty', 'string');
+      put('Battery', '배터리', '%', m.battery);
     }
-    if (m.kind === 'humanoid') put('CarryingBin', '부품 빈 운반', null, !!m.carry, 'boolean');
+    if (m.kind === 'humanoid') { put('CarryingBin', '부품 빈 운반', null, !!m.carry, 'boolean'); put('Battery', '배터리', '%', m.battery); }
     if (m.kind === 'drone') { put('Altitude', '비행 고도', 'm', m.y); put('Battery', '배터리', '%', m.battery); put('FlightMode', '비행 모드', null, m.mode, 'string'); }
     if (m.kind === 'quadruped') put('Battery', '배터리', '%', m.battery);
     if (m.kind === 'quadruped') {
@@ -229,6 +233,43 @@ export class RobotTelemetry {
   }
 
   // 화면에 보여 줄 값 묶음
+  // 배터리 상태 (이동하는 배터리 로봇): 잔량·충방전·속도·예상 가동/완충 시간·충전 방식·팩 사양
+  batterySection(obj, kind, charging, moving) {
+    const spec = BATTERY[kind]; if (!spec || obj?.battery == null) return null;
+    const t = this.view.sim.time, b = obj.battery, p = (this.battPrev ??= new WeakMap()).get(obj);
+    let rate = p?.rate ?? 0;   // %/초 (지수 평활)
+    if (p && t - p.t > 0.05) rate = p.rate * 0.85 + ((b - p.b) / (t - p.t)) * 0.15;
+    if (!p || t - p.t > 0.05) this.battPrev.set(obj, { t, b, rate });
+    const cls = b < spec.low ? 'bad' : b < spec.low + 15 ? 'warn' : 'ok';
+    const n = Math.round(b / 10), bar = '▰'.repeat(n) + '▱'.repeat(10 - n);
+    const state = charging ? `충전 중 · ${BATT_CHG[kind]}` : obj.swapping ? '배터리 팩 교체 중' : moving ? '방전 중 · 주행' : '방전 중 · 대기·작업';
+    const eta = charging ? (rate > 0.002 ? `완충까지 약 ${hm((100 - b) / rate / 60)}` : '완충 유지')
+      : rate < -0.0005 ? `약 ${hm(Math.max(0, b - spec.low) / -rate / 60)} 뒤 저전압 (${spec.low}%)` : '소모 거의 없음';
+    return { title: '배터리', rows: [
+      ['잔량', `${b.toFixed(0)}%  ${bar}`, cls],
+      ['상태', state, charging ? 'ok' : b < spec.low ? 'bad' : ''],
+      ['충·방전 속도', `${rate >= 0 ? '+' : '−'}${Math.abs(rate * 60).toFixed(2)} %/분`],
+      [charging ? '완충 예상' : '가동 예상', eta, !charging && b < spec.low + 15 ? 'warn' : ''],
+      ['충전 방식', spec.charge], ['배터리 팩', spec.pack],
+      ['저전압 기준', `${spec.low}% 이하${b < spec.low ? ' — 경고' : ''}`, b < spec.low ? 'bad' : ''],
+    ] };
+  }
+  // 5G 통신 (이동 로봇 5G 모뎀): 서빙 셀 PCI·RSRP·SINR, 인접 셀, 핸드오버, 업링크 패킷(무손실), 전송 경로
+  netSection(obj) {
+    const net = this.view.sim.net, u = net?.ueOf(obj); if (!u) return null;
+    const c = u.servCell, nb = net.plan.cells[u.nbr], h = u.hos[0], t = this.view.sim.time;
+    const q = (v) => (v >= -75 ? 'ok' : v >= NR.design ? '' : v >= -95 ? 'warn' : 'bad');
+    const topic = `opcua/json/data/jin3d/…/${u.uid ?? u.id}`;
+    return { title: '5G 통신 (Private 5G)', rows: [
+      ['서빙 셀', u.hoUntil >= 0 ? `핸드오버 중 → PCI ${net.plan.cells[u.hoTarget].pci}` : `${c.id} · PCI ${c.pci}`, u.hoUntil >= 0 ? 'warn' : 'ok'],
+      ['RSRP / SINR', `${u.rsrp.toFixed(1)} dBm / ${u.sinr.toFixed(1)} dB`, q(u.rsrp)],
+      ['인접 셀 (최강)', nb ? `${nb.id} · PCI ${nb.pci} · ${u.F[u.nbr].toFixed(1)} dBm (A3 기준 +${NR.a3}dB)` : '-'],
+      ['핸드오버', `${u.hoN}회${h ? ` · 최근 ${Math.round(t - h.t)}초 전 PCI ${h.from} → ${h.to} (중단 ${h.ms}ms, 버퍼 포워딩 ${h.fwd}건)` : ''}`],
+      ['업링크 MQTT', `송신 ${u.sent.toLocaleString('ko-KR')} · 도착 ${u.delivered.toLocaleString('ko-KR')} · 버퍼 ${u.buf} · 유실 ${u.sent - u.delivered - u.buf}`, u.sent - u.delivered - u.buf ? 'bad' : 'ok'],
+      ['단말', `5G 모뎀 IMSI ${u.imsi} · ${NR.band} ${NR.fc}GHz`],
+      ['전송 경로', `AAS → OPC UA PubSub JSON → MQTT QoS 1 → 5G NR → UPF → 브로커 (${topic})`],
+    ] };
+  }
   snapshot() {
     const R = this.R ?? this.resolve();
     if (!R) return null;
@@ -261,7 +302,8 @@ export class RobotTelemetry {
         ['오른팔 X / Y / Z', xyz(this.tcp2)], ['오른팔 TCP 속도', `${this.tcp2.speed.toFixed(0)} mm/s`],
       ] : [['X / Y / Z', xyz(this.tcp)], ['TCP 속도', `${this.tcp.speed.toFixed(0)} mm/s`]] });
       const u = r.dual ? st.ammr?.[this.ref.idx] : null;
-      if (u) out.status.push(['이동 플랫폼', AMMR_PHASE[u.phase] ?? u.phase, u.phase === 'work' ? '' : 'ok'],
+      if (u) { const bs = this.batterySection(u, 'ammr', u.chgNow, u.phase !== 'work'); if (bs) out.sections.unshift(bs); const ns = this.netSection(u); if (ns) out.sections.splice(1, 0, ns); }
+      if (u) out.status.push(['이동 플랫폼', AMMR_PHASE[u.phase] ?? u.phase, u.phase === 'work' ? '' : 'ok'], ['배터리', `${u.battery.toFixed(0)}%${u.chgNow ? ' · 도킹 충전 중' : ''}`, u.battery < BATTERY.ammr.low ? 'bad' : ''],
         ['양팔', u.carry ? '선반에서 가져온 부품 파지' : u.phase === 'work' && st.state === 'BUSY' ? '조립·체결 작업' : '대기'],
         ['부품 선반 재고', st.parts != null ? `${st.parts}개` : '충분 (상시 보충)'], ['선반 왕복', `${u.trips}회`]);
       else if (r.kind === 'humanoid') out.status.push(['보행', '셀 작업 위치에 양발로 서서 작업']);
@@ -287,14 +329,17 @@ export class RobotTelemetry {
         const rpm = (x) => ((x / (2 * Math.PI * rw)) * 60).toFixed(0);
         motion.push(['바퀴 속도 L / R', `${rpm(v - (w * track) / 2)} / ${rpm(v + (w * track) / 2)} rpm`]);
       }
+      { const bk = m.kind === 'robot' && m.role !== 'supply' ? null : m.kind;   // 배터리로 움직이는 로봇: AGV·AMR·휴머노이드·사족보행·드론
+        const bs = BATTERY[bk] && (bk !== 'agv' || this.view.sim.mode.batteryDrain) ? this.batterySection(m, bk, bk === 'carrier' || bk === 'humanoid' ? m.chgNow : m.charging, m.moving || (bk === 'drone' && m.y > 0.5)) : null;
+        if (bs) { out.sections.unshift(bs); out.status.push(['배터리', `${m.battery.toFixed(0)}%${bs.rows[1][1].startsWith('충전') ? ' · 충전 중' : ''}`, bs.rows[0][2]]); } }
+      { const ns = this.netSection(m); if (ns) { out.sections.splice(1, 0, ns); const uu = this.view.sim.net.ueOf(m); out.status.push(['5G', `PCI ${uu.servCell.pci} · ${uu.rsrp.toFixed(0)}dBm · 핸드오버 ${uu.hoN}회`, 'ok']); } }
       out.sections.push({ title: '주행', rows: motion });
       const sens = m.kind === 'drone'
-        ? [['비행 고도', `${m.y.toFixed(2)} m`], ['배터리', `${m.battery.toFixed(0)}%${m.charging ? ' · 무선 충전 중' : ''}`, m.battery < 25 ? 'warn' : ''],
+        ? [['비행 고도', `${m.y.toFixed(2)} m`],
           ['로터 속도', `${m.y > 0.3 ? (5200 + (m.speedNow ?? 0) * 260).toFixed(0) : 0} rpm`], ['짐벌 카메라', m.mode === 'mission' ? (m.arrived ? `사고 현장 중계 · ${m.mission?.title ?? ''} (하방 −90°)` : '사고 현장으로 이동')  : m.hover > 0 ? '셀 점검 (하방 −70°)' : '전방 −30°'],
           ['비행 모드', { patrol: '순찰', event: '이벤트 확인', return: '귀환', charge: '착륙·충전' }[m.mode] ?? m.mode]]
         : [['라이다 최근접 장애물', `${lidar.toFixed(2)} m`], ['안전 필드', field[0], field[1]]];
-      if (m.kind === 'quadruped') sens.push(['배터리', `${m.battery.toFixed(0)}%${m.charging ? ' · 도킹 충전 중' : ''}`, m.battery < 30 ? 'warn' : '']);
-      if (m.kind === 'agv') sens.push(['배터리', `${m.battery.toFixed(0)}%${m.charging ? ' · 충전 중' : ''}`, m.battery < 25 ? 'warn' : ''], ['적재', m.load ? `${m.load.type === 'raw' ? '자재' : '완제품'} ${m.load.n}개` : '없음']);
+      if (m.kind === 'agv') sens.push(['적재', m.load ? `${m.load.type === 'raw' ? '자재' : '완제품'} ${m.load.n}개` : '없음']);
       if (m.kind === 'carrier') {
         const item = sim.itemOfCarrier?.(m);
         sens.push(['리프트 높이', `${(0.9 * 1000).toFixed(0)} mm`], ['탑재물', item ? (item.scrap ? '없음 (불량 배출 후)' : `${item.product === 'doortrim' ? '도어트림' : 'e-axle'} #${item.id}`) : '없음'],

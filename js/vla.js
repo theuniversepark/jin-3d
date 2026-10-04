@@ -107,6 +107,7 @@ export class EpisodeRecorder {
     if (ep.length < 3) return;
     const arr = this.byRobot.get(rec.uid) ?? []; arr.push(ep); if (arr.length > KEEP) arr.shift(); this.byRobot.set(rec.uid, arr);
     this.total++;
+    this.dataBytes = (this.dataBytes ?? 0) + JSON.stringify(ep.steps).length + ep.frames.length * 6000;   // 관절·동작 기록 + 카메라 프레임(160×120 JPEG 약 6KB)
     this.sim.vla?.onEpisode(ep);
     // 서버 저장 (맥 앱·npm start) — 에피소드 하나를 zip으로
     if (this.server) {
@@ -161,6 +162,7 @@ export class VLAPipeline {
   }
   label(v) { return `v1.${v - 1}`; }
   versionOf(uid) { return this.label(this.versions.get(uid) ?? 1); }
+  get trainAt() { return TRAIN_MIN * (this.backoff ?? 1); }   // 다음 자동 학습까지 필요한 새 에피소드 수
   // 셀 효과: 셀 로봇들의 모델 버전 평균 — 버전마다 사이클 1.5%·불량 10% 개선 (최대 5단계)
   level(st) { const ids = st.robotUids ?? []; if (!ids.length || !st.vlaCell) return 0; return ids.reduce((a, id) => a + Math.min(5, (this.versions.get(id) ?? 1) - 1), 0) / ids.length; }
   cycleFactor(st) { return Math.pow(0.985, this.level(st)); }

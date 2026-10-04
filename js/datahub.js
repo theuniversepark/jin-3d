@@ -142,6 +142,7 @@ export class DataHub {
     this.assets = buildAssets(sim, view);
     this.writerIds = new Map(this.assets.map((a, i) => [a.id, i + 1]));
     this.samples = []; this.events = []; this.lastLogId = sim.logSeq; this.lastT = -Infinity; this.seq = 0;
+    this.msgs = 0; this.bytes = 0;   // 생성한 OPC UA·AAS 메시지 누적 건수·바이트 (관제 화면 누적 데이터량)
     this.prevPos = new Map(); this.last = null;
     this.queue = [];
     this.enqueueMetadata();
@@ -193,6 +194,7 @@ export class DataHub {
   }
 
   // ── OPC UA PubSub (Part 14) JSON NetworkMessage ─────────────────
+  count(payload) { this.msgs++; this.bytes += payload.length; return payload; }
   topic(kind, writer) { return `opcua/json/${kind}/${PUBLISHER_ID}/${WRITER_GROUP}/${writer}`; }
   enqueueData(s) {
     for (const a of this.assets) {
@@ -209,7 +211,10 @@ export class DataHub {
         }],
       };
       this.lastMsg = { topic: this.topic('data', a.id), msg };
-      this.queue.push({ topic: this.topic('data', a.id), payload: JSON.stringify(msg) });
+      const body = this.count(JSON.stringify(msg));
+      this.queue.push({ topic: this.topic('data', a.id), payload: body });
+      // 이동 로봇의 AAS·OPC UA 메시지는 그 로봇의 5G 모뎀 → Private 5G(업링크) → UPF → MQTT 브로커로 간다
+      if (a.mover) this.sim.net?.publish(a.mover, body.length + 60);   // + MQTT 고정·가변 헤더·토픽
     }
   }
   enqueueEvent(ev) {
@@ -220,7 +225,7 @@ export class DataHub {
         Payload: { EventId: uuid(), EventType: `ns=1;s=Jin3D.${ev.level}`, SourceName: ev.source, Time: ev.t, Severity: { alert: 800, warn: 600, plan: 400, act: 300, ok: 200, info: 100, llm: 300, chat: 100 }[ev.level] ?? 100, Message: { Text: `${ev.title}${ev.text ? ' — ' + ev.text : ''}`, Locale: 'ko-KR' } },
       }],
     };
-    this.queue.push({ topic: this.topic('data', 'Events'), payload: JSON.stringify(msg) });
+    this.queue.push({ topic: this.topic('data', 'Events'), payload: this.count(JSON.stringify(msg)) });
   }
   // 상위 명령 메시지: 명령 상태가 바뀔 때마다 한 건 (오케스트레이터 → 셀 컨트롤러 명령과 셀의 ACK·완료 보고)
   enqueueCommand(r) {
@@ -233,7 +238,7 @@ export class DataHub {
       }],
     };
     this.lastCmd = { topic: this.topic('data', 'Commands'), msg };
-    this.queue.push({ topic: this.topic('data', 'Commands'), payload: JSON.stringify(msg) });
+    this.queue.push({ topic: this.topic('data', 'Commands'), payload: this.count(JSON.stringify(msg)) });
   }
   // DataSetMetaData (retain): 필드 이름·타입·단위와 AAS 의미 정보(semanticId·서브모델 id·idShort 경로)
   enqueueMetadata() {
@@ -255,10 +260,10 @@ export class DataHub {
           ConfigurationVersion: { MajorVersion: 1, MinorVersion: 0 },
         },
       };
-      this.queue.push({ topic: this.topic('metadata', a.id), payload: JSON.stringify(msg), retain: true });
+      this.queue.push({ topic: this.topic('metadata', a.id), payload: this.count(JSON.stringify(msg)), retain: true });
     }
     // AAS 셸·서브모델 구조(현재 값, 시계열 제외)도 retain으로 함께 둔다
-    this.queue.push({ topic: `aas/${PUBLISHER_ID}/environment`, payload: JSON.stringify(buildEnvironment(this.assets, [], null)), retain: true });
+    this.queue.push({ topic: `aas/${PUBLISHER_ID}/environment`, payload: this.count(JSON.stringify(buildEnvironment(this.assets, [], null))), retain: true });
   }
 
   async flush() {
