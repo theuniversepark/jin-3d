@@ -1,6 +1,6 @@
 # Jin-3D Blender 자산 생성 스크립트 — Blender(5.x)에서 실제로 모델링·재질 적용 후 glTF(.glb)로 내보낸다.
 # 실행: blender -b --python blender/build_assets.py   (또는 npm run blender:assets)
-# 결과: assets/blender/{amr,agv,forklift,drone,humanoid,quadruped,arm6,ammr,truck,gantry,eaxle,primitives}.glb  +  assets/blender/preview.png (Blender Eevee 렌더 미리보기)
+# 결과: assets/blender/{amr,agv,forklift,drone,humanoid,quadruped,arm6,ammr,truck,gantry,eaxle,parts,doortrim,primitives}.glb  +  assets/blender/preview.png (Blender Eevee 렌더 미리보기)
 #
 # 좌표: Blender는 Z가 위, glTF로 내보내면 +Y가 위가 된다 (Blender X → three X, Blender Z → three Y, Blender −Y → three +Z).
 #       three.js 모델의 "앞"(로컬 +z)은 Blender −Y 방향으로 만든다. 단위 1 = 1m (Jin-3D와 같은 크기·같은 원점: 바닥 중심)
@@ -612,6 +612,154 @@ def build_eaxle():
             cyl(f'FBolt_{x}_{k}', 0.014, 0.03, (x, math.cos(a) * rr, cz + math.sin(a) * rr), MATS['Yellow'], axis='X', parent=B, verts=6)
     export(R, 'eaxle')
 
+# ── 조립·체결 부품 (실물 형상, 화면에서 보이도록 실제의 약 2배 크기) — 각 부품은 빈 객체 P_* (바닥 = 원점, 위 = +Z)
+# e-axle 조립: P_Gear(헬리컬 기어) · P_Shaft(계단 축·스플라인) · P_Bearing(볼베어링) · P_Seal(오일씰)
+# 도어트림 조립: P_CupHolder(컵홀더) · P_Armrest(암레스트 패드) · P_Grille(스피커 그릴) · P_Switch(윈도 스위치)
+# 체결: P_Screw(십자 나사) · P_Bolt(플랜지 육각 볼트) · P_Nut(육각 너트) · P_Washer(와셔) · P_Clip(트림 클립 패스너)
+def build_parts():
+    zinc = mat('Zinc', srgb('#cfd3d8'), 0.9, 0.28)
+    oxide = mat('BlackOxide', srgb('#2a2d31'), 0.7, 0.35)
+    gsteel = mat('GearSteel', srgb('#a5adb6'), 0.95, 0.22)
+    plastic = mat('Plastic', srgb('#1f2226'), 0.0, 0.55)
+    leather = mat('Leather', srgb('#6f6a64'), 0.0, 0.7)
+    stitch = mat('Stitch', srgb('#b9b2a8'), 0.0, 0.7)
+    rubber = mat('SealRubber', srgb('#2b2421'), 0.0, 0.8)
+    nylon = mat('Nylon', srgb('#e9e6df'), 0.0, 0.5)
+    chrome = mat('Chrome', srgb('#e4e8ec'), 1.0, 0.12)
+    R = empty('Parts')
+    def P(n): return empty(n, (0, 0, 0), R)
+    def ring(n, r_out, r_in, h, z, m, par, verts=48, bevel=0.0):
+        o = cyl(n, r_out, h, (0, 0, z), m, parent=par, verts=verts, bevel=bevel)
+        bpy.ops.mesh.primitive_cylinder_add(vertices=verts, radius=r_in, depth=h * 3, location=(0, 0, z)); c = bpy.context.active_object
+        md = o.modifiers.new('Hole', 'BOOLEAN'); md.object = c; md.operation = 'DIFFERENCE'; md.solver = 'EXACT'
+        bpy.context.view_layer.objects.active = o; bpy.ops.object.modifier_apply(modifier='Hole')
+        bpy.data.objects.remove(c, do_unlink=True)
+        return o
+    def thread(n, r, z0, z1, m, par, pitch=0.004):
+        k = 0; z = z0
+        while z < z1:
+            bpy.ops.mesh.primitive_torus_add(major_radius=r, minor_radius=pitch * 0.32, major_segments=24, minor_segments=6, location=(0, 0, z))
+            finish(setname(bpy.context.active_object, f'{n}_{k}'), m, parent=par); k += 1; z += pitch
+    # 헬리컬 기어
+    g = P('P_Gear')
+    ring('Gear_Body', 0.048, 0.012, 0.026, 0.013, gsteel, g, verts=64)
+    for k in range(24):
+        a = k * math.pi * 2 / 24
+        box(f'Gear_T{k}', (0.012, 0.009, 0.026), (math.cos(a) * 0.051, math.sin(a) * 0.051, 0.013), gsteel, parent=g, rot=(0.3, 0, a))
+    ring('Gear_Hub', 0.022, 0.012, 0.034, 0.017, gsteel, g, verts=48)
+    box('Gear_Key', (0.005, 0.006, 0.034), (0.0135, 0, 0.017), oxide, parent=g)
+    # 계단 축 (눕힘) + 스플라인
+    sh = P('P_Shaft')
+    cyl('Shaft_Main', 0.012, 0.17, (0, 0, 0.018), gsteel, axis='X', parent=sh, verts=32)
+    cyl('Shaft_Step', 0.018, 0.05, (0.02, 0, 0.018), gsteel, axis='X', parent=sh, verts=40, bevel=0.002)
+    cyl('Shaft_Collar', 0.021, 0.008, (-0.01, 0, 0.018), gsteel, axis='X', parent=sh, verts=40)
+    for k in range(12):
+        a = k * math.pi * 2 / 12
+        box(f'Spline_{k}', (0.04, 0.004, 0.004), (-0.06, math.cos(a) * 0.0125, 0.018 + math.sin(a) * 0.0125), gsteel, parent=sh, rot=(a, 0, 0))
+    # 볼베어링
+    b = P('P_Bearing')
+    ring('Bearing_Outer', 0.042, 0.035, 0.02, 0.01, chrome, b, verts=64, bevel=0.0015)
+    ring('Bearing_Inner', 0.026, 0.017, 0.02, 0.01, chrome, b, verts=64, bevel=0.0015)
+    for k in range(11):
+        a = k * math.pi * 2 / 11
+        sphere(f'Ball_{k}', 0.0042, (math.cos(a) * 0.0305, math.sin(a) * 0.0305, 0.016), chrome, parent=b, seg=12)
+    ring('Bearing_Cage', 0.033, 0.028, 0.006, 0.012, mat('Brass', srgb('#c9a04a'), 0.9, 0.3), b, verts=48)
+    # 오일씰
+    o = P('P_Seal')
+    ring('Seal_Metal', 0.036, 0.024, 0.008, 0.004, zinc, o, verts=48)
+    bpy.ops.mesh.primitive_torus_add(major_radius=0.028, minor_radius=0.006, major_segments=48, minor_segments=12, location=(0, 0, 0.012))
+    finish(setname(bpy.context.active_object, 'Seal_Lip'), rubber, parent=o)
+    # 컵홀더
+    c = P('P_CupHolder')
+    box('Cup_Plate', (0.1, 0.1, 0.008), (0, 0, 0.056), plastic, bevel=0.006, parent=c)
+    ring('Cup_Body', 0.04, 0.034, 0.055, 0.028, plastic, c, verts=48)
+    cyl('Cup_Floor', 0.036, 0.004, (0, 0, 0.004), plastic, parent=c, verts=48)
+    bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=0.034, depth=0.05, location=(0, 0, 0.06)); cc = bpy.context.active_object
+    pl = bpy.data.objects['Cup_Plate']; md = pl.modifiers.new('Hole', 'BOOLEAN'); md.object = cc; md.operation = 'DIFFERENCE'; md.solver = 'EXACT'
+    bpy.context.view_layer.objects.active = pl; bpy.ops.object.modifier_apply(modifier='Hole'); bpy.data.objects.remove(cc, do_unlink=True)
+    box('Cup_Ribs', (0.004, 0.06, 0.03), (0.036, 0, 0.03), plastic, parent=c)
+    # 암레스트 패드
+    a = P('P_Armrest')
+    box('Arm_Pad', (0.15, 0.06, 0.035), (0, 0, 0.0175), leather, bevel=0.016, parent=a)
+    box('Arm_Stitch', (0.13, 0.002, 0.002), (0, -0.031, 0.026), stitch, parent=a)
+    box('Arm_Stitch2', (0.13, 0.002, 0.002), (0, 0.031, 0.026), stitch, parent=a)
+    box('Arm_Base', (0.14, 0.05, 0.008), (0, 0, 0.004), plastic, parent=a)
+    # 스피커 그릴
+    gr = P('P_Grille')
+    cyl('Grille_Disc', 0.05, 0.008, (0, 0, 0.004), plastic, parent=gr, verts=64, bevel=0.003)
+    for k, r in enumerate((0.012, 0.02, 0.028, 0.036, 0.044)):
+        bpy.ops.mesh.primitive_torus_add(major_radius=r, minor_radius=0.0018, major_segments=48, minor_segments=6, location=(0, 0, 0.0085))
+        finish(setname(bpy.context.active_object, f'Grille_Ring_{k}'), chrome if k == 4 else mat('GrilleMesh', srgb('#3a3f45'), 0.4, 0.5), parent=gr)
+    for k in range(3): box(f'Grille_Tab_{k}', (0.012, 0.006, 0.01), (math.cos(k * 2.094) * 0.052, math.sin(k * 2.094) * 0.052, 0.005), plastic, parent=gr, rot=(0, 0, k * 2.094))
+    # 윈도 스위치
+    w = P('P_Switch')
+    box('Switch_Body', (0.1, 0.05, 0.02), (0, 0, 0.01), plastic, bevel=0.006, parent=w)
+    box('Switch_Trim', (0.102, 0.052, 0.003), (0, 0, 0.0035), chrome, bevel=0.001, parent=w)
+    for k in range(4): box(f'Switch_Btn_{k}', (0.016, 0.022, 0.008), (-0.033 + k * 0.022, -0.004, 0.023), mat('SwitchBtn', srgb('#3c4148'), 0.1, 0.4), bevel=0.003, parent=w)
+    box('Switch_Lock', (0.012, 0.01, 0.005), (0.04, 0.016, 0.022), mat('SwitchLED', srgb('#ff8a2a'), 0, 0.3, emit=srgb('#ff8a2a'), strength=1.0), parent=w)
+    # 십자 나사 (팬 헤드, 세워 둠)
+    sc = P('P_Screw')
+    cyl('Screw_Shank', 0.005, 0.04, (0, 0, 0.02), zinc, parent=sc, verts=16)
+    thread('Screw_Thread', 0.0055, 0.004, 0.038, zinc, sc, 0.004)
+    cyl('Screw_Head', 0.012, 0.007, (0, 0, 0.0435), zinc, parent=sc, verts=32, bevel=0.0025)
+    for rz in (0, math.pi / 2): box(f'Screw_Cross_{rz}', (0.014, 0.0025, 0.003), (0, 0, 0.047), oxide, parent=sc, rot=(0, 0, rz))
+    # 플랜지 육각 볼트
+    bo = P('P_Bolt')
+    cyl('Bolt_Shank', 0.008, 0.06, (0, 0, 0.03), zinc, parent=bo, verts=20)
+    thread('Bolt_Thread', 0.0088, 0.004, 0.04, zinc, bo, 0.0045)
+    cyl('Bolt_Flange', 0.019, 0.003, (0, 0, 0.0615), zinc, parent=bo, verts=40)
+    cyl('Bolt_Head', 0.016, 0.011, (0, 0, 0.0685), zinc, parent=bo, verts=6, bevel=0.0012)
+    # 육각 너트 · 와셔
+    n = P('P_Nut')
+    ring('Nut_Body', 0.017, 0.0085, 0.014, 0.007, zinc, n, verts=6, bevel=0.0012)
+    thread('Nut_Thread', 0.0085, 0.002, 0.013, oxide, n, 0.0035)
+    wa = P('P_Washer')
+    ring('Washer_Body', 0.02, 0.0095, 0.003, 0.0015, zinc, wa, verts=40)
+    # 트림 클립 패스너 (푸시 리벳)
+    cl = P('P_Clip')
+    cyl('Clip_Head', 0.018, 0.004, (0, 0, 0.032), nylon, parent=cl, verts=32, bevel=0.0015)
+    cyl('Clip_Stem', 0.0055, 0.028, (0, 0, 0.016), nylon, parent=cl, verts=16)
+    for k in range(4):
+        bpy.ops.mesh.primitive_cone_add(vertices=20, radius1=0.009, radius2=0.005, depth=0.005, location=(0, 0, 0.006 + k * 0.006))
+        finish(setname(bpy.context.active_object, f'Clip_Fin_{k}'), nylon, parent=cl)
+    export(R, 'parts')
+    # 미리보기: 부품을 한 줄로
+    xs = {'P_Gear': -0.36, 'P_Shaft': -0.22, 'P_Bearing': -0.08, 'P_Seal': 0.02, 'P_CupHolder': 0.14, 'P_Armrest': 0.3, 'P_Grille': 0.46, 'P_Switch': 0.6,
+          'P_Screw': 0.72, 'P_Bolt': 0.8, 'P_Nut': 0.88, 'P_Washer': 0.95, 'P_Clip': 1.02}
+    for k, x in xs.items(): bpy.data.objects[k].location = (x - 0.33, 0, 0)
+
+def build_parts_preview(): build_parts()
+
+# ── 도어트림 (차량 앞문 내장 패널, 길이 0.8 × 높이 0.6 × 두께 약 0.12m) — 세워 둔 모양: 면 = 앞(−Y, three.js +z), 바닥 중심 원점
+# 기재 패널 · 윗부분 소프트 벨트라인 · 가운데 직물 인서트 · 암레스트와 손잡이 홈 · 윈도 스위치 · 인사이드 핸들 · 스피커 그릴 · 맵 포켓
+def build_doortrim():
+    base = mat('TrimPlastic', srgb('#3c3f44'), 0.0, 0.6)
+    soft = mat('TrimSoft', srgb('#25272b'), 0.0, 0.55)
+    fabric = mat('TrimFabric', srgb('#8b8379'), 0.0, 0.85)
+    leather = mat('Leather', srgb('#6f6a64'), 0.0, 0.7)
+    chrome = mat('Chrome', srgb('#e4e8ec'), 1.0, 0.12)
+    R = empty('Doortrim')
+    p = box('Trim_Panel', (0.8, 0.05, 0.56), (0, 0, 0.29), base, bevel=0.03, parent=R)
+    bpy.ops.mesh.primitive_cube_add(size=1, location=(0.47, 0, 0.0), rotation=(0, math.radians(35), 0)); c = bpy.context.active_object; c.scale = (0.3, 0.3, 0.3)
+    md = p.modifiers.new('Cut', 'BOOLEAN'); md.object = c; md.operation = 'DIFFERENCE'; md.solver = 'EXACT'
+    bpy.context.view_layer.objects.active = p; bpy.ops.object.modifier_apply(modifier='Cut'); bpy.data.objects.remove(c, do_unlink=True)
+    box('Trim_Beltline', (0.8, 0.075, 0.09), (0, -0.01, 0.53), soft, bevel=0.03, parent=R)
+    box('Trim_Insert', (0.52, 0.012, 0.17), (0.04, -0.03, 0.38), fabric, bevel=0.01, parent=R)
+    box('Trim_Armrest', (0.52, 0.09, 0.06), (0.04, -0.065, 0.265), leather, bevel=0.025, parent=R)
+    box('Trim_PullCup', (0.13, 0.05, 0.025), (-0.13, -0.085, 0.29), soft, bevel=0.01, parent=R)
+    box('Trim_SwitchPanel', (0.16, 0.06, 0.014), (0.19, -0.075, 0.298), soft, bevel=0.005, parent=R)
+    for k in range(4): box(f'Trim_Btn_{k}', (0.024, 0.03, 0.01), (0.135 + k * 0.036, -0.075, 0.309), mat('SwitchBtn', srgb('#3c4148'), 0.1, 0.4), bevel=0.003, parent=R)
+    box('Trim_HandleRecess', (0.16, 0.012, 0.06), (-0.28, -0.03, 0.44), soft, bevel=0.01, parent=R)
+    box('Trim_Handle', (0.12, 0.02, 0.022), (-0.28, -0.042, 0.44), chrome, bevel=0.008, parent=R)
+    cyl('Trim_Speaker', 0.085, 0.014, (-0.22, -0.03, 0.13), soft, axis='Y', parent=R, verts=48, bevel=0.004)
+    for k, r in enumerate((0.025, 0.045, 0.065, 0.08)):
+        bpy.ops.mesh.primitive_torus_add(major_radius=r, minor_radius=0.0028, major_segments=48, minor_segments=6, location=(-0.22, -0.038, 0.13), rotation=(math.pi / 2, 0, 0))
+        finish(setname(bpy.context.active_object, f'Trim_SpkRing_{k}'), chrome if k == 3 else base, parent=R)
+    box('Trim_Pocket', (0.36, 0.05, 0.1), (0.12, -0.045, 0.1), soft, bevel=0.015, parent=R)
+    box('Trim_PocketLip', (0.36, 0.012, 0.012), (0.12, -0.072, 0.15), chrome, parent=R)
+    for x in (-0.3, 0.0, 0.3): cyl(f'Trim_Clip_{x}', 0.012, 0.03, (x, 0.035, 0.3), mat('Nylon', srgb('#e9e6df'), 0.0, 0.5), axis='Y', parent=R, verts=12)
+    export(R, 'doortrim')
+
 def preview_one(build, name, cam_loc, cam_rot, lens, res):
     reset(); MATS.clear(); common_mats(); build()
     bpy.ops.mesh.primitive_plane_add(size=20, location=(0, 0, 0)); bpy.context.active_object.data.materials.append(mat('Floor', srgb('#8b9096'), 0, 0.8))
@@ -682,10 +830,10 @@ def build_primitives():
     print('primitives', len(keys))
 
 reset(); MATS.clear(); build_primitives()
-for fn in (build_amr, build_agv, build_forklift, build_drone, build_humanoid, build_quadruped, build_arm6, build_ammr, build_truck, build_gantry, build_eaxle):
+for fn in (build_amr, build_agv, build_forklift, build_drone, build_humanoid, build_quadruped, build_arm6, build_ammr, build_truck, build_gantry, build_eaxle, build_parts, build_doortrim):
     reset(); MATS.clear(); common_mats(); fn()
 try:
-    preview(); preview_humanoid(); preview_one(build_quadruped, 'quadruped', (-1.9, -2.15, 1.45), (70, 0, -42), 40, (960, 720)); preview_one(build_eaxle, 'eaxle', (1.25, -1.45, 0.95), (68, 0, 40), 45, (960, 640)); preview_one(build_truck_fork, 'truck', (11.5, -9.5, 4.6), (72, 0, 52), 32, (1280, 720))
+    preview(); preview_humanoid(); preview_one(build_quadruped, 'quadruped', (-1.9, -2.15, 1.45), (70, 0, -42), 40, (960, 720)); preview_one(build_eaxle, 'eaxle', (1.25, -1.45, 0.95), (68, 0, 40), 45, (960, 640)); preview_one(build_doortrim, 'doortrim', (0.35, -1.45, 0.62), (80, 0, 13), 45, (900, 600)); preview_one(build_parts_preview, 'parts', (0.0, -1.5, 0.55), (70, 0, 0), 34, (1400, 460)); preview_one(build_truck_fork, 'truck', (11.5, -9.5, 4.6), (72, 0, 52), 32, (1280, 720))
 except Exception as e:   # 렌더 장치가 없는 환경에서는 미리보기만 건너뛴다
     print('preview skipped:', e)
 print('Jin-3D Blender assets →', os.path.abspath(OUT), sorted(os.listdir(OUT)))

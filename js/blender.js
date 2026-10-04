@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-export const BLENDER_ASSETS = { amr: '운반 AMR', agv: 'AGV', forklift: '지게차', drone: '순찰 드론', humanoid: '휴머노이드', quadruped: '사족보행', arm6: '6축 협동로봇 팔', ammr: 'AMMR 양팔 로봇', truck: '화물트럭', gantry: '갠트리 로봇', eaxle: 'e-axle 제품' };
+export const BLENDER_ASSETS = { amr: '운반 AMR', agv: 'AGV', forklift: '지게차', drone: '순찰 드론', humanoid: '휴머노이드', quadruped: '사족보행', arm6: '6축 협동로봇 팔', ammr: 'AMMR 양팔 로봇', truck: '화물트럭', gantry: '갠트리 로봇', eaxle: 'e-axle 제품', parts: '조립·체결 부품', doortrim: '도어트림 제품' };
 export const RENDER = { style: 'blender', assets: {}, prims: new Map(), loaded: false, error: null, swapped: 0 };
 let loading = null;
 
