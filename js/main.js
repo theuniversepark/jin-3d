@@ -14,6 +14,7 @@ import { LineDesigner } from './designer.js';
 import { renderConcept } from './concept.js';
 import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
 import { PacketCapture } from './pcap.js';
+import { ODOO_PRODUCTS, ODOO_LOCS } from './odoo.js';
 import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
 import { GateView } from './gateview.js';
 import { EpisodeRecorder, buildEpisodesZip, EP_HZ, SAMPLE } from './vla.js';
@@ -343,6 +344,76 @@ const FORMATS = [
   ['csv', 'CSV', '시계열·이벤트 긴 형식 (타임스탬프·자산·항목·값·단위)'],
   ['aml', 'AutomationML', 'CAEX 3.0 공장 계층 + AAS id + 최신 값, CSV 시계열 참조'],
 ];
+// ── Odoo ERP 연동 창: 발주 · 재고 · 설비보전 + 실시간 Odoo 연결 ─────────────────
+const odooModal = document.getElementById('odooModal'), odooBody = document.getElementById('odooBody');
+let odooTab = 'po', odooTimer = null, odooSrv = null, odooNote = '', odooSyncT = 0, odooBusy = false;
+const won = (v) => `${Math.round(v).toLocaleString('ko-KR')}원`;
+const fclk = (tt) => tt == null ? '-' : [3600, 60, 1].map((d, i) => String(Math.floor((Math.floor(tt) + 8 * 3600) / d) % (i ? 60 : 24)).padStart(2, '0')).join(':');
+const pcode = (k) => ODOO_PRODUCTS[k]?.code ?? k, lname = (k) => ODOO_LOCS[k]?.name ?? k;
+async function odooStatus() { if (hub.noServer) { odooSrv = null; return; } try { odooSrv = await (await fetch('/api/odoo/status')).json(); } catch { odooSrv = null; } }
+function renderOdoo() {
+  const E = sim.erp;
+  if (!E?.on) { odooBody.innerHTML = '<div class="dh-note">레거시 공장은 ERP 연동이 없습니다 (수기 발주·장부). 자동화·피지컬AI 단계에서 Odoo와 연동합니다.</div>'; return; }
+  const S = E.stats(), Q = E.quant, n = (v) => Math.round(v).toLocaleString('ko-KR');
+  const st = (x) => `<span class="od-st ${x === 'done' || x === 'purchase' ? 'done' : x === 'new' ? 'new' : 'wait'}">${{ done: '완료', assigned: '준비됨', purchase: '구매오더', progress: '진행 중', new: '신규' }[x] ?? x}</span>`;
+  const tabs = { po: `🧾 발주 (구매오더 ${S.po})`, stock: `📦 재고 (전표 ${E.db.picking.length})`, mr: `🔧 설비보전 (정비요청 ${S.mr})`, live: '🔗 실시간 Odoo 연결', log: '📜 연동 로그' };
+  let body = '';
+  if (odooTab === 'po') body = `<table class="od-tbl"><tr><th>구매오더</th><th>공급사</th><th>주문 시각</th><th>품목 (주문 / 입고)</th><th>금액</th><th>입고 전표</th><th>트럭</th><th>상태</th></tr>
+    ${E.db.po.slice(0, 40).map((p) => `<tr><td>${p.name}</td><td>${escH(p.partner)}</td><td>${fclk(p.date_order)}</td><td>${p.lines.map((l) => `${pcode(l.product)} ${n(l.qty)} / ${n(l.received)}`).join('<br>')}</td><td>${won(p.amount)}</td><td>${p.receipt}</td><td>${p.truck ?? '발주됨'}</td><td>${p.received ? st('done') : st('purchase')}</td></tr>`).join('') || '<tr><td colspan="8">아직 구매오더가 없습니다 — 물류 선반 재고가 재주문점 아래로 내려가면 WMS가 발주합니다</td></tr>'}</table>
+    <div class="cmp-note">재주문 규칙(stock.warehouse.orderpoint): ${E.orderpoints.map((o) => `${pcode(o.product)} @ ${lname(o.location)} 최소 ${n(o.min)} · 최대 ${n(o.max)}`).join(' / ')} — 재고 + 발주분이 최소 아래면 최대까지 발주 (트럭 4팔레트 한도)</div>`;
+  else if (odooTab === 'stock') body = `<table class="od-tbl"><tr><th>로케이션</th>${Object.keys(ODOO_PRODUCTS).map((k) => `<th>${pcode(k)}</th>`).join('')}</tr>
+    ${['rackRaw', 'rackParts', 'feeder', 'cells', 'output', 'customer'].map((k) => `<tr><td>${lname(k)}</td>${Object.keys(ODOO_PRODUCTS).map((p) => `<td>${Q[k][p] ? n(Q[k][p]) : '·'}</td>`).join('')}</tr>`).join('')}</table>
+    <table class="od-tbl" style="margin-top:8px"><tr><th>전표</th><th>유형</th><th>근거</th><th>품목</th><th>출발 → 도착</th><th>시각</th><th>상태</th></tr>
+    ${E.db.picking.slice(0, 40).map((p) => `<tr><td>${p.name}</td><td>${{ incoming: '입고', internal: '내부 이동', production: '생산 입고', outgoing: '출고' }[p.type]}</td><td>${escH(p.origin ?? '')}</td><td>${p.lines.map((l) => `${pcode(l.product)} ${n(l.done)}${l.qty !== l.done ? ` / ${n(l.qty)}` : ''}${l.trips ? ` (${l.trips}회)` : ''}`).join('<br>')}</td><td>${lname(p.lines[0]?.from ?? p.from)} → ${lname(p.lines[0]?.to ?? p.to)}</td><td>${fclk(p.done ?? p.created)}</td><td>${st(p.state)}</td></tr>`).join('')}</table>`;
+  else if (odooTab === 'mr') body = `<table class="od-tbl"><tr><th>정비요청</th><th>설비 (일련번호)</th><th>유형</th><th>요청</th><th>담당</th><th>소요</th><th>단계</th><th>내용</th></tr>
+    ${E.db.mr.slice(0, 40).map((m) => `<tr><td>${m.ref}</td><td>${escH(m.equipmentName)} (${m.equipment})</td><td>${m.type === 'corrective' ? '긴급 (고장)' : '예방'}</td><td>${fclk(m.request_date)}</td><td>${m.tech ?? '-'}</td><td>${m.stage === 'done' ? `${Math.round(m.duration * 60)}분` : '-'}</td><td>${st(m.stage)}</td><td>${escH(m.description)}</td></tr>`).join('') || '<tr><td colspan="8">정비요청이 없습니다</td></tr>'}</table>
+    <div class="cmp-note">설비 ${S.equipment}대 등록 (셀·셀 로봇·운반 AMR·AGV·지게차·휴머노이드·사족보행·드론, 일련번호 = 설비 고유 ID). 정비요청이 많은 설비: ${E.db.equipment.filter((e) => e.requests).sort((a, b) => b.requests - a.requests).slice(0, 4).map((e) => `${e.name} ${e.requests}건 (${Math.round(e.downtime * 60)}분)`).join(' · ') || '-'}</div>`;
+  else if (odooTab === 'live') {
+    const v = odooSrv;
+    body = hub.noServer ? '<div class="dh-note">웹·공유 페이지에서는 서버가 없어 실시간 Odoo 연동을 쓸 수 없습니다 — 시뮬레이션 Odoo로 기록합니다. 맥 앱이나 npm start로 실행하세요.</div>'
+      : `<div class="od-live"><div><b>서버 게이트웨이</b> (server/odoo-gateway.mjs → Odoo 외부 API JSON-RPC <code>/jsonrpc</code>) · ${v ? (v.configured ? `설정됨 — ${escH(v.url)} · DB ${escH(v.db)} · ${escH(v.user)}${v.connected ? ` · <b class="ok">연결됨</b> (Odoo ${escH(v.version ?? '')}, uid ${v.uid})` : ' · 미연결'}` : '<b class="bad">설정 없음</b>') : '확인 중…'}</div>
+        <div class="row"><input id="odUrl" placeholder="https://mycompany.odoo.com" value="${escH(v?.url ?? '')}"/><input id="odDb" placeholder="데이터베이스" value="${escH(v?.db ?? '')}"/><input id="odUser" placeholder="로그인 (이메일)" value="${escH(v?.user ?? '')}"/><input id="odKey" type="password" placeholder="${v?.hasKey ? 'API 키 (저장됨 — 바꿀 때만 입력)' : 'API 키'}"/><button data-od="config">설정</button></div>
+        <div class="row"><label class="chk"><input type="checkbox" id="odLive" ${E.live ? 'checked' : ''}/> 실시간 Odoo로 보내기 (2초마다 묶음 전송)</label> · 보낸 이벤트 ${n(E.sent)} · 대기 ${n(E.outbox.length)}${v ? ` · Odoo 적용 ${n(v.sent)} · 실패 ${n(v.failed)}` : ''}</div>
+        ${v?.lastError ? `<div class="bad">최근 오류: ${escH(v.lastError)}</div>` : ''}${odooNote ? `<div>${escH(odooNote)}</div>` : ''}
+        ${v?.created && Object.keys(v.created).length ? `<div>Odoo에 생성: ${Object.entries(v.created).map(([k, c]) => `${k} ${n(c)}`).join(' · ')}</div>` : ''}</div>
+      <div class="cmp-note">• 필요한 Odoo 앱: 구매 · 재고 · 설비보전 (Community 무료판에 포함, Odoo 16~18). API 키: Odoo 사용자 설정 → 계정 보안 → API 키. 키는 서버 메모리(또는 .env의 ODOO_API_KEY)에만 두고 화면으로 돌려보내지 않습니다.<br>
+      • 처음 보낼 때 마스터 데이터(제품 4종 · 로케이션 · 공급사/고객사 · 재주문 규칙 · 설비 ${S.equipment}대 · 기초 재고)를 만들고, 이후 구매오더 확정 → 입고 검증, 내부 이동·생산 입고·출고 검증, 정비요청 생성·단계 변경을 순서대로 적용합니다. 체크하는 순간까지 쌓인 이벤트부터 보냅니다.</div>`;
+  } else body = `<table class="od-tbl"><tr><th>시각</th><th>내용</th></tr>${E.log.map((l) => `<tr><td>${fclk(l.t)}</td><td>${escH(l.text)}</td></tr>`).join('')}</table>`;
+  odooBody.innerHTML = `<div class="od-grid">
+      <div class="od-kpi"><span>구매오더</span><b>${n(S.po)}건</b><small>진행 중 ${S.poOpen} · ${won(S.amount)}</small></div>
+      <div class="od-kpi"><span>재고 전표</span><b>${n(S.receipts + S.internals + S.productions + S.deliveries)}건</b><small>입고 ${S.receipts} · 내부 ${S.internals} · 생산 ${S.productions} · 출고 ${S.deliveries}</small></div>
+      <div class="od-kpi"><span>물류 선반 재고</span><b>${n(Q.rackRaw.raw)} · ${n(Q.rackParts.parts)}</b><small>RM-BOX · PT-KIT (확정 기준)</small></div>
+      <div class="od-kpi"><span>정비요청</span><b>${n(S.mr)}건</b><small>긴급 ${S.corrective} · 예방 ${S.preventive} · 진행 ${S.mrOpen}</small></div></div>
+    <div class="od-tabs">${Object.entries(tabs).map(([k, v]) => `<button data-odtab="${k}" class="${odooTab === k ? 'on' : ''}">${v}</button>`).join('')}</div>${body}
+    <div class="cmp-note">${E.live ? '🔗 실시간 Odoo에도 보내는 중' : '시뮬레이션 Odoo (내장) — 같은 모델(purchase.order · stock.picking · stock.quant · maintenance.request)·전표 번호로 기록'} · 내부 이동·생산 입고는 10분(공장 시계)마다 한 전표</div>`;
+}
+document.getElementById('btnOdoo').addEventListener('click', () => {
+  odooModal.classList.remove('hidden'); odooStatus().then(renderOdoo); renderOdoo();
+  clearInterval(odooTimer); odooTimer = setInterval(() => { if (!odooModal.classList.contains('hidden') && !odooBody.contains(document.activeElement)) odooStatus().then(renderOdoo); }, 1500);
+});
+document.getElementById('closeOdoo').addEventListener('click', () => { odooModal.classList.add('hidden'); clearInterval(odooTimer); });
+odooBody.addEventListener('click', async (e) => {
+  const t = e.target.closest('[data-odtab]'); if (t) { odooTab = t.dataset.odtab; return renderOdoo(); }
+  if (e.target.closest('[data-od="config"]')) {
+    const body = { url: document.getElementById('odUrl').value, db: document.getElementById('odDb').value, user: document.getElementById('odUser').value, key: document.getElementById('odKey').value };
+    try { odooSrv = await (await fetch('/api/odoo/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json(); odooNote = '설정을 서버에 저장했습니다 (API 키는 서버 메모리에만)'; } catch (err) { odooNote = `설정 실패: ${err.message}`; }
+    renderOdoo();
+  }
+});
+odooBody.addEventListener('change', (e) => { if (e.target.id === 'odLive') { sim.erp.live = e.target.checked; odooNote = e.target.checked ? '실시간 전송 시작' : '실시간 전송 중지 (이벤트는 쌓아 둠)'; e.target.blur(); renderOdoo(); } });
+// 실시간 전송: 2초마다 쌓인 이벤트를 서버 게이트웨이로 (실패하면 그대로 두고 다음에 다시)
+async function odooSyncTick(rdt) {
+  const E = sim.erp; if (!E?.live || hub.noServer || odooBusy) return;
+  odooSyncT += rdt; if (odooSyncT < 2 || (E.masterSent && !E.outbox.length)) return; odooSyncT = 0; odooBusy = true;
+  const withMaster = !E.masterSent, batch = [...(withMaster ? [E.master] : []), ...E.outbox.slice(0, 300)];
+  try {
+    const r = await fetch('/api/odoo/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: batch }) });
+    const out = await r.json(); odooSrv = out.status ?? odooSrv;
+    if (r.ok) { E.outbox.splice(0, batch.length - (withMaster ? 1 : 0)); E.masterSent = true; E.sent += batch.length; odooNote = `${out.applied}건 적용`; } else odooNote = `전송 실패: ${out.error}`;
+  } catch (err) { odooNote = `전송 실패: ${err.message}`; }
+  finally { odooBusy = false; }
+}
+
 // ── 패킷 덤프: 캡처 상태·통계·버튼 (데이터 연동 창) ─────────────────
 let pcapNote = '';
 function pcapHtml() {
@@ -873,6 +944,7 @@ function frame() {
   }
   hub.tick(rdt);
   pcapVideoTick(rdt);
+  odooSyncTick(rdt);
   view.update(rdt, running, speed);
   keyPan(rdt, shiftHeld);
   netT += rdt; if (netT > 1 && !netCard.hidden) { netT = 0; renderNetCard(); }

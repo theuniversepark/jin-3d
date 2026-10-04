@@ -8,6 +8,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { runAgentTurn, MODEL } from './llm-agent.mjs';
 import { designLine } from './line-designer.mjs';
 import { startMqtt, mqttStatus, mqttPublish } from './mqtt-gateway.mjs';
+import { odooStatus, odooConfig, odooSync, odooReset } from './odoo-gateway.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
@@ -154,6 +155,19 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
         const body = JSON.parse(await readBody(req, 16 * 1024 * 1024));
         return send(res, 200, { published: mqttPublish(Array.isArray(body?.messages) ? body.messages : []), status: mqttStatus() });
       } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+
+    // Odoo ERP 실시간 연동 (발주·재고·설비보전) — API 키는 서버 메모리에만, 응답에는 넣지 않는다
+    if (url.pathname === '/api/odoo/status') return send(res, 200, odooStatus());
+    if (url.pathname === '/api/odoo/config' && req.method === 'POST') {
+      try { return send(res, 200, odooConfig(JSON.parse(await readBody(req)))); } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (url.pathname === '/api/odoo/reset' && req.method === 'POST') { odooReset(); return send(res, 200, odooStatus()); }
+    if (url.pathname === '/api/odoo/sync' && req.method === 'POST') {
+      try {
+        const body = JSON.parse(await readBody(req, 8 * 1024 * 1024));
+        return send(res, 200, await odooSync(Array.isArray(body?.events) ? body.events : []));
+      } catch (e) { return send(res, 502, { error: e.message, status: odooStatus() }); }
     }
 
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';

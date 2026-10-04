@@ -686,3 +686,14 @@ body.hide-left #tglLeft { left: 12px; } body.hide-right #tglRight { right: 12px;
 .pcap-box .prow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .pcap-box button { border: 1px solid #37e8ff; background: rgba(55, 232, 255, 0.12); color: var(--ink); border-radius: 6px; padding: 3px 9px; font-size: 11.5px; }
 .pcap-box .pnote { color: var(--ink3, #8a96a3); font-size: 11px; }
+.od-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+.od-kpi { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: rgba(113, 75, 103, 0.12); }
+.od-kpi span { display: block; font-size: 11px; color: var(--ink2); } .od-kpi b { font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; } .od-kpi small { display: block; font-size: 11px; color: var(--ink3, #8a96a3); }
+.od-tabs { display: flex; gap: 6px; margin: 4px 0 8px; flex-wrap: wrap; } .od-tabs button { border: 1px solid var(--line); background: transparent; color: var(--ink2); border-radius: 8px; padding: 4px 12px; font-size: 12px; }
+.od-tabs button.on { border-color: #a2649a; background: rgba(162, 100, 154, 0.22); color: var(--ink); }
+.od-tbl { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; } .od-tbl th, .od-tbl td { text-align: left; padding: 4px 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); } .od-tbl th { color: var(--ink3, #8a96a3); font-weight: 500; }
+.od-st { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 11px; } .od-st.done { background: rgba(61, 220, 132, 0.18); color: #3ddc84; } .od-st.wait { background: rgba(245, 184, 46, 0.18); color: #f5b82e; } .od-st.new { background: rgba(90, 169, 255, 0.18); color: #5aa9ff; }
+.od-live { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-top: 10px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+.od-live .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; } .od-live input:not([type=checkbox]) { background: #0d131a; border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 3px 6px; font-size: 12px; width: 170px; }
+.od-live button { border: 1px solid #a2649a; background: rgba(162, 100, 154, 0.2); color: var(--ink); border-radius: 6px; padding: 3px 10px; font-size: 12px; }
+@media (max-width: 760px) { .od-grid { grid-template-columns: repeat(2, 1fr); } }

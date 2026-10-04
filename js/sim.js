@@ -5,6 +5,7 @@ import { InboundYard, planReceiver, WH, INBOUND } from './receiving.js';
 import { PatrolDrone, MISSION_PRIO } from './drone.js';
 import { planCCTV, CCTVAgent } from './cctv.js';
 import { Private5G } from './net5g.js';
+import { OdooBridge } from './odoo.js';
 import { VLAPipeline } from './vla.js';
 import { AIOSPipeline } from './aios.js';
 import { Orchestrator } from './orchestrator.js';
@@ -365,6 +366,7 @@ export class Simulation {
     new AIOSPipeline(this);
     this.cctvAgent = new CCTVAgent(this);   // 피지컬AI: CCTV 에이전트 (영상 감시 · 오케스트레이터 보고 · 이벤트 이력)
     this.net = new Private5G(this);   // Private 5G 특화망: 음영 없는 기지국 배치 · 이동 로봇 5G 모뎀 · 핸드오버 · 무손실 업링크 (자동화·피지컬AI)
+    this.erp = new OdooBridge(this);   // Odoo ERP 연동: 발주·재고·설비보전 (자동화·피지컬AI)
   }
 
   // 설비·로봇 고유 ID — 현황판·라벨·텔레메트리·데이터 연동에 같은 ID를 쓴다 (사람은 제외)
@@ -664,6 +666,7 @@ export class Simulation {
       w.update(dt);
     }
     this.net?.update(dt);
+    this.erp?.update();
     this.cctvAgent?.update(dt);   // 피지컬AI: CCTV 에이전트 — 영상 감시·오케스트레이터 보고·이벤트 이력
     this.updateFieldEvents();
     this.orch.update();
@@ -721,6 +724,7 @@ export class Simulation {
       const { item } = c.items.shift();
       if (item.defect) this.stats.escaped++; else { this.stats.good++; if (item.product) this.stats.goodBy[item.product] = (this.stats.goodBy[item.product] ?? 0) + 1; }
       if (item.product) this.fgBy[item.product]++;
+      this.erp?.produced(item.product ?? 'doortrim');   // Odoo: 생산 입고 (구분 적재장에 들어온 수량 — 유출 불량 포함)
       this.releaseCarrier(item, sink.def);
       this.fgStock++;
       sink.c.processed++;
@@ -917,7 +921,7 @@ export class Simulation {
     o.step(inc, 'field', 'detect', m.agentActive ? `IoT 알람 — 건강도 ${st.health.toFixed(0)}%, 진동·전류 이상, 가동 정지` : `설비 정지 — 작업자가 이상을 발견하기까지 약 ${m.alarmDelay}초`);
     o.step(inc, 'cell', 'self', m.agentActive ? '셀 자체 조치: 비상 정지 · 작업물 보류 · 자가 진단 → 재가동 불가' : '셀 자체 조치 없음 (수동 설비)');
     const pending = !!st.request;
-    if (pending) st.request.kind = 'repair';
+    if (pending) { st.request.kind = 'repair'; this.erp?.maintenance(st, 'repair'); }
     else if (!m.agentActive) this.requestTech(st, 'repair', m.alarmDelay + 5);   // 레거시: 발견 지연 → 반장 판단 후 정비반 호출
     o.later(m.agentActive ? 0.5 : m.alarmDelay, () => o.step(inc, 'cell', 'report', `${m.agentActive ? '상위 보고' : '작업자 → 반장 보고'}: 고장 · 예상 수리 ${Math.round(st.repairTotal)}초 · 하류 셀 자재대기 예상`));
     o.later(m.agentActive ? o.latency : m.alarmDelay + 5, () => {
@@ -951,6 +955,7 @@ export class Simulation {
     if (kind !== 'repair' && this.cmd.stationGate(st)) return false;   // 명령으로 멈춘 셀에는 정비·보정을 새로 걸지 않는다 (수리 요청은 접수)
     st.request = { st, kind, readyAt: this.time + delay, tech: null };
     this.requests.push(st.request);
+    this.erp?.maintenance(st, kind);   // Odoo: 정비요청 (긴급 / 예방)
     return true;
   }
 
@@ -976,7 +981,7 @@ export class Simulation {
         if (d < bd) { bd = d; best = t; }
       }
       if (!best) continue;
-      req.tech = best;
+      req.tech = best; this.erp?.maintStart(st, best);
       if (req.kind === 'repair') this.orch.step(this.orch.find(`fail:${st.id}`), 'exec', 'act', `${best.id} 배정 · 출동`);
       const kindLabel = { repair: '긴급수리', pm: '예지정비', cal: '재보정' }[req.kind];
       best.setTask(`${kindLabel} → ${st.name}`, [
@@ -1009,6 +1014,7 @@ export class Simulation {
     st.state = st.item ? (st.done ? 'BLOCKED' : 'BUSY') : 'STARVED';
     st.techOnSite = false; st.maintKind = null;
     this.requests = this.requests.filter((r) => r !== st.request);
+    if (!st.request?.self) this.erp?.maintDone(st);   // Odoo: 정비 완료 (셀 자율 보정은 정비요청 없음)
     st.request = null;
     this.emit('repaired', { st, kind });
     const label = { repair: '수리 완료', pm: '예지정비 완료', cal: '재보정 완료' }[kind];
@@ -1032,7 +1038,7 @@ export class Simulation {
         // 대기존에서 바로 옆 진출입 줄(AGV 상차 자리를 비킨 x −41.2)로 나가 부품 칸 앞으로 옆걸음, 나올 때도 같은 줄로
         { go: h.pick, via: [{ x: LOC.WH_LANE, z: h.z }, { x: LOC.WH_LANE, z: h.pick.z }] },
         { until: () => !this.partsTracked || this.whParts > 0, task: '부품 랙 재고 대기 (입고 트럭 대기)' },
-        { wait: 4, done: () => { const n = this.partsTracked ? Math.min(this.mode.partsCap - (st.parts ?? 0), this.whParts) : this.mode.partsCap; this.whParts -= this.partsTracked ? n : 0; h.carry = n; } },
+        { wait: 4, done: () => { const n = this.partsTracked ? Math.min(this.mode.partsCap - (st.parts ?? 0), this.whParts) : this.mode.partsCap; this.whParts -= this.partsTracked ? n : 0; h.carry = n; if (this.partsTracked) this.erp?.consume('parts', n, st.name); } },
         { go: { x: LOC.WH_LANE, z: h.pick.z, aisle: 'F', name: '물류존 진출' }, via: [] },
         { go: st.ammr ? this.rackServiceLoc(st) : localLoc(st.def, -1.0, SVC_Z, st.name) },   // AMMR 셀은 부품 선반 옆
         { wait: 5, done: () => {
@@ -1247,7 +1253,7 @@ export class Simulation {
       { go: LOC.WH },
       { until: () => this.time >= this.supplyDisruptedUntil, task: '출고 대기 (공급 차질)' },
       { until: () => this.whRaw > 0, task: '창고 재고 대기 (입고 트럭 대기)' },
-      { wait: 4, done: () => { const n = Math.min(PALLET_RAW, this.whRaw); this.whRaw -= n; v.load = { type: 'raw', n }; } },
+      { wait: 4, done: () => { const n = Math.min(PALLET_RAW, this.whRaw); this.whRaw -= n; v.load = { type: 'raw', n }; this.erp?.consume('raw', n, '투입구 (AS/RS)'); } },
       { go: this.loc.SRC },
       { wait: 4, done: () => {
         const n = v.load?.n ?? PALLET_RAW;

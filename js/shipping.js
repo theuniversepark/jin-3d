@@ -85,12 +85,12 @@ export class TruckYard {
     t.reserved = Math.max(0, (t.reserved ?? 0) - n);
     t.load += n; if (product) t.by[product] = (t.by[product] ?? 0) + n;
     (t.pallets ??= []).push(product ?? 'fg');   // 3D 적재함에 놓이는 팔레트 순서
-    s.stats.shipped += n;
+    s.stats.shipped += n; s.erp?.ship(t, n, product);
     if (t.load >= YARD.cap) {
       const bx = t.bay;
       t.go([{ x: bx, z: YARD.roadZ + 3 }, { x: bx + 4, z: YARD.roadZ }, { x: 90, z: YARD.roadZ }], 'depart');
       t.bay = null; t.bayLeft = bx;
-      s.stats.trucks = (s.stats.trucks ?? 0) + 1;
+      s.stats.trucks = (s.stats.trucks ?? 0) + 1; s.erp?.shipDone(t);   // Odoo: 출고 확정
       const mix = Object.entries(t.by).map(([k, v]) => `${k === 'doortrim' ? '도어트림' : k === 'eaxle' ? 'e-axle' : k} ${v}`).join(' · ');
       s.log('ok', `${t.id} 만재 출발`, { obs: `적재 ${t.load}/${YARD.cap}개${mix ? ` (${mix})` : ''}`, act: `도크 ${this.bayNo(bx)} 비움 → 대기 트럭 접안` });
     }

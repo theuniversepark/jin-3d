@@ -57,6 +57,7 @@ export class InboundYard {
       if (raw + parts === 0) raw = 1;
       const pallets = [...Array(raw).fill('raw'), ...Array(parts).fill('parts')];
       this.orders.push({ t: s.time, due: s.time + WH.lead, pallets });
+      s.erp?.purchase(this.orders.at(-1));   // Odoo: 구매오더 확정 + 입고 예정
       s.log('plan', 'WMS 자재 발주', { obs: `창고 원자재 ${s.whRaw}개${s.partsTracked ? ` · 부품 ${s.whParts}개` : ''} (발주 포함 재주문점 미달)`, act: `공급사 트럭 1대 — 원자재 ${raw}팔레트${parts ? ` · 부품 ${parts}팔레트` : ''}` });
     }
     // 납기 도래 발주 → 트럭 출발 (공급 차질 중에는 납품 지연)
@@ -66,7 +67,7 @@ export class InboundYard {
       const t = new Truck(`입고트럭-${++this.seq}`, -111, INBOUND.roadZ - 1.5, Math.PI / 2);
       t.pallets = [...o.pallets]; t.load = t.pallets.length; t.inbound = true;
       t.go([{ x: NB - 4, z: INBOUND.roadZ - 1.5 }, { x: NB, z: INBOUND.roadZ + 3 }, { x: NB, z: INBOUND.waitZ }], 'arrive');
-      this.trucks.push(t);
+      this.trucks.push(t); s.erp?.dispatched(o, t);
     }
     this.orders = this.orders.filter((o) => !o.sent);
     for (const t of this.trucks) {
@@ -87,6 +88,7 @@ export class InboundYard {
     // 다 내린 트럭은 출차 (남행 차로 → 진입로 → 서쪽)
     const d = this.docked;
     if (d && !d.pallets.length && !(d.reserved > 0)) {
+      s.erp?.receiptDone(d);   // Odoo: 입고 확정 (검수 완료)
       d.go([{ x: SB + 3, z: INBOUND.dockZ }, { x: SB, z: INBOUND.dockZ - 5 }, { x: SB, z: INBOUND.roadZ + 1.5 }, { x: SB - 5, z: INBOUND.roadZ + 1.5 }, { x: -113, z: INBOUND.roadZ + 1.5 }], 'depart');
       this.stats.trucks++;
       s.log('ok', `${d.id} 하차 완료 · 출차`, { obs: `창고 원자재 ${s.whRaw}개${s.partsTracked ? ` · 부품 ${s.whParts}개` : ''}`, act: '입고 도크 비움' });
@@ -114,6 +116,7 @@ export function planReceiver(sim, f) {
     { wait: legacy ? 6 : 4, done: () => {
       if (type === 'raw') { sim.whRaw += WH.rawPallet; sim.inbound.stats.raw += WH.rawPallet; }
       else { sim.whParts += WH.partsPallet; sim.inbound.stats.parts += WH.partsPallet; }
+      sim.erp?.received(t, type, type === 'raw' ? WH.rawPallet : WH.partsPallet);
       f.load = null;
     } },
     // 대기 주차: 통로 북쪽 끝 주차 칸 — 칸 남쪽 앞(칸 중심선)으로 갔다가 북쪽으로 곧게 들어가 반듯이 선다
