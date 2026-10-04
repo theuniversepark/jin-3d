@@ -132,6 +132,7 @@ export class DataHub {
     this.mqtt = { available: this.noServer ? false : null, status: null, sent: 0, failed: 0, lastError: null };
     this.queue = []; this.flushT = 0; this.lastMsg = null;
     this.pcap = null;   // 패킷 덤프 (js/pcap.js) — 켜져 있으면 발행하는 메시지를 MQTT/TCP/IP 패킷으로도 기록
+    this.assetPcaps = new Map();   // 개별 캡처 (로봇·설비 정보 창): 자산 id → PacketCapture(only)
   }
 
   // 시뮬레이션 시작·재시작 시: 기준 시계와 자산 목록을 새로 만든다
@@ -199,11 +200,21 @@ export class DataHub {
   // 패킷 덤프로 보내기: 자산 메시지는 그 자산(이동 로봇은 5G 단말, 설비는 유선 LAN), 이벤트·명령은 FACOS가 발행
   // 구독: FACOS는 데이터·이벤트·메타데이터·AAS 전부(opcua/json/# · aas/#), 각 자산은 상위 명령 토픽
   tap(a, topic, body, simT, retain = false, ue = null) {
-    const P = this.pcap; if (!P?.on) return;
-    if (!P.clients.has('FACOS')) P.client('FACOS', 'facos', this.epochMs + simT * 1000 - 50, ['opcua/json/#', 'aas/#']);
-    const cmd = [this.topic('data', 'Commands')];
-    P.publish(a ? { key: a.id, kind: a.mover ? (ue ? '5g' : 'lan') : 'lan', topic, payload: body, tMs: this.epochMs + simT * 1000, retain, subs: cmd, extraMs: ue && ue.hoUntil >= 0 ? (ue.hoUntil - this.sim.time) * 1000 : 0 }
-      : { key: 'FACOS', kind: 'facos', topic, payload: body, tMs: this.epochMs + simT * 1000 });
+    const caps = [this.pcap, ...this.assetPcaps.values()].filter((P) => P?.on); if (!caps.length) return;
+    const cmd = [this.topic('data', 'Commands')], tMs = this.epochMs + simT * 1000;
+    const m = a ? { key: a.id, kind: a.mover ? (ue ? '5g' : 'lan') : 'lan', ip: this.ipOf(a), topic, payload: body, tMs, retain, subs: cmd, extraMs: ue && ue.hoUntil >= 0 ? (ue.hoUntil - this.sim.time) * 1000 : 0 }
+      : { key: 'FACOS', kind: 'facos', topic, payload: body, tMs };
+    for (const P of caps) {
+      if (!P.only && !P.clients.has('FACOS')) P.client('FACOS', 'facos', tMs - 50, ['opcua/json/#', 'aas/#']);
+      P.publish(m);
+    }
+  }
+  // 개별 캡처 대상: 이동 로봇은 5G 단말, 셀 로봇·설비는 유선 LAN — 상위 명령 토픽을 구독
+  assetTarget(a) { return a ? { key: a.id, kind: a.mover ? (this.sim.net?.ueOf(a.mover) ? '5g' : 'lan') : 'lan', ip: this.ipOf(a), subs: [this.topic('data', 'Commands')], label: a.name } : null; }
+  // 자산 IP (자산 목록 순서로 고정): 5G 단말 로봇 10.45.0.n · 그 밖(설비·셀·셀 로봇·유인 장비) 10.20.1.n
+  ipOf(a) {
+    const g5 = (x) => x.mover && this.sim.net?.ueOf(x.mover), list = this.assets.filter((x) => !!g5(x) === !!g5(a)), k = list.indexOf(a) + 1;
+    return g5(a) ? [10, 45, (k >> 8) & 0xff, k & 0xff] : [10, 20, 1 + (k >> 8), k & 0xff];
   }
   count(payload) { this.msgs++; this.bytes += payload.length; return payload; }
   topic(kind, writer) { return `opcua/json/${kind}/${PUBLISHER_ID}/${WRITER_GROUP}/${writer}`; }

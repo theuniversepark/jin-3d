@@ -368,15 +368,22 @@ hub.pcap = new PacketCapture();
 let pcapVidT = 0, pcapCam = 0, pcapBot = 0, pcapSeq = 0;
 const pcapCv = document.createElement('canvas'); pcapCv.width = 320; pcapCv.height = 180;
 const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
-function pcapPublishFrame(key, kind, cam, w, h, bytes, simT, extra = {}) {
+function pcapPublishFrame(key, kind, cam, w, h, bytes, simT, extra = {}, ip = null) {
   const t = hub.iso(simT), name = `Video_${cam.replace(/[^A-Za-z0-9_-]/g, '_')}`;
   const msg = { MessageId: crypto.randomUUID?.() ?? `${Date.now()}`, MessageType: 'ua-data', PublisherId: PUBLISHER_ID, WriterGroupName: WRITER_GROUP,
     Messages: [{ DataSetWriterId: 0, DataSetWriterName: name, SequenceNumber: ++pcapSeq, Timestamp: t, MessageType: 'ua-keyframe',
       Payload: { CameraId: { Value: cam, SourceTimestamp: t }, Encoding: { Value: 'image/jpeg', SourceTimestamp: t }, Width: { Value: w, SourceTimestamp: t }, Height: { Value: h, SourceTimestamp: t },
         ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, { Value: v, SourceTimestamp: t }])), Image: { Type: 'ByteString', Value: b64(bytes), SourceTimestamp: t } } }] };
-  hub.pcap.publish({ key, kind, topic: hub.topic('data', name), payload: JSON.stringify(msg), tMs: hub.epochMs + simT * 1000, subs: kind === 'cam' ? [] : [hub.topic('data', 'Commands')], video: true });
+  hub.pcap.publish({ key, kind, ip, topic: hub.topic('data', name), payload: JSON.stringify(msg), tMs: hub.epochMs + simT * 1000, subs: kind === 'cam' ? [] : [hub.topic('data', 'Commands')], video: true });
 }
 function pcapVideoTick(rdt) {
+  // 개별 캡처: 그 자산의 카메라(이동 로봇 · 셀 로봇 손목/머리 카메라)를 1초마다 JPEG로 그 자산이 발행
+  if (!glLost) for (const [key, AP] of hub.assetPcaps) {
+    if (!AP.on || AP.video === false || !AP.cam) continue;
+    AP.camT += rdt; if (AP.camT < 1) continue; AP.camT = 0;
+    const simT = sim.time, pr = camWall.captureFrame(AP.cam, 160, 120), kind = AP.only.kind;
+    pr?.then((bytes) => { if (!bytes || !AP.on) return; const n0 = hub.pcap; hub.pcap = AP; try { pcapPublishFrame(key, kind, `Robot_${key}`, 160, 120, bytes, simT, {}, AP.only.ip); } finally { hub.pcap = n0; } });
+  }
   const P = hub.pcap; if (!P.on || P.video === false || glLost) return;
   pcapVidT += rdt; if (pcapVidT < 1) return; pcapVidT = 0;
   const simT = sim.time, cams = sim.cctv?.cams ?? [];
@@ -387,7 +394,8 @@ function pcapVideoTick(rdt) {
   if (camWall.on && camWall.list?.length) {
     const f = camWall.list[pcapBot++ % camWall.list.length], pr = camWall.captureFrame(f.ref, 160, 120);
     const a = f.ref.type === 'mover' ? hub.assets.find((x) => x.mover?.id === f.ref.id) : null, ue = a ? sim.net?.ueOf(a.mover) : null;
-    pr?.then((bytes) => bytes && pcapPublishFrame(a ? a.id : f.ref.stationId ?? 'Cell', ue ? '5g' : 'lan', `Robot_${a ? a.id : `${f.ref.stationId}_${f.ref.idx ?? 0}`}`, 160, 120, bytes, simT));
+    const ca = a ?? hub.assets.filter((x) => x.kind === 'CellRobot' && x.parent === f.ref.stationId)[f.ref.idx ?? 0];
+    pr?.then((bytes) => bytes && pcapPublishFrame(ca ? ca.id : f.ref.stationId ?? 'Cell', ue ? '5g' : 'lan', `Robot_${ca ? ca.id : `${f.ref.stationId}_${f.ref.idx ?? 0}`}`, 160, 120, bytes, simT, {}, ca ? hub.ipOf(ca) : null));
   }
 }
 function renderData() {
@@ -533,7 +541,56 @@ document.addEventListener('pointerdown', (e) => {
   const inside = ['detail', 'cctvPanel', 'gnbPanel'].find((id) => document.getElementById(id)?.contains(t));
   closePopups(inside ?? null);
 }, true);
+// ── 개별 패킷 캡처 (로봇·설비 정보 창) ─────────────────
+// 대상: 이동 로봇(5G) · 셀 로봇(LAN) · 설비·셀(LAN) — DataHub 자산 하나의 MQTT 연결만 따로 기록해 그 자산 이름의 .pcap으로 저장
+let assetPcapNote = { key: null, text: '' }, assetPcapVideo = true;
+document.addEventListener('change', (e) => { if (e.target.id === 'pcapAssetVideo') assetPcapVideo = e.target.checked; });
+function pcapAsset() {
+  const tel = view.telemetry, ref = tel?.ref;
+  if (ref?.type === 'mover') { const a = hub.assets.find((x) => x.mover?.id === ref.id); return a ? { a, cam: ref } : null; }
+  if (ref?.type === 'cell') { const a = hub.assets.filter((x) => x.kind === 'CellRobot' && x.parent === ref.stationId)[ref.idx ?? 0]; return a ? { a, cam: ref } : null; }
+  const st = ui.detailSt; if (st && !ui.robotMode) { const a = hub.assets.find((x) => x.id === st.id); return a ? { a, cam: st.def?.robot?.count ? { type: 'cell', stationId: st.id, idx: 0 } : null } : null; }
+  return null;
+}
+function renderPcapBox() {
+  const box = document.getElementById('pcapBox'); if (!box) return;
+  const T = pcapAsset();
+  if (!T) { box.innerHTML = '<div class="pnote">이 대상은 데이터 연동 자산이 아니라 개별 패킷 캡처를 할 수 없습니다 (유인 장비·사람 등).</div>'; return; }
+  const t = hub.assetTarget(T.a), P = hub.assetPcaps.get(t.key), S = P?.stats, n = (v) => v.toLocaleString('ko-KR');
+  const ip = P?.clients.get(t.key)?.ip?.join('.') ?? (t.kind === '5g' ? '10.45.x.x (5G 단말)' : '10.20.1.x (유선 LAN)');
+  const state = !P ? '대기' : P.full ? '<span class="rec">용량 한도 — 자동 중지</span>' : P.on ? `<span class="rec">⏺ 캡처 중</span> ${P.duration.toFixed(0)}초` : `중지됨 · ${P.duration.toFixed(0)}초`;
+  box.innerHTML = `<div class="ph">📦 패킷 캡처 (이 자산만) · ${state}</div>
+    <div>클라이언트 <b>${escH(t.key)}</b> · ${escH(ip)} ↔ 브로커 10.20.0.10:1883 · MQTT 3.1.1 (AAS → OPC UA PubSub JSON)</div>
+    ${S ? `<div>패킷 ${n(S.packets)} (→ 브로커 ${n(S.up)} · 브로커 → ${n(S.down)}) · 발행 PUBLISH ${n(S.publishUp)} · 받은 명령 ${n(S.publishDown)} · PUBACK ${n(S.puback)} · 영상 ${n(S.video)}프레임 · PING ${n(S.ping)} · ${kb(P.bytes)}</div>` : ''}
+    <div class="prow">${P?.on ? '<button type="button" data-act="pcapStop">⏹ 캡처 중지</button>' : '<button type="button" data-act="pcapStart">⏺ 캡처 시작</button>'}
+      <button type="button" data-act="pcapSave">💾 pcap 저장</button>
+      <label class="chk"><input type="checkbox" id="pcapAssetVideo" ${(P?.on ? P.video !== false : assetPcapVideo) ? 'checked' : ''} ${P?.on ? 'disabled' : ''}/> 카메라 영상 포함</label></div>
+    ${assetPcapNote.key === t.key && assetPcapNote.text ? `<div class="pnote">${escH(assetPcapNote.text)}</div>` : ''}
+    <div class="pnote">창을 닫아도 캡처는 계속됩니다(다시 열면 이어서 보임). 전체 캡처는 📡 데이터 연동 → 패킷 덤프.</div>`;
+}
+ui.onDetailRendered = renderPcapBox;
+function pcapAssetAction(act) {
+  const T = pcapAsset(); if (!T) return;
+  const t = hub.assetTarget(T.a);
+  let P = hub.assetPcaps.get(t.key);
+  if (act === 'pcapStart') {
+    P = new PacketCapture(); hub.assetPcaps.set(t.key, P);
+    P.start(hub.epochMs + sim.time * 1000, { video: assetPcapVideo, only: t }); P.cam = T.cam; P.camT = 0;
+    assetPcapNote = { key: t.key, text: '캡처 시작 — 이 자산이 보내고 받는 MQTT 패킷만 기록합니다' };
+  } else if (act === 'pcapStop') { P?.stop(); assetPcapNote = { key: t.key, text: '캡처 중지 — pcap으로 저장할 수 있습니다' }; }
+  else if (act === 'pcapSave') {
+    if (hub.shared) assetPcapNote = { key: t.key, text: '공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.' };
+    else if (!P?.stats.packets) assetPcapNote = { key: t.key, text: '아직 캡처한 패킷이 없습니다. 캡처를 시작하고 시뮬레이션을 잠시 돌린 뒤 저장하세요.' };
+    else {
+      const blob = new Blob([P.build()], { type: 'application/vnd.tcpdump.pcap' }), name = `${hub.fileBase()}_${t.key}.pcap`, l = document.createElement('a');
+      l.href = URL.createObjectURL(blob); l.download = name; document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(l.href), 5000);
+      assetPcapNote = { key: t.key, text: `저장: ${name} (${kb(blob.size)}) — Wireshark에서 MQTT로 디코딩됩니다` };
+    }
+  }
+  renderPcapBox();
+}
 ui.onDetailAction = (act, st) => {
+  if (act === 'pcapStart' || act === 'pcapStop' || act === 'pcapSave') return pcapAssetAction(act);
   if (act === 'fault') { sim.log('warn', `[시나리오] ${st.name} 고장 주입`, {}); sim.injectFault(st); }
   if (act === 'pm') {
     if (sim.requestTech(st, 'pm')) sim.log('act', `[수동 지시] ${st.name} 정비`, { act: '정비 인력 배정' });
@@ -646,7 +703,7 @@ function renderGnb() {
     </div>
     <div style="margin-top:4px">${I.log.map((h) => `${clk(h.t)} ${h.ue} PCI ${h.from} → ${h.to} · ${h.rsrpFrom} → ${h.rsrpTo}dBm · 중단 ${h.ms}ms · 포워딩 ${h.fwd}건`).join('<br>') || '최근 핸드오버 없음'}</div></div>`;
 }
-let netT = 0;
+let netT = 0, pcapBoxT = 0;
 window.__netRefresh = () => { if (!netCard.hidden) renderNetCard(); };
 netBtn.addEventListener('click', () => { const on = !netBtn.classList.contains('on'); netBtn.classList.toggle('on', on); view.setNetMap(on); netCard.hidden = !on; if (on) { cctvBtn.classList.remove('on'); view.setCCTVMap(false); cctvCard.hidden = true; renderNetCard(); } });
 cctvBtn.addEventListener('click', () => { if (cctvBtn.classList.contains('on') && netBtn.classList.contains('on')) { netBtn.classList.remove('on'); view.setNetMap(false); netCard.hidden = true; } });
@@ -825,6 +882,7 @@ function frame() {
   if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); gateView.tick(); updateAlarmButtons(); updateCmdUI(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
   robotTimer += rdt;
   if (view.telemetry && robotTimer > 0.12) { robotTimer = 0; ui.renderRobot(view.telemetry.snapshot(), hub.robotCounts(view.telemetry)); }
+  pcapBoxT += rdt; if (pcapBoxT > 0.5 && ui.robotMode && !document.getElementById('detail').classList.contains('hidden') && !document.getElementById('pcapBox')?.contains(document.activeElement)) { pcapBoxT = 0; renderPcapBox(); }
   // 피지컬AI: 로봇 정보 창에 그 로봇 카메라의 실시간 영상 (약 10fps)
   camTimer += rdt;
   if (view.telemetry && ui.robotMode && camTimer > 0.1) {

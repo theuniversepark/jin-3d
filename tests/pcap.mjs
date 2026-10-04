@@ -12,6 +12,9 @@ globalThis.fetch = async () => { throw new Error('no server'); };   // 헤드리
 
 const s = new Simulation('dark', 2, { line: zoneLine() }), ag = new FactoryAgent(s), hub = new DataHub();   // 운영 로그 → Events 토픽도 나오도록 quiet 끔
 hub.reset(s, null); hub.pcap = new PacketCapture(); hub.pcap.start(hub.epochMs + s.time * 1000);
+// 개별 캡처 (정보 창): 운반 AMR 한 대(5G)와 셀 하나(LAN)
+const amrA = hub.assets.find((a) => a.kind === 'AMR'), cellA = hub.assets.find((a) => a.kind === 'Station');
+for (const a of [amrA, cellA]) { const P = new PacketCapture(); P.start(hub.epochMs + s.time * 1000, { only: hub.assetTarget(a) }); hub.assetPcaps.set(a.id, P); }
 const step = (sec) => { for (let t = 0; t < sec; t += 0.1) { s.step(0.1); ag.update(0.1); hub.tick(0.1); } };
 step(120);
 s.cmd.issue('SAFE_SPEED', 'all'); step(5); s.cmd.issue('SAFE_SPEED_OFF', 'all'); step(60);
@@ -75,5 +78,16 @@ check('이동 로봇은 5G 단말 주소(10.45.x.x)로 발행', g5 > 0, `${g5}�
 check('keep-alive: PINGREQ ↔ PINGRESP', mq.ping > 0 && mq.ping === mq.pong, `${mq.ping}회`);
 check('영상(JPEG 12KB, base64) PUBLISH가 MSS 1460B로 분할 전송', P.stats.video === 1 && P.stats.segs > P.stats.publishUp + P.stats.publishDown, `세그먼트 ${P.stats.segs}`);
 const conn = MQTT.connect('x'); check('CONNECT 인코딩 (MQTT · 레벨 4 · clean session)', conn[0] === 0x10 && Buffer.from(conn.slice(4, 8)).toString() === 'MQTT' && conn[8] === 4 && conn[9] === 2);
+console.log('== 개별 캡처 (로봇·설비 정보 창)');
+for (const a of [amrA, cellA]) {
+  const AP = hub.assetPcaps.get(a.id), f2 = AP.build(), d2 = new DataView(f2.buffer), ip = AP.clients.get(a.id).ip.join('.');
+  let o2 = 24, only = true, n2 = 0, pubUp = 0, cmd = 0;
+  while (o2 < f2.length) { const len = d2.getUint32(o2 + 8, true), fr = f2.subarray(o2 + 16, o2 + 16 + len); const sIp = [...fr.subarray(26, 30)].join('.'), dIp = [...fr.subarray(30, 34)].join('.'); if (sIp !== ip && dIp !== ip) only = false; n2++; o2 += 16 + len; }
+  pubUp = AP.stats.publishUp; cmd = AP.stats.publishDown;
+  check(`${a.kind === 'AMR' ? '운반 AMR(5G)' : '설비·셀(LAN)'} ${a.id}: 이 자산의 연결 패킷만 (${ip} ↔ 브로커)`, n2 > 0 && only && AP.clients.size === 1, `${n2}패킷`);
+  check(`${a.id}: 자기 데이터 발행 + 상위 명령 수신(다운링크) 양방향`, pubUp > 0 && cmd > 0 && AP.stats.puback === pubUp + cmd, `발행 ${pubUp} · 명령 ${cmd} · PUBACK ${AP.stats.puback}`);
+}
+check('같은 자산은 전체 캡처와 개별 캡처에서 같은 IP', [amrA, cellA].every((a) => hub.pcap.clients.get(a.id)?.ip.join('.') === hub.assetPcaps.get(a.id).clients.get(a.id).ip.join('.')));
+check('개별 캡처 주소: AMR은 5G 단말(10.45.x.x), 설비는 LAN(10.20.1.x)', hub.assetPcaps.get(amrA.id).clients.get(amrA.id).ip[1] === 45 && hub.assetPcaps.get(cellA.id).clients.get(cellA.id).ip[1] === 20);
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);
 process.exitCode = fail ? 1 : 0;

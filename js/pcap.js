@@ -55,16 +55,20 @@ export class PacketCapture {
     this.stats = { packets: 0, up: 0, down: 0, publishUp: 0, publishDown: 0, puback: 0, connect: 0, subscribe: 0, ping: 0, video: 0, msgs: 0, segs: 0 };
     this.limit = 200e6; this.full = false;
   }
-  start(nowMs, opts = {}) { this.reset(); this.on = true; this.video = opts.video !== false; this.t0 = nowMs; this.tEnd = nowMs; }
+  // opts.only = { key, kind, subs, label }: 개별 캡처 — 그 자산 한 대의 MQTT 연결(발행·PUBACK·내려받는 명령·영상·keep-alive)만 기록
+  start(nowMs, opts = {}) {
+    this.reset(); this.on = true; this.video = opts.video !== false; this.t0 = nowMs; this.tEnd = nowMs; this.only = opts.only ?? null;
+    if (this.only) this.client(this.only.key, this.only.kind, nowMs, this.only.subs ?? [], this.only.ip);
+  }
   stop() { this.on = false; }
   get duration() { return this.t0 == null ? 0 : (this.tEnd - this.t0) / 1000; }
 
   // 클라이언트 접속 정보 (처음 보면 TCP 핸드셰이크 → CONNECT/CONNACK → SUBSCRIBE/SUBACK)
-  client(key, kind, tMs, subs = []) {
+  client(key, kind, tMs, subs = [], fixedIp = null) {
     let c = this.clients.get(key);
     if (c) return c;
-    let ip;
-    if (kind === 'facos') ip = [10, 20, 0, 20];
+    let ip = fixedIp;   // 자산마다 정해진 주소 (전체·개별 캡처에서 같은 주소)
+    if (ip) { /* 그대로 */ } else if (kind === 'facos') ip = [10, 20, 0, 20];
     else if (kind === '5g') { const k = ++this.n.g5; ip = [10, 45, (k >> 8) & 0xff, k & 0xff]; }
     else if (kind === 'cam') { const k = ++this.n.cam; ip = [10, 20, 2, k]; }
     else { const k = ++this.n.lan; ip = [10, 20, 1 + (k >> 8), k & 0xff]; }
@@ -82,9 +86,20 @@ export class PacketCapture {
   }
   lat(c) { return c.kind === '5g' ? 8 + (c.extra ?? 0) : 0.3; }   // 브로커까지 편도 지연 (ms)
   // 메시지 한 건 발행: 클라이언트 → 브로커 PUBLISH(+분할) → 브로커 PUBACK → 구독자에게 PUBLISH → 구독자 PUBACK
-  publish({ key, kind, topic, payload, tMs, retain = false, subs = [], extraMs = 0, video = false }) {
+  publish({ key, kind, topic, payload, tMs, retain = false, subs = [], extraMs = 0, video = false, ip = null }) {
     if (!this.on || this.full) return;
-    const c = this.client(key, kind, tMs, subs);
+    if (this.only && key !== this.only.key) {   // 개별 캡처: 다른 클라이언트가 보낸 메시지는 이 자산이 구독한 것만(브로커 → 이 자산 전달)
+      const s = this.clients.get(this.only.key);
+      if (s && s.subs.some((f) => topicMatch(f, topic))) {
+        this.keepalive(s, tMs);
+        const sid = (s.spid = (s.spid % 65535) + 1), t = tMs + 0.4;
+        this.data(s, 'down', MQTT.publish(topic, payload, sid, false), t); this.stats.publishDown++; this.stats.msgs++;
+        this.seg(s, 'up', 0x18, MQTT.puback(sid), t + this.lat(s) * 2 + 0.1); this.stats.puback++; s.last = t;
+      }
+      if (this.bytes > this.limit) { this.full = true; this.on = false; }
+      return;
+    }
+    const c = this.client(key, kind, tMs, subs, ip);
     c.extra = extraMs;
     this.keepalive(c, tMs);
     const id = (c.pid = (c.pid % 65535) + 1), pkt = MQTT.publish(topic, payload, id, retain);

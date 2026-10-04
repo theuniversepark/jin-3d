@@ -180,6 +180,7 @@ export class UI {
       <div id="rbJoints"></div>
       <canvas id="rbChart" width="640" height="150"></canvas>
       <div id="rbSections"></div>
+      <div class="pcap-box" id="pcapBox"></div>
       <div class="rb-save">
         <div class="rb-h">💾 누적 데이터 저장 (AAS)</div>
         <div class="rb-count" id="rbCount"></div>
@@ -195,6 +196,7 @@ export class UI {
         <div class="rb-save-note" id="rbSaveNote"></div>
       </div>
       <div class="rb-note">관절값·위치·속도는 3D 모델에서 매 프레임 읽은 값이고, 토크·온도·전류·센서값은 움직임·부하·설비 상태로 계산한 시뮬레이션 값입니다.</div>`;
+    this.onDetailRendered?.();
   }
   robotSaved(text) { const el = $('rbSaveNote'); if (el) el.textContent = text; }
   renderRobot(d, counts) {
@@ -280,7 +282,9 @@ export class UI {
         ${rep}
       </div>
       ${sim.mode.key === 'traditional' ? '<div class="note">※ 레거시 공장에는 센서가 없어 건강도·RUL은 현장에서 보이지 않는 시뮬레이션 내부값입니다.</div>' : ''}
-      <div class="btns"><button data-act="fault">⚡ 고장 주입</button><button data-act="pm">🔧 정비 지시</button></div>`;
+      <div class="btns"><button data-act="fault">⚡ 고장 주입</button><button data-act="pm">🔧 정비 지시</button></div>
+      <div class="pcap-box" id="pcapBox"></div>`;
+    this.onDetailRendered?.();
   }
 
   // 3개 단계 헤드리스 시뮬레이션 (동일 시드, 8시간) — 같은 라인이면 결과를 재사용한다
