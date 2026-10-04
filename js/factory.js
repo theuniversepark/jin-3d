@@ -1286,11 +1286,82 @@ export class FactoryView {
     const Y = 5.7, H = 2.3;
     // 뒷벽 바깥 가운데 (x 0, 출하 도크 문 위쪽을 피한 폭) — 바깥(−z)을 향함
     const back = put(make(26, H), 0, Y, -20.2, this.root); back.rotation.y = Math.PI;
-    // 왼쪽 벽 바깥 가운데 (z 0, 입고 도크 문 z −16.8~−12.2를 비켜 폭 22m) — 바깥(−x)을 향함
-    const left = put(make(22, H), INBOUND.wallX - 0.2, Y, 0, this.root); left.rotation.y = -Math.PI / 2; left.castShadow = false;
+    // 왼쪽 벽 바깥: 사인 대신 스타워즈 오프닝 크롤 전광판 (피지컬AI 제조데이터 아키텍처를 무한 스크롤업) — buildCrawl
+    const left = this.buildCrawl();
     // 오른쪽 벽 바깥 — 바깥(+x)을 향함
     const right = put(make(26, H), 38.2, Y, 0, this.root); right.rotation.y = Math.PI / 2;
     this.facadeSigns = [back, left, right];
+  }
+
+  // 왼쪽 외벽 크롤 전광판 (30 × 7.2m, 입고 도크 문 z −16.8~−12.2를 비켜 z −11.2 ~ 18.8) — 바깥(−x)을 향함
+  // 스타워즈 오프닝 크롤처럼 글자가 아래에서 올라오며 멀어진다(위로 갈수록 좁고 작아짐, 위쪽은 서서히 사라짐). 바탕은 투명 — 건물 외벽 색 그대로, 글자는 검은색
+  // 긴 글을 세로로 길게 그린 원본 캔버스를 만들어 두고, 프레임마다 화면 줄(행)마다 원근에 맞는 원본 줄을 사다리꼴 폭으로 옮겨 그린다 — 끝나면 처음부터 이어진다
+  buildCrawl() {
+    const W = 30, H = 7.2, F = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
+    const TEXT = [
+      ['t', '피지컬AI 실증 메타팩토리'],
+      ['s', '피지컬AI 제조 데이터 구축'],
+      ['p', '제조데이터의 수집·표준화·저장부터 AI 모델 학습·배포·현장운영 및 재학습까지 연계하는 피지컬AI 데이터·모델 선순환 체계'],
+      ['h', '1. 데이터 발생·수집'],
+      ['p', '센서·시계열, 영상·이미지, 로봇·제어, 공정·품질, 설비상태·이력, 로그·이벤트, 시뮬레이션·합성 데이터를 PLC·센서, 로봇제어기, SCADA, MES/MOM, PLM, ERP, 디지털트윈에서 모은다.'],
+      ['h', '2. 데이터 저장·관리'],
+      ['p', '데이터 레이크하우스 — Raw(원천데이터 보관) → Refined(정제) → Curated(큐레이티드). 데이터 카탈로그·검색, 메타데이터 관리, 데이터 계보, 분류·태깅·정책, 보안·권한·접근관리. Object Storage · 시계열 DB · 파일 저장소.'],
+      ['h', '3. 데이터 정제·표준화·제공'],
+      ['p', '수집/추출, 품질검증, 시간 동기화, 정제·변환, 표준연계/정보모델링(AAS · OPC UA · MQTT · ISA-95), 비식별화/보안처리를 거쳐 DW/DM, Feature Store, 학습 데이터셋, API·서비스로 제공한다.'],
+      ['h', '4. AI 모델 학습·운영 (MLOps)'],
+      ['p', '모델 개발·학습·튜닝, 실험·메타데이터 관리, 모델 레지스트리·버전관리, 모델 검증·승인·배포·서빙, 성능·드리프트 모니터링, 지속적 통합·배포·학습(CI/CD/CT).'],
+      ['h', '5. 피지컬AI 서비스·현장 환류'],
+      ['p', '피지컬AI 기반 설비·로봇 제어, AI 비전 품질검사·불량탐지, 로봇·공정 자율최적화, 예지보전·이상징후 탐지, 생산계획·운영효율 최적화, 협업형 지능 관제, sLLM 현장지원, 디지털트윈 가상검증.'],
+      ['h', '운영성과 · 현장데이터 환류 (선순환)'],
+      ['p', '운영성과·이상·이벤트 데이터를 다시 모아 모델 성능을 평가하고 원인을 분석해, 데이터·모델·제어로직을 보정하고 재학습·재배포로 성능을 높인다.'],
+      ['h', '표준연계 및 상호운용성'],
+      ['p', 'AAS (IEC 63278) · OPC UA · MQTT · ISA-95 · 공통 데이터 모델(CDM) · 시간동기화(NTP/PTP)'],
+      ['h', '공통운영'],
+      ['p', '오케스트레이션 · 통합 모니터링 · 데이터 계보 · 보안·권한관리 · 감사·로그 · 알림·이벤트 · 자원관리 · 장애대응·백업'],
+    ];
+    // 원본: 폭 1100px 글 기둥 (스타워즈 노랑, 양쪽 정렬 느낌의 가운데 정렬)
+    const SW = 1100, src = document.createElement('canvas'); src.width = SW;
+    const sg = src.getContext('2d'), FONT = { t: `900 92px ${F}`, s: `800 64px ${F}`, h: `800 58px ${F}`, p: `700 48px ${F}` }, LH = { t: 120, s: 96, h: 86, p: 68 };
+    const lines = [];
+    for (const [k, txt] of TEXT) {
+      sg.font = FONT[k]; let cur = '';
+      const words = k === 'p' ? txt.split(' ') : [txt];
+      if (k === 'h' || k === 's') lines.push(['gap', '', 40]);
+      for (const w of words) { const nx = cur ? `${cur} ${w}` : w; if (sg.measureText(nx).width > SW - 60 && cur) { lines.push([k, cur]); cur = w; } else cur = nx; }
+      if (cur) lines.push([k, cur]);
+      lines.push(['gap', '', k === 't' ? 30 : 24]);
+    }
+    lines.push(['gap', '', 520]);   // 한 바퀴 끝 — 빈 화면 뒤에 처음부터 다시
+    src.height = lines.reduce((a, [k, , g]) => a + (k === 'gap' ? g : LH[k]), 0);
+    sg.clearRect(0, 0, SW, src.height); sg.textAlign = 'center'; sg.textBaseline = 'middle';
+    let y = 0;
+    for (const [k, txt, g] of lines) { if (k === 'gap') { y += g; continue; } sg.font = FONT[k]; sg.fillStyle = k === 'h' || k === 't' ? '#000000' : '#111111'; sg.fillText(txt, SW / 2, y + LH[k] / 2); y += LH[k]; }
+    // 화면 캔버스 (30 × 7.2m → 2048 × 492)
+    const cv = document.createElement('canvas'); cv.width = 2048; cv.height = Math.round(2048 * H / W);
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+    const g = put(new THREE.Group(), INBOUND.wallX - 0.2, 4.1, 3.8, this.root); g.rotation.y = -Math.PI / 2;
+    put(new THREE.Mesh(new THREE.PlaneGeometry(W, H), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false })), 0, 0, 0, g);   // 외벽에 바로 쓴 글자 (테두리 없음)
+    g.traverse((o) => (o.castShadow = false));
+    this.crawl = { cv, src, tex, pos: 0, t: 0 };
+    this.drawCrawl(0);
+    return g;
+  }
+  drawCrawl(rdt) {
+    const C = this.crawl; if (!C) return;
+    C.t += rdt; if (C.t < 1 / 30 && rdt) return;   // 초당 약 30번 그린다
+    C.pos = (C.pos + C.t * 55) % C.src.height; C.t = 0;   // 스크롤 속도: 원본 55px/초
+    const { cv, src } = C, g = cv.getContext('2d'), Wc = cv.width, Hc = cv.height, SH = src.height;
+    g.clearRect(0, 0, Wc, Hc);
+    // 원근: 화면 줄 v(0 위 ~ 1 아래), 소실선은 화면 위 hz만큼 바깥 — 폭 ∝ (v + hz), 깊이 ∝ 1/(v + hz)
+    const hz = 0.32, bottomW = Wc * 0.62, depth = (v) => 1 / (v + hz), d1 = depth(1), span = 1500;
+    for (let row = 0; row < Hc; row++) {
+      const v = row / Hc, w = bottomW * (v + hz) / (1 + hz);
+      let sy = (C.pos + (depth(v) - d1) / (depth(0) - d1) * span * -1 + span) % SH; if (sy < 0) sy += SH;
+      g.globalAlpha = Math.min(1, v * 2.2);   // 위쪽은 멀어지며 서서히 사라짐
+      g.drawImage(src, 0, Math.floor(sy), src.width, 1, (Wc - w) / 2, row, w, 1);
+    }
+    g.globalAlpha = 1;
+    C.tex.needsUpdate = true;
   }
 
   // 오른쪽 벽 설비 현황 전광판 — 모든 설비·로봇의 고유 ID·이름·현재 상태 (1초마다 갱신)
@@ -1851,6 +1922,7 @@ export class FactoryView {
     this.handleEvents();
     this.syncItems();
     this.updateNetLinks();
+    if (this.crawl && this.facadeSigns?.[1]?.visible) this.drawCrawl(rdt);
     if (this.netLeds) { const on = Math.floor(t * 2) % 2 === 0; for (const l of this.netLeds) l.material.emissiveIntensity = on ? 2.4 : 1.2; }
 
     // 컨베이어 벨트 스크롤
