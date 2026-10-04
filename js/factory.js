@@ -1112,7 +1112,7 @@ export class FactoryView {
       put(box(0.3, 8, dz0 + 20, MAT.wall), W, 4, (-20 + dz0) / 2, lw);
       put(box(0.3, 8, 20 - dz1, MAT.wall), W, 4, (dz1 + 20) / 2, lw);
       put(box(0.3, 8 - 4.9, 4.6, MAT.wall), W, 4.9 + (8 - 4.9) / 2, INBOUND.dockZ, lw);
-      put(box(0.32, 0.3, 14, MAT.steel), W, 0.15, -13, lw);
+      put(box(0.32, 0.3, 4.6, MAT.steel), W, 0.15, INBOUND.dockZ, lw);   // 강철 문턱은 도크 문 폭만 (나머지는 외벽 색 그대로)
       // 입고 도크: 말아 올린 셔터·문틀·도크 레벨러·범퍼·표지
       put(cyl(0.32, 0.32, 4.6, MAT.dark, 16), W + 0.15, 4.75, INBOUND.dockZ, lw).rotation.x = Math.PI / 2;
       put(box(0.14, 0.25, 4.8, MAT.yellow), W + 0.25, 4.6, INBOUND.dockZ, lw);
