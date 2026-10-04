@@ -35,6 +35,8 @@ const SPEC = {   // 3D 모델 치수(폭 x · 높이 y · 길이 z, m)와 같은
   forklift: { size: [1.4, 2.33, 3.1], mats: ['Lamp'], nodes: ['Guard', 'Mast_Top', 'Fork_0.3'] },
   drone: { size: [1.0, 0.36, 1.0], mats: ['NAV_R', 'NAV_G', 'STROBE'], nodes: ['Rotor_0', 'Rotor_1', 'Rotor_2', 'Rotor_3', 'Gimbal'] },
   quadruped: { size: [0.54, 1.08, 1.08], mats: ['THERMAL'], nodes: ['Body', 'Cam', 'Hip_0', 'Hip_1', 'Hip_2', 'Hip_3', 'Knee_0', 'Knee_1', 'Knee_2', 'Knee_3'] },
+  eaxle: { size: [1.08, 0.58, 0.48], mats: ['Copper', 'HVOrange', 'GearSteel'], nodes: ['FastenBolts', 'MotorHousing', 'GearHousing', 'Inverter', 'Rotor'] },
+  truck: { size: [3.14, 3.92, 10.6], mats: ['CabPaint', 'TAIL', 'Tarp'], nodes: ['Door_L', 'Door_R', 'Tail_L', 'Tail_R', 'Deflector'] },
   ammr: { size: [0.83, 1.42, 0.67], mats: ['LED'], nodes: ['Lift', 'Head', 'ChestPanel', 'Lidar'] },
   humanoid: { size: [0.66, 1.94, 0.44], mats: ['VISOR', 'ACC'], nodes: ['Body', 'Waist', 'Head', 'Shoulder_L', 'Shoulder_R', 'Elbow_L', 'Elbow_R', 'Hip_L', 'Hip_R', 'Knee_L', 'Knee_R'] },
 };
@@ -46,14 +48,23 @@ for (const [k, S] of Object.entries(SPEC)) {
   check(`${k}: 크기가 3D 모델과 같음 (1단위 = 1m, 바닥 원점·Y 위)`, S.size.every((v, i) => Math.abs(B.size[i] - v) <= 0.25) && Math.abs(B.lo[1] - (k === 'drone' ? -0.23 : 0)) < 0.06, `${B.size.map((v) => v.toFixed(2)).join(' × ')} m · 바닥 y ${B.lo[1].toFixed(2)}`);
   const mn = J.materials.map((m) => m.name), nn = J.nodes.map((n) => n.name);
   check(`${k}: 코드가 쓰는 재질·노드 이름`, S.mats.every((m) => mn.includes(m)) && S.nodes.every((n) => nn.includes(n)), `재질 ${S.mats.join('·')} · 노드 ${S.nodes.join('·')}`);
-  if (S.mats.includes('LED') || S.mats.includes('NAV_R') || S.mats.includes('VISOR') || S.mats.includes('THERMAL')) { const m = J.materials.find((x) => x.name === (S.mats[0])); check(`${k}: 발광 재질(${S.mats[0]})에 emissive`, Array.isArray(m.emissiveFactor) && m.emissiveFactor.some((v) => v > 0)); }
+  if (S.mats.includes('LED') || S.mats.includes('NAV_R') || S.mats.includes('VISOR') || S.mats.includes('THERMAL') || S.mats.includes('TAIL')) { const m = J.materials.find((x) => x.name === (S.mats.includes('TAIL') ? 'TAIL' : S.mats[0])); check(`${k}: 발광 재질(${S.mats.includes('TAIL') ? 'TAIL' : S.mats[0]})에 emissive`, Array.isArray(m.emissiveFactor) && m.emissiveFactor.some((v) => v > 0)); }
 }
 check('미리보기 렌더 (Blender Eevee) preview.png', fs.existsSync(new URL('preview.png', DIR)) && fs.statSync(new URL('preview.png', DIR)).size > 50000);
+{ const J = glb('truck').json, at = (n) => J.nodes.find((x) => x.name === n);
+  // 뒷문 경첩 = 3D 모델 자리(x = ±1.25 · 높이 2.55 · z = −5.25), 반투명 커튼(알파 블렌드)
+  const ok = [['Door_L', -1], ['Door_R', 1]].every(([n, sd]) => { const t = at(n).translation; return !at(n).rotation && Math.abs(t[0] - sd * 1.25) < 0.01 && Math.abs(t[1] - 2.55) < 0.01 && Math.abs(t[2] + 5.25) < 0.01; });
+  check('트럭: 뒷문 경첩 자리 · 반투명 커튼 재질', ok && J.materials.find((m) => m.name === 'Tarp')?.alphaMode === 'BLEND'); }
+{ const J = glb('gantry').json, at = (n) => J.nodes.find((x) => x.name === n), parts = ['Post', 'XBeam', 'Bridge', 'Carriage', 'ZAxis'];
+  // 갠트리 부품: 원점 그대로(코드가 셀 길이에 맞춰 복제·배치), X축 빔은 길이 1m(늘림 기준), 캐리지 도장 재질 GantryAcc
+  const xb = J.nodes.find((n) => n.name === 'XProfile'), xa = J.accessors[J.meshes[xb.mesh].primitives[0].attributes.POSITION];
+  const bad = parts.filter((n) => !at(n) || at(n).rotation || (at(n).translation ?? [0, 0, 0]).some((v) => Math.abs(v) > 1e-4));
+  check('gantry.glb: 부품 5개(기둥·X축 빔·브리지·캐리지·승강축) 원점 · X축 빔 길이 1m · 도장 재질', G6(J) && !bad.length && Math.abs(xa.max[0] - xa.min[0] - 1) < 0.01 && J.materials.some((m) => m.name === 'GantryAcc'), bad.join(', ')); }
 { const J = glb('arm6').json, segs = ['Seg_Base', 'Seg_Turret', 'Seg_Shoulder', 'Seg_Elbow', 'Seg_Wrist', 'Seg_Wrist2', 'Seg_Flange'], at = (n) => J.nodes.find((x) => x.name === n);
   // 6축 팔 마디: 관절 회전 중심이 원점(이동·회전 없음)이어야 코드가 makeArm 관절 그룹에 그대로 붙인다
   const bad = segs.filter((n) => !at(n) || at(n).rotation || (at(n).translation ?? [0, 0, 0]).some((v) => Math.abs(v) > 1e-4));
   check('arm6.glb: 6축 팔 마디 7개(베이스·J1~J6) · 관절 중심 원점 · Blender 생성', G6(J) && !bad.length && J.materials.some((m) => m.name === 'ArmAcc'), bad.join(', ')); }
-for (const k of ['humanoid', 'quadruped']) check(`미리보기 렌더 preview_${k}.png`, fs.existsSync(new URL(`preview_${k}.png`, DIR)) && fs.statSync(new URL(`preview_${k}.png`, DIR)).size > 30000);
+for (const k of ['humanoid', 'quadruped', 'truck', 'eaxle']) check(`미리보기 렌더 preview_${k}.png`, fs.existsSync(new URL(`preview_${k}.png`, DIR)) && fs.statSync(new URL(`preview_${k}.png`, DIR)).size > 30000);
 { const J = glb('humanoid').json, at = (n) => J.nodes.find((x) => x.name === n), hasRot = ['Body', 'Waist', 'Head', 'Shoulder_L', 'Elbow_L', 'Hip_L', 'Knee_L'].filter((n) => at(n).rotation);
   // 관절 빈 객체는 회전 없이 놓여야 코드의 rotation.x가 3D 모델과 같은 방향으로 움직인다. 어깨·고관절 높이 = 3D 모델(1.52m · 0.92m)
   const y = (n) => { let v = 0; for (const [i, x] of J.nodes.entries()) if (x.name === n) { v = x.translation?.[1] ?? 0; let p = i; for (;;) { const q = J.nodes.findIndex((z) => z.children?.includes(p)); if (q < 0) break; v += J.nodes[q].translation?.[1] ?? 0; p = q; } } return v; };

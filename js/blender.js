@@ -1,12 +1,12 @@
 // 렌더: Blender에서 모델링·재질 적용해 내보낸 glTF 모델(기본). 자산을 불러오지 못하면 three.js 코드로 만든 기본 도형 모델로 그린다
 // Blender 자산은 blender/build_assets.py를 Blender로 실행해 만든다 (assets/blender/*.glb). 1단위 = 1m, Y 위, 바닥 중심 원점.
-// Blender 옵션에서는 ① 운반 AMR · AGV · 지게차 · 순찰 드론 · 휴머노이드 · 사족보행 · 6축 로봇 팔 · AMMR(관절 빈 객체 포함)을 Blender 모델로 바꾸고 ② 실내 환경광(RoomEnvironment, PBR 반사)을 켠다.
+// Blender 옵션에서는 ① 운반 AMR · AGV · 지게차 · 순찰 드론 · 휴머노이드 · 사족보행 · 6축 로봇 팔 · AMMR · 화물트럭 · 갠트리(관절 빈 객체 포함)을 Blender 모델로 바꾸고 ② 실내 환경광(RoomEnvironment, PBR 반사)을 켠다.
 // ③ 그 밖의 모든 로봇·시설·설비는 기본 도형(상자·원기둥·구)을 Blender에서 다시 만든 도형 라이브러리(primitives.glb)로 바꿔 끼운다.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
-export const BLENDER_ASSETS = { amr: '운반 AMR', agv: 'AGV', forklift: '지게차', drone: '순찰 드론', humanoid: '휴머노이드', quadruped: '사족보행', arm6: '6축 협동로봇 팔', ammr: 'AMMR 양팔 로봇' };
+export const BLENDER_ASSETS = { amr: '운반 AMR', agv: 'AGV', forklift: '지게차', drone: '순찰 드론', humanoid: '휴머노이드', quadruped: '사족보행', arm6: '6축 협동로봇 팔', ammr: 'AMMR 양팔 로봇', truck: '화물트럭', gantry: '갠트리 로봇', eaxle: 'e-axle 제품' };
 export const RENDER = { style: 'blender', assets: {}, prims: new Map(), loaded: false, error: null, swapped: 0 };
 let loading = null;
 
@@ -31,7 +31,7 @@ export function cloneAsset(k) {
   root.traverse((o) => {
     if (!o.isMesh) return;
     const n = o.material?.name;
-    if (['LED', 'NAV_R', 'NAV_G', 'STROBE', 'Lamp', 'VISOR', 'ACC', 'THERMAL', 'ArmAcc'].includes(n)) { mats[n] ??= o.material.clone(); o.material = mats[n]; if (n === 'LED') mats[n].emissiveIntensity = 2.2; }
+    if (['LED', 'NAV_R', 'NAV_G', 'STROBE', 'Lamp', 'VISOR', 'ACC', 'THERMAL', 'ArmAcc', 'CabPaint', 'TAIL', 'GantryAcc'].includes(n)) { mats[n] ??= o.material.clone(); o.material = mats[n]; if (n === 'LED') mats[n].emissiveIntensity = 2.2; }
   });
   return { root, mats, find: (name) => root.getObjectByName(name) };
 }

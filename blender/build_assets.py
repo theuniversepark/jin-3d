@@ -1,6 +1,6 @@
 # Jin-3D Blender 자산 생성 스크립트 — Blender(5.x)에서 실제로 모델링·재질 적용 후 glTF(.glb)로 내보낸다.
 # 실행: blender -b --python blender/build_assets.py   (또는 npm run blender:assets)
-# 결과: assets/blender/{amr,agv,forklift,drone,humanoid,quadruped,arm6,ammr,primitives}.glb  +  assets/blender/preview.png (Blender Eevee 렌더 미리보기)
+# 결과: assets/blender/{amr,agv,forklift,drone,humanoid,quadruped,arm6,ammr,truck,gantry,eaxle,primitives}.glb  +  assets/blender/preview.png (Blender Eevee 렌더 미리보기)
 #
 # 좌표: Blender는 Z가 위, glTF로 내보내면 +Y가 위가 된다 (Blender X → three X, Blender Z → three Y, Blender −Y → three +Z).
 #       three.js 모델의 "앞"(로컬 +z)은 Blender −Y 방향으로 만든다. 단위 1 = 1m (Jin-3D와 같은 크기·같은 원점: 바닥 중심)
@@ -140,25 +140,116 @@ def build_agv():
 def build_forklift():
     R = empty('Forklift')
     orange = mat('ForkOrange', srgb('#f08a24'), 0.15, 0.38)
-    box('Chassis', (1.18, 1.65, 0.55), (0, 0.2, 0.55), orange, bevel=0.06, parent=R)
-    box('Counterweight', (1.14, 0.55, 0.62), (0, 1.0, 0.6), MATS['ShellDark'], bevel=0.12, parent=R)
-    box('Seat', (0.5, 0.45, 0.12), (0, 0.45, 0.9), MATS['Bumper'], bevel=0.04, parent=R)
-    box('SeatBack', (0.5, 0.1, 0.45), (0, 0.66, 1.12), MATS['Bumper'], bevel=0.04, parent=R)
-    cyl('Steering', 0.16, 0.03, (0, -0.15, 1.2), MATS['Bumper'], parent=R, verts=32).rotation_euler = (0.6, 0, 0)
-    for x, y in ((-0.6, -0.35), (0.6, -0.35)): wheel(f'Wheel_F_{x}', 0.3, 0.22, (x, y, 0.3), R)
-    for x, y in ((-0.58, 0.8), (0.58, 0.8)): wheel(f'Wheel_R_{x}', 0.24, 0.18, (x, y, 0.24), R)
-    for x in (-0.45, 0.45): box(f'Mast_{x}', (0.09, 0.09, 2.25), (x, -0.75, 1.27), MATS['ShellDark'], bevel=0.015, parent=R)
-    box('Mast_Top', (1.0, 0.08, 0.08), (0, -0.75, 2.36), MATS['ShellDark'], bevel=0.015, parent=R)
-    box('Carriage', (0.95, 0.06, 0.45), (0, -0.82, 0.4), MATS['ShellDark'], bevel=0.015, parent=R)
+    D = MATS['ShellDark']; St = MATS['Steel']; Bk = MATS['Bumper']
+    lamp = mat('Lamp', srgb('#fff2c0'), 0, 0.2, emit=srgb('#fff2c0'), strength=2.0)
+    red = mat('ForkTail', srgb('#ff3030'), 0, 0.3, emit=srgb('#ff3030'), strength=1.2)
+    # 차체: 하부 프레임 · 배터리 덮개(좌석 아래) · 앞 휀더 · 둥근 카운터웨이트
+    box('Chassis', (1.18, 1.6, 0.42), (0, 0.22, 0.47), orange, bevel=0.07, parent=R)
+    box('BatteryHood', (1.02, 0.85, 0.2), (0, 0.35, 0.78), orange, bevel=0.06, parent=R)
+    box('Step', (0.9, 0.35, 0.05), (0, -0.25, 0.3), Bk, bevel=0.01, parent=R)
+    for x in (-0.6, 0.6): box(f'Fender_{x}', (0.3, 0.75, 0.12), (x, -0.35, 0.64), orange, bevel=0.05, parent=R)
+    box('Counterweight', (1.16, 0.6, 0.78), (0, 1.0, 0.62), D, bevel=0.2, parent=R)
+    for x in (-0.42, 0.42): box(f'TailLamp_{x}', (0.12, 0.03, 0.07), (x, 1.302, 0.85), red, bevel=0.01, parent=R)
+    # 운전석: 좌석·팔걸이·조향 기둥·핸들·레버
+    box('Seat', (0.5, 0.45, 0.12), (0, 0.48, 0.95), Bk, bevel=0.045, parent=R)
+    box('SeatBack', (0.5, 0.1, 0.48), (0, 0.7, 1.18), Bk, bevel=0.045, parent=R)
+    for x in (-0.28, 0.28): box(f'Armrest_{x}', (0.06, 0.32, 0.05), (x, 0.5, 1.12), Bk, bevel=0.015, parent=R)
+    cyl('SteerColumn', 0.04, 0.5, (0, -0.2, 1.05), D, parent=R, verts=24).rotation_euler = (0.5, 0, 0)
+    bpy.ops.mesh.primitive_torus_add(major_radius=0.17, minor_radius=0.018, location=(0, -0.08, 1.3), rotation=(0.5, 0, 0))
+    finish(setname(bpy.context.active_object, 'Steering'), Bk, parent=R)
+    for k, x in enumerate((-0.12, -0.04, 0.04)): cyl(f'Lever_{k}', 0.01, 0.22, (0.3 + x, -0.25, 1.0), Bk, parent=R, verts=12)
+    for x, y in ((-0.6, -0.35), (0.6, -0.35)): wheel(f'Wheel_F_{x}', 0.3, 0.24, (x, y, 0.3), R)
+    for x, y in ((-0.58, 0.8), (0.58, 0.8)): wheel(f'Wheel_R_{x}', 0.24, 0.2, (x, y, 0.24), R)
+    # 마스트: 바깥·안쪽 레일 · 가로 보 · 리프트 실린더 · 틸트 실린더
+    for x in (-0.45, 0.45):
+        box(f'Mast_{x}', (0.1, 0.12, 2.25), (x, -0.75, 1.27), D, bevel=0.015, parent=R)
+        box(f'MastInner_{x}', (0.07, 0.08, 2.1), (x * 0.82, -0.78, 1.3), D, bevel=0.01, parent=R)
+        cyl(f'TiltCyl_{x}', 0.035, 0.5, (x * 0.9, -0.5, 0.8), St, parent=R, verts=16).rotation_euler = (1.2, 0, 0)
+    box('Mast_Top', (1.0, 0.08, 0.08), (0, -0.75, 2.36), D, bevel=0.015, parent=R)
+    box('Mast_Mid', (0.9, 0.06, 0.06), (0, -0.75, 1.45), D, bevel=0.01, parent=R)
+    cyl('LiftCyl', 0.05, 1.7, (0, -0.7, 1.15), St, parent=R, verts=24, bevel=0.005)
+    # 캐리지 · 짐받이(로드 백레스트) · 포크
+    box('Carriage', (0.98, 0.07, 0.42), (0, -0.83, 0.42), D, bevel=0.015, parent=R)
+    box('Backrest_Top', (0.98, 0.04, 0.04), (0, -0.86, 1.25), D, parent=R)
+    for k in range(6): box(f'Backrest_{k}', (0.03, 0.03, 0.62), (-0.45 + k * 0.18, -0.86, 0.94), D, parent=R)
     for x in (-0.3, 0.3):
-        box(f'Fork_{x}', (0.12, 1.1, 0.05), (x, -1.32, 0.15), MATS['Steel'], bevel=0.01, parent=R)
-        box(f'ForkHeel_{x}', (0.12, 0.05, 0.4), (x, -0.8, 0.33), MATS['Steel'], bevel=0.01, parent=R)
+        box(f'Fork_{x}', (0.12, 1.1, 0.05), (x, -1.32, 0.15), St, bevel=0.01, parent=R)
+        box(f'ForkHeel_{x}', (0.12, 0.05, 0.42), (x, -0.85, 0.34), St, bevel=0.01, parent=R)
         box(f'Chain_{x}', (0.03, 0.03, 2.0), (x * 0.5, -0.72, 1.2), MATS['Hub'], parent=R)
-    box('Guard', (1.18, 1.3, 0.06), (0, 0.4, 2.1), MATS['ShellDark'], bevel=0.02, parent=R)
-    for x, y in ((-0.55, -0.2), (0.55, -0.2), (-0.55, 1.0), (0.55, 1.0)): box(f'Post_{x}_{y}', (0.055, 0.055, 1.25), (x, y, 1.45), MATS['ShellDark'], bevel=0.01, parent=R)
-    for k in range(4): box(f'GuardBar_{k}', (1.1, 0.03, 0.03), (0, -0.1 + k * 0.33, 2.08), MATS['ShellDark'], parent=R)
-    for x in (-0.45, 0.45): box(f'Headlight_{x}', (0.12, 0.03, 0.08), (x, -0.62, 1.95), mat('Lamp', srgb('#fff2c0'), 0, 0.2, emit=srgb('#fff2c0'), strength=2.0), parent=R)
+    # 오버헤드 가드: 원형 기둥(앞쪽은 기울임) · 지붕 판 · 격자
+    box('Guard', (1.18, 1.3, 0.05), (0, 0.4, 2.1), D, bevel=0.02, parent=R)
+    for x, y in ((-0.55, -0.2), (0.55, -0.2), (-0.55, 1.0), (0.55, 1.0)):
+        c = cyl(f'Post_{x}_{y}', 0.035, 1.3, (x, y, 1.45), D, parent=R, verts=20)
+        if y < 0: c.rotation_euler = (-0.12, 0, 0)
+    for k in range(5): box(f'GuardBar_{k}', (1.12, 0.03, 0.03), (0, -0.2 + k * 0.3, 2.07), D, parent=R)
+    for x in (-0.45, 0.45): box(f'Headlight_{x}', (0.12, 0.04, 0.09), (x, -0.62, 1.95), lamp, bevel=0.015, parent=R)
+    box('BlueSpot', (0.08, 0.04, 0.05), (0, 1.0, 2.0), mat('BlueSpotLamp', srgb('#2a8cff'), 0, 0.2, emit=srgb('#2a8cff'), strength=2.0), parent=R)
     export(R, 'forklift')
+
+# ── 화물트럭 (길이 10.5m · 폭 2.5m, 3D 모델과 같은 치수) — 캡오버 운전석 + 커튼 사이더 적재함 (특정 회사 모델이 아닌 일반형)
+# 코드가 쓰는 부분: 재질 CabPaint(트럭마다 색) · TAIL(후미등 — 후진 시 흰색 점멸) · Tarp(반투명 커튼), 빈 객체 Door_L/Door_R(뒷문 경첩 — 코드가 연다)
+# 좌표는 three.js 기준(x, y 위, z 앞 = 운전석)으로 적고 T()로 Blender 좌표로 바꾼다
+def build_truck():
+    L, W = 10.5, 2.5
+    T = lambda x, y, z: (x, -z, y)
+    S = lambda w, h, d: (w, d, h)
+    paint = mat('CabPaint', srgb('#2a6fdb'), 0.35, 0.3)
+    D = MATS['ShellDark']; St = MATS['Steel']; G = MATS['Glass']; Bk = MATS['Bumper']
+    white = mat('BoxWhite', srgb('#e8ecf0'), 0.1, 0.45)
+    tarp = mat('Tarp', srgb('#dfe6ee'), 0.0, 0.7, alpha=0.32)
+    strap = mat('Strap', srgb('#3b4250'), 0.0, 0.6)
+    lamp = mat('Lamp', srgb('#fff2c0'), 0, 0.2, emit=srgb('#fff2c0'), strength=2.0)
+    tail = mat('TAIL', srgb('#ff3030'), 0, 0.3, emit=srgb('#ff3030'), strength=1.2)
+    amber = mat('Amber', srgb('#ffa020'), 0, 0.3, emit=srgb('#ffa020'), strength=1.0)
+    R = empty('Truck')
+    def B(n, size, loc, m, bevel=0.0, rot=(0, 0, 0)): return box(n, S(*size), T(*loc), m, bevel=bevel, parent=R, rot=rot)
+    cz = L / 2 - 1.15
+    # 운전석(캡오버)
+    B('CabLower', (W, 1.45, 2.2), (0, 1.27, cz), paint, bevel=0.1)
+    B('CabUpper', (W - 0.04, 1.05, 2.05), (0, 2.5, cz - 0.07), paint, bevel=0.16)
+    B('Deflector', (W - 0.3, 0.5, 1.3), (0, 3.2, cz - 0.35), paint, bevel=0.22)
+    B('Windshield', (W - 0.3, 0.82, 0.04), (0, 2.5, cz + 0.96), G, bevel=0.02)
+    for sd in (-1, 1):
+        B(f'SideWindow_{sd}', (0.04, 0.6, 0.85), (sd * (W / 2 - 0.0), 2.55, cz + 0.4), G, bevel=0.01)
+        B(f'MirrorArm_{sd}', (0.32, 0.04, 0.04), (sd * (W / 2 + 0.14), 2.45, cz + 0.95), D)
+        B(f'Mirror_{sd}', (0.07, 0.5, 0.22), (sd * (W / 2 + 0.3), 2.3, cz + 0.95), D, bevel=0.02)
+        B(f'Step_{sd}', (0.12, 0.05, 0.5), (sd * (W / 2 - 0.02), 0.62, cz + 0.45), St)
+        B(f'Headlight_{sd}', (0.38, 0.18, 0.05), (sd * 0.85, 0.95, cz + 1.12), lamp, bevel=0.02)
+        B(f'Indicator_{sd}', (0.12, 0.1, 0.05), (sd * 1.12, 0.95, cz + 1.1), amber, bevel=0.01)
+        B(f'MarkerLight_{sd}', (0.1, 0.06, 0.05), (sd * 0.9, 3.42, cz + 0.25), amber)
+        B(f'FrontFender_{sd}', (0.42, 0.1, 1.15), (sd * 1.05, 1.0, L / 2 - 1.3), Bk, bevel=0.03)
+    B('Grille', (1.55, 0.6, 0.04), (0, 1.3, cz + 1.11), D, bevel=0.02)
+    for k in range(5): B(f'GrilleBar_{k}', (1.45, 0.03, 0.03), (0, 1.07 + k * 0.115, cz + 1.135), St)
+    B('Bumper', (W, 0.35, 0.3), (0, 0.55, cz + 1.0), D, bevel=0.06)
+    # 섀시 · 연료탱크 · 바퀴 · 뒤 휀더 · 측면 보호대
+    B('Chassis', (W - 0.4, 0.3, L - 0.3), (0, 0.6, 0), D)
+    c = cyl('FuelTank', 0.3, 1.1, T(-1.0, 0.72, 2.35), St, axis='Y', parent=R, verts=40, bevel=0.03)
+    B('FuelStrap', (0.62, 0.62, 0.04), (-1.0, 0.72, 2.35), D)
+    for z in (L / 2 - 1.3, -L / 2 + 1.0, -L / 2 + 2.2):
+        for x in (-1.05, 1.05): wheel(f'Wheel_{x}_{round(z, 2)}', 0.48, 0.34, T(x, 0.48, z), R)
+    for sd in (-1, 1):
+        B(f'RearFender_{sd}', (0.42, 0.06, 2.5), (sd * 1.05, 1.03, -L / 2 + 1.6), Bk, bevel=0.02)
+        B(f'SideGuard_{sd}', (0.04, 0.22, 3.6), (sd * 1.16, 0.75, -0.6), St)
+    # 적재함 (길이 7.8m, 중심 z = −L/2 + 3.9)
+    bz = -L / 2 + 3.9
+    B('CargoFloor', (W, 0.14, 7.8), (0, 1.2, bz), St)
+    B('FrontWall', (W, 2.6, 0.1), (0, 2.55, bz + 3.85), white, bevel=0.02)
+    for sd in (-1, 1):
+        B(f'Tarp_{sd}', (0.05, 2.6, 7.8), (sd * W / 2, 2.55, bz), tarp)
+        B(f'TopRail_{sd}', (0.08, 0.1, 7.9), (sd * W / 2, 3.86, bz), St, bevel=0.01)
+        B(f'BottomRail_{sd}', (0.08, 0.12, 7.9), (sd * W / 2, 1.24, bz), St, bevel=0.01)
+        for k in range(12): B(f'Strap_{sd}_{k}', (0.02, 2.45, 0.05), (sd * (W / 2 + 0.03), 2.55, bz - 3.6 + k * 0.655), strap)
+        for z in (-3.85, -1.3, 1.3): B(f'BoxPost_{sd}_{z}', (0.08, 2.6, 0.08), (sd * W / 2, 2.55, bz + z), St)
+    B('TarpRoof', (W, 0.05, 7.8), (0, 3.86, bz), tarp)
+    B('RearHeader', (W + 0.04, 0.16, 0.1), (0, 3.86, bz - 3.9), St, bevel=0.01)
+    B('RearBumper', (W, 0.12, 0.12), (0, 1.25, bz - 4.02), MATS['Yellow'], bevel=0.02)
+    for sd, side in ((-1, 'L'), (1, 'R')):
+        d = empty(f'Door_{side}', T(sd * W / 2, 2.55, bz - 3.9), R)
+        box(f'DoorPanel_{side}', S(W / 2, 2.6, 0.06), (-sd * W / 4, 0, 0), white, bevel=0.015, parent=d)
+        for k in (0.25, 0.75): box(f'DoorBar_{side}_{k}', S(0.04, 2.5, 0.04), (-sd * W / 2 * k, 0.04, 0), St, parent=d)
+        box(f'DoorHandle_{side}', S(0.05, 0.25, 0.05), (-sd * (W / 2 - 0.12), 0.06, -0.2), D, parent=d)
+        B(f'Tail_{side}', (0.25, 0.14, 0.05), (sd * 1.0, 1.0, -L / 2 - 0.02), tail, bevel=0.01)
+    export(R, 'truck')
 
 # ── 순찰 드론 (대각 약 1.1m) — 로터는 Rotor_0~3 (코드가 회전), 항법등 재질 NAV_R·NAV_G·STROBE ─────────────────
 def build_drone():
@@ -367,6 +458,160 @@ def build_ammr():
     for sd in (-1, 1): cyl(f'Stereo_{sd}', 0.017, 0.012, (sd * 0.05, -0.103, 0.008), cam, axis='Y', parent=H, verts=24)
     export(R, 'ammr')
 
+# ── 직교 3축 갠트리 로봇 (산업용 일반형: 앵커 고정 철골 기둥 · T슬롯 알루미늄 프로파일 빔 · 리니어 가이드·랙 · 서보모터+감속기 · 케이블 체인 · 공압 그리퍼)
+# 셀마다 X축 길이가 달라 부품별로 내보낸다 (좌표는 three.js 기준 — T()로 변환):
+#   Post   기둥 1개 (원점 = 기둥 바닥 중심)        XBeam  X축 빔 (길이 1m — 코드가 셀 길이로 늘림, 높이 그대로)
+#   Bridge X축 주행 브리지 (코드가 X로 움직임)      Carriage Y축 캐리지 (원점 = 캐리지 중심 y 2.7)      ZAxis 승강축 (원점 = 승강축 중심)
+#   재질 GantryAcc = 캐리지 도장색 (코드가 셀 색으로 바꿈)
+def build_gantry():
+    T = lambda x, y, z: (x, -z, y)
+    S = lambda w, h, d: (w, d, h)
+    frame = mat('GantryFrame', srgb('#3c434c'), 0.45, 0.42)
+    alu = mat('Alu', srgb('#d3d8de'), 0.45, 0.32)
+    slot = mat('Slot', srgb('#262a30'), 0.3, 0.5)
+    motor = mat('Motor', srgb('#16191d'), 0.5, 0.35)
+    chainm = mat('CableChain', srgb('#1d2024'), 0.1, 0.6)
+    acc = mat('GantryAcc', srgb('#f08a24'), 0.2, 0.38)
+    St = MATS['Steel']; Y = MATS['Yellow']
+    R = empty('Gantry')
+    def part(n): return empty(n, (0, 0, 0), R)
+    def B(n, size, loc, m, par, bevel=0.0, rot=(0, 0, 0)): return box(n, S(*size), T(*loc), m, bevel=bevel, parent=par, rot=rot)
+    def C(n, r, h, loc, m, par, axis='Y3', verts=32, bevel=0.0):   # axis: three.js 축 (Y3 = 위아래, X3, Z3)
+        return cyl(n, r, h, T(*loc), m, axis={'Y3': 'Z', 'X3': 'X', 'Z3': 'Y'}[axis], parent=par, verts=verts, bevel=bevel)
+    def servo(n, loc, par, axis='Y3', length=0.22):   # 서보모터(검정 몸체 · 은색 플랜지 · 엔코더 캡)
+        x, y, z = loc
+        d = {'Y3': (0, 1, 0), 'X3': (1, 0, 0), 'Z3': (0, 0, 1)}[axis]
+        C(n + '_Body', 0.058, length, loc, motor, par, axis, 32, 0.01)
+        C(n + '_Flange', 0.068, 0.04, (x - d[0] * length / 2, y - d[1] * length / 2, z - d[2] * length / 2), alu, par, axis, 32)
+        C(n + '_Cap', 0.045, 0.03, (x + d[0] * length / 2, y + d[1] * length / 2, z + d[2] * length / 2), slot, par, axis, 24)
+    # 기둥
+    P = part('Post')
+    B('PostBase', (0.42, 0.03, 0.42), (0, 0.015, 0), frame, P, bevel=0.008)
+    for bx in (-0.16, 0.16):
+        for bz in (-0.16, 0.16): C(f'Anchor_{bx}_{bz}', 0.016, 0.05, (bx, 0.045, bz), St, P, verts=12)
+    B('PostColumn', (0.16, 2.56, 0.16), (0, 1.31, 0), frame, P, bevel=0.012)
+    for k, (gx, gz, w, d) in enumerate(((0, 0.081, 0.02, 0.004), (0, -0.081, 0.02, 0.004), (0.081, 0, 0.004, 0.02), (-0.081, 0, 0.004, 0.02))):
+        B(f'PostSlot_{k}', (w, 2.4, d), (gx, 1.32, gz), slot, P)
+    for sd in (-1, 1): B(f'Gusset_{sd}', (0.02, 0.22, 0.22), (sd * 0.09, 0.14, 0), frame, P, rot=(0, math.radians(45), 0))
+    B('PostTop', (0.26, 0.03, 0.26), (0, 2.6, 0), frame, P, bevel=0.006)
+    B('PostSign', (0.005, 0.18, 0.12), (0.082, 1.5, 0), Y, P)
+    # X축 빔 (길이 1 — 코드가 늘림)
+    X = part('XBeam')
+    B('XProfile', (1, 0.18, 0.18), (0, 2.7, 0), alu, X)
+    for sd in (-1, 1): B(f'XSlot_{sd}', (1, 0.022, 0.004), (0, 2.7, sd * 0.091), slot, X)
+    B('XRail', (1, 0.03, 0.05), (0, 2.805, 0), St, X)
+    B('XRack', (1, 0.035, 0.02), (0, 2.73, 0.1), slot, X)
+    B('XChainTray', (1, 0.03, 0.14), (0, 2.6, -0.17), alu, X)
+    B('XChain', (1, 0.07, 0.09), (0, 2.655, -0.17), chainm, X)
+    # 브리지 (X축 주행)
+    Bg = part('Bridge')
+    B('YProfile', (0.24, 0.22, 3.4), (0, 2.92, 0), alu, Bg, bevel=0.012)
+    for sd in (-1, 1): B(f'YSlot_{sd}', (0.004, 0.024, 3.3), (sd * 0.121, 2.92, 0), slot, Bg)
+    B('YRail', (0.05, 0.03, 3.3), (0, 3.045, 0), St, Bg)
+    B('YRack', (0.02, 0.035, 3.3), (0.13, 2.96, 0), slot, Bg)
+    B('YChain', (0.09, 0.07, 1.8), (-0.17, 3.08, 0.75), chainm, Bg, bevel=0.01)
+    for z in (-1.6, 1.6):
+        B(f'Truck_{z}', (0.42, 0.06, 0.34), (0, 2.8, z), alu, Bg, bevel=0.01)
+        B(f'TruckBlock_{z}', (0.16, 0.05, 0.12), (0, 2.85, z), St, Bg)
+        B(f'EndCap_{z}', (0.26, 0.24, 0.02), (0, 2.92, z * 1.0625), slot, Bg)
+        C(f'XGear_{z}', 0.065, 0.1, (0.22, 2.88, z + 0.1), alu, Bg, verts=32)
+        servo(f'XServo_{z}', (0.22, 3.04, z + 0.1), Bg)
+    # 캐리지 (Y축 이송, 원점 = 캐리지 중심)
+    Cg = part('Carriage')
+    B('CarPlate', (0.4, 0.32, 0.06), (0, 0, 0.17), acc, Cg, bevel=0.012)
+    B('CarBody', (0.34, 0.28, 0.3), (0, 0, 0), acc, Cg, bevel=0.03)
+    B('CarTop', (0.4, 0.04, 0.36), (0, 0.2, 0), alu, Cg, bevel=0.008)
+    B('ZGuideBlock', (0.16, 0.36, 0.06), (0, -0.02, 0.0), St, Cg)
+    servo('YServo', (0.12, 0.34, -0.08), Cg)
+    servo('ZServo', (-0.1, 0.36, 0.08), Cg, length=0.26)
+    B('CarLabel', (0.005, 0.08, 0.16), (0.172, 0.0, 0), Y, Cg)
+    # 승강축 (원점 = 축 중심, 길이 1.0) · 공압 그리퍼
+    Z = part('ZAxis')
+    B('ZProfile', (0.1, 1.0, 0.1), (0, 0, 0), alu, Z, bevel=0.006)
+    for sd in (-1, 1): B(f'ZSlot_{sd}', (0.004, 0.95, 0.02), (sd * 0.051, 0, 0), slot, Z)
+    B('ZRail', (0.03, 0.96, 0.02), (0, 0, 0.06), St, Z)
+    B('ZRack', (0.02, 0.96, 0.02), (0, 0, -0.06), slot, Z)
+    B('ZStopTop', (0.14, 0.03, 0.14), (0, 0.5, 0), slot, Z)
+    B('ToolFlange', (0.2, 0.03, 0.2), (0, -0.485, 0), alu, Z, bevel=0.005)
+    B('GripperBody', (0.34, 0.06, 0.18), (0, -0.53, 0), MATS['ShellDark'], Z, bevel=0.012)
+    C('GripperValve', 0.025, 0.06, (0.12, -0.47, 0.06), St, Z, verts=16)
+    for sd in (-1, 1): B(f'GripFinger_{sd}', (0.03, 0.12, 0.16), (sd * 0.15, -0.6, 0), St, Z, bevel=0.006)
+    export(R, 'gantry')
+
+# ── e-axle (전기차 동축형 전동 구동축: 모터 + 감속기 + 인버터, 길이 1.04m · 지름 약 0.44m) — 축 = three.js x, 바닥(받침대) 원점
+# 모터·감속기 하우징 앞 위쪽을 잘라낸 단면(cutaway)으로 고정자 철심 · 구리 권선 · 회전자 · 헬리컬 기어가 보인다
+# 빈 객체 FastenBolts = 체결 공정 후에 보이는 플랜지 볼트 (코드가 켠다)
+def build_eaxle():
+    cz = 0.27
+    cast = mat('CastAlu', srgb('#b9bfc6'), 0.55, 0.38)
+    lam = mat('Lamination', srgb('#5d646e'), 0.5, 0.38)
+    copper = mat('Copper', srgb('#d9823f'), 0.7, 0.28)
+    gear = mat('GearSteel', srgb('#9aa2ab'), 0.95, 0.25)
+    orange = mat('HVOrange', srgb('#ff7a1a'), 0.1, 0.4)
+    inv = mat('InverterCase', srgb('#2c3138'), 0.4, 0.4)
+    St = MATS['Steel']; Bk = MATS['Bumper']
+    R = empty('Eaxle')
+    def cx(n, r, L, x, m, y=0.0, z=cz, verts=64, bevel=0.0, par=R): return cyl(n, r, L, (x, y, z), m, axis='X', parent=par, verts=verts, bevel=bevel)
+    def cut(o, lo, hi):   # 앞(−Y) 위(+Z) 사분면을 잘라낸다
+        bpy.ops.mesh.primitive_cube_add(size=1); c = bpy.context.active_object
+        c.scale = (hi - lo, 0.4, 0.4); c.location = ((lo + hi) / 2, -0.2, cz + 0.2)
+        md = o.modifiers.new('Cut', 'BOOLEAN'); md.object = c; md.operation = 'DIFFERENCE'; md.solver = 'EXACT'
+        bpy.context.view_layer.objects.active = o; bpy.ops.object.modifier_apply(modifier='Cut')
+        bpy.data.objects.remove(c, do_unlink=True)
+        return o
+    def hollow(o, r_in, x, L):
+        bpy.ops.mesh.primitive_cylinder_add(vertices=48, radius=r_in, depth=L, location=(x, 0, cz), rotation=(0, math.pi / 2, 0)); c = bpy.context.active_object
+        md = o.modifiers.new('Hole', 'BOOLEAN'); md.object = c; md.operation = 'DIFFERENCE'; md.solver = 'EXACT'
+        bpy.context.view_layer.objects.active = o; bpy.ops.object.modifier_apply(modifier='Hole')
+        bpy.data.objects.remove(c, do_unlink=True)
+        return o
+    # 받침대 (V블록)
+    for x in (-0.3, 0.3): box(f'Cradle_{x}', (0.1, 0.34, 0.1), (x, 0, 0.05), Bk, bevel=0.015, parent=R)
+    # 모터부 (x −0.06 ~ 0.44): 하우징(속 빈 원통) · 냉각 리브 · 고정자 · 권선 · 회전자
+    mh = cut(hollow(cx('MotorHousing', 0.19, 0.5, 0.19, cast), 0.172, 0.19, 0.46), 0.0, 0.4)
+    for k in range(7):
+        x = 0.03 + k * 0.055
+        cut(hollow(cx(f'CoolingRib_{k}', 0.202, 0.016, x, cast, verts=64), 0.185, x, 0.03), -0.1, 0.42)
+    cut(hollow(cx('Stator', 0.171, 0.3, 0.19, lam), 0.098, 0.19, 0.32), 0.0, 0.4)
+    for x in (0.02, 0.36):
+        bpy.ops.mesh.primitive_torus_add(major_radius=0.135, minor_radius=0.032, major_segments=48, minor_segments=12, location=(x, 0, cz), rotation=(0, math.pi / 2, 0))
+        o = finish(setname(bpy.context.active_object, f'EndWinding_{x}'), copper, parent=R); cut(o, -0.1, 0.42)
+    cx('Rotor', 0.09, 0.3, 0.19, lam, verts=48)
+    for k in range(6): cx(f'RotorBand_{k}', 0.0915, 0.008, 0.06 + k * 0.052, St, verts=48)
+    cx('Shaft', 0.035, 0.98, 0.0, St, verts=32)
+    cx('MotorEndCap', 0.175, 0.04, 0.455, cast, bevel=0.01)
+    # 감속기부 (x −0.48 ~ −0.06): 큰 하우징 · 아래 앞쪽 보조축 돌출 · 결합 플랜지 · 헬리컬 기어
+    gh = cut(hollow(cx('GearHousing', 0.22, 0.42, -0.27, cast), 0.2, -0.27, 0.38), -0.44, -0.1)
+    cut(cx('LayshaftBulge', 0.14, 0.34, -0.29, cast, y=-0.09, z=cz - 0.09, verts=48), -0.44, -0.1)
+    cx('JointFlange', 0.24, 0.035, -0.065, cast, verts=64, bevel=0.006)
+    for k in range(12):
+        a = k * math.pi * 2 / 12
+        cx(f'FlangeBolt_{k}', 0.012, 0.05, -0.065, St, y=math.cos(a) * 0.225, z=cz + math.sin(a) * 0.225, verts=6)
+    for n, r, w, x in (('GearA', 0.16, 0.06, -0.22), ('GearB', 0.1, 0.05, -0.36)):
+        g = cx(n, r, w, x, gear, verts=48)
+        for k in range(36 if r > 0.12 else 24):   # 기어 이(헬리컬 느낌으로 약간 비틀어)
+            a = k * math.pi * 2 / (36 if r > 0.12 else 24)
+            box(f'{n}_T{k}', (w, 0.016, 0.02), (x, math.cos(a) * (r + 0.008), cz + math.sin(a) * (r + 0.008)), gear, parent=R, rot=(a, 0, 0.35))
+    cx('GearShaft', 0.05, 0.3, -0.29, St, y=-0.09, z=cz - 0.09, verts=24)
+    cx('GearHousingCap', 0.205, 0.035, -0.49, cast, bevel=0.01)
+    # 출력 플랜지 (양 끝, 6각 볼트 플랜지)
+    for sd, x0 in ((1, 0.475), (-1, -0.505)):
+        cx(f'OutShaft_{sd}', 0.045, 0.05, x0 + sd * 0.01, St, verts=32)
+        cx(f'OutFlange_{sd}', 0.085, 0.03, x0 + sd * 0.04, St, verts=6, bevel=0.006)
+    # 인버터 (모터 위 뒤쪽) · 고전압 커넥터 · 케이블
+    box('Inverter', (0.34, 0.2, 0.1), (0.2, 0.06, cz + 0.235), inv, bevel=0.02, parent=R)
+    for k in range(5): box(f'InvRib_{k}', (0.3, 0.008, 0.015), (0.2, -0.02 + k * 0.04, cz + 0.292), inv, parent=R)
+    box('HVConnector', (0.07, 0.06, 0.06), (0.04, 0.1, cz + 0.27), orange, bevel=0.01, parent=R)
+    c = cyl('HVCable', 0.02, 0.2, (-0.06, 0.1, cz + 0.27), orange, axis='X', parent=R, verts=16)
+    box('InvMount', (0.3, 0.12, 0.05), (0.2, 0.08, cz + 0.17), cast, parent=R)
+    # 체결 볼트 (체결 공정 후 표시): 양 끝 덮개 둘레
+    B = empty('FastenBolts', (0, 0, 0), R)
+    for x, rr in ((0.48, 0.15), (-0.515, 0.17)):
+        for k in range(8):
+            a = k * math.pi * 2 / 8 + 0.2
+            cyl(f'FBolt_{x}_{k}', 0.014, 0.03, (x, math.cos(a) * rr, cz + math.sin(a) * rr), MATS['Yellow'], axis='X', parent=B, verts=6)
+    export(R, 'eaxle')
+
 def preview_one(build, name, cam_loc, cam_rot, lens, res):
     reset(); MATS.clear(); common_mats(); build()
     bpy.ops.mesh.primitive_plane_add(size=20, location=(0, 0, 0)); bpy.context.active_object.data.materials.append(mat('Floor', srgb('#8b9096'), 0, 0.8))
@@ -376,6 +621,11 @@ def preview_one(build, name, cam_loc, cam_rot, lens, res):
     w = bpy.data.worlds.new('W'); bpy.context.scene.world = w; w.use_nodes = True; w.node_tree.nodes['Background'].inputs['Color'].default_value = (0.05, 0.06, 0.08, 1); w.node_tree.nodes['Background'].inputs['Strength'].default_value = 0.8
     sc = bpy.context.scene; sc.render.engine = 'BLENDER_EEVEE'; sc.render.resolution_x, sc.render.resolution_y = res; sc.render.filepath = os.path.join(OUT, f'preview_{name}.png')
     bpy.ops.render.render(write_still=True)
+
+def build_truck_fork():   # 미리보기용: 트럭 옆에 지게차
+    build_truck(); before = set(bpy.data.objects); build_forklift()
+    for o in bpy.data.objects:
+        if o not in before and o.parent is None: o.location = (3.2, -1.0, 0); o.rotation_euler = (0, 0, math.radians(-35))
 
 def preview_humanoid():
     reset(); MATS.clear(); common_mats(); build_humanoid()
@@ -432,10 +682,10 @@ def build_primitives():
     print('primitives', len(keys))
 
 reset(); MATS.clear(); build_primitives()
-for fn in (build_amr, build_agv, build_forklift, build_drone, build_humanoid, build_quadruped, build_arm6, build_ammr):
+for fn in (build_amr, build_agv, build_forklift, build_drone, build_humanoid, build_quadruped, build_arm6, build_ammr, build_truck, build_gantry, build_eaxle):
     reset(); MATS.clear(); common_mats(); fn()
 try:
-    preview(); preview_humanoid(); preview_one(build_quadruped, 'quadruped', (-1.9, -2.15, 1.45), (70, 0, -42), 40, (960, 720))
+    preview(); preview_humanoid(); preview_one(build_quadruped, 'quadruped', (-1.9, -2.15, 1.45), (70, 0, -42), 40, (960, 720)); preview_one(build_eaxle, 'eaxle', (1.25, -1.45, 0.95), (68, 0, 40), 45, (960, 640)); preview_one(build_truck_fork, 'truck', (11.5, -9.5, 4.6), (72, 0, 52), 32, (1280, 720))
 except Exception as e:   # 렌더 장치가 없는 환경에서는 미리보기만 건너뛴다
     print('preview skipped:', e)
 print('Jin-3D Blender assets →', os.path.abspath(OUT), sorted(os.listdir(OUT)))

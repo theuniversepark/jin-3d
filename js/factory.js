@@ -280,7 +280,14 @@ function makeImagePlate(tex, W, D, layers, step) {
 // 도어트림: AMR 지그 상판(1.1 × 0.8m) 짧은 변에 맞춘 0.8m 정사각 (이미지 비율 그대로), 트림 패널 약 5cm
 function makeDoortrimPlate() { return makeImagePlate(productTex('assets/doortrim.png', 512, 512), 0.8, 0.8, 3, 0.016); }
 // e-axle: 세로로 긴 단면 이미지(1:2)를 AMR 진행 방향(긴 변 1.1m)으로 눕혀 1.04 × 0.52m, 하우징 두께감 약 12cm. 체결 후 볼트 표시
+// Blender e-axle (원통형 동축 모터 + 감속기 + 인버터, 앞 위쪽 단면으로 권선·회전자·기어가 보임): 길이 1.04m를 AMR 진행 방향(x)으로, 체결 볼트 FastenBolts
+function makeEaxleModel() {
+  const A = cloneAsset('eaxle'), g = new THREE.Group(); g.add(A.root);
+  g.userData = { bolts: A.find('FastenBolts'), tagY: 0.66, blender: true };
+  return g;
+}
 function makeEaxlePlate() {
+  if (blenderOn()) return makeEaxleModel();
   const g = new THREE.Group(), p = makeImagePlate(productTex('assets/eaxle.png', 256, 512), 0.52, 1.04, 6, 0.02);
   p.rotation.y = Math.PI / 2; g.add(p);
   const bolts = put(new THREE.Group(), 0, p.userData.top + 0.02, 0, g);
@@ -385,7 +392,26 @@ function makeForklift() {
 
 // 화물트럭 (로컬 +z = 운전석 방향). 적재함은 반투명 커튼 사이더라 실린 팔레트가 보이고, 뒷문은 도크 쪽으로 열린다
 const TRUCK_COLORS = [0x2a6fdb, 0xd23b3b, 0x2e9e6a, 0xf2a020, 0x6d5acf];
+// Blender 화물트럭 (캡오버 + 커튼 사이더 일반형): 뒷문 경첩(Door_L/R) · 후미등(TAIL) · 실린 팔레트 자리를 3D 모델과 같게 넘긴다
+function makeTruckBlender(i) {
+  const A = cloneAsset('truck'), g = new THREE.Group(), L = YARD.truckLen; g.add(A.root);
+  A.mats.CabPaint.color.setHex(TRUCK_COLORS[i % TRUCK_COLORS.length]);
+  A.root.traverse((o) => { if (o.isMesh && o.material.name === 'Tarp') { o.material.transparent = true; o.material.depthWrite = false; o.material.side = THREE.DoubleSide; o.castShadow = false; } });
+  const tail = ['Tail_L', 'Tail_R'].map((n) => A.find(n));
+  const doors = ['Door_L', 'Door_R'].map((n) => A.find(n));
+  const box8 = put(new THREE.Group(), 0, 0, -L / 2 + 3.9, g);
+  const pallets = [0, 1, 2, 3].map((k) => {
+    const pg = put(new THREE.Group(), 0, 1.27, 2.9 - k * 1.9, box8);
+    put(box(1.2, 0.12, 1.6, MAT.pallet), 0, 0.06, 0, pg);
+    const cartons = [];
+    for (let j = 0; j < 8; j++) cartons.push(put(box(0.55, 0.45, 0.75, MAT.carton), -0.29 + (j % 2) * 0.58, 0.36 + Math.floor(j / 4) * 0.47, -0.39 + (Math.floor(j / 2) % 2) * 0.78, pg));
+    pg.visible = false; return { pg, cartons };
+  });
+  g.userData = { doors, tail, pallets, blender: true };
+  return g;
+}
 function makeTruck(i) {
+  if (blenderOn()) return makeTruckBlender(i);
   const g = new THREE.Group(), L = YARD.truckLen, W = YARD.truckW;
   const cabMat = std(TRUCK_COLORS[i % TRUCK_COLORS.length], { roughness: 0.45, metalness: 0.3 });
   const cab = put(new THREE.Group(), 0, 0, L / 2 - 1.15, g);
@@ -789,18 +815,31 @@ function makeRobot(kind, color, opts = {}) {
   if (kind === 'gantry') {
     // 직교 3축 갠트리: 양쪽 X축 레일(고정 프레임) 위를 브리지가 주행(X) → 브리지 위 캐리지가 가로 이송(Y) → 수직 축 승강(Z)
     const root = new THREE.Group(), xr = opts.xr ?? 1.0, L = 2 * xr + 0.7;
-    for (const z of [-1.6, 1.6]) {
-      for (const x of [-L / 2, L / 2]) put(box(0.14, 2.6, 0.14, MAT.yellow), x, 1.3, z, root);   // 기둥 4개
-      put(box(L + 0.14, 0.16, 0.16, MAT.yellow), 0, 2.68, z, root);                                // X축 레일
-      put(box(L, 0.03, 0.05, MAT.steel), 0, 2.78, z, root);                                        // 리니어 가이드
+    let bridge, car, rod;
+    if (blenderOn()) {   // Blender 갠트리 (산업용 일반형): 기둥·X축 빔은 셀 길이에 맞춰 복제·늘리고, 브리지·캐리지·승강축은 3D 모델과 같은 그룹에 붙인다
+      const A = cloneAsset('gantry'), part = (n) => A.find(n);
+      if (color?.color) A.mats.GantryAcc.color.copy(color.color);
+      for (const z of [-1.6, 1.6]) {
+        for (const x of [-L / 2, L / 2]) { const p = part('Post').clone(); p.position.set(x, 0, z); root.add(p); }
+        const xb = part('XBeam').clone(); xb.position.set(0, 0, z); xb.scale.x = L + 0.14; root.add(xb);
+      }
+      bridge = put(new THREE.Group(), 0, 0, 0, root); bridge.add(part('Bridge'));
+      car = put(new THREE.Group(), 0, 2.7, 0, bridge); car.add(part('Carriage'));
+      rod = put(new THREE.Group(), 0, -0.6, 0, car); rod.add(part('ZAxis'));
+    } else {
+      for (const z of [-1.6, 1.6]) {
+        for (const x of [-L / 2, L / 2]) put(box(0.14, 2.6, 0.14, MAT.yellow), x, 1.3, z, root);   // 기둥 4개
+        put(box(L + 0.14, 0.16, 0.16, MAT.yellow), 0, 2.68, z, root);                                // X축 레일
+        put(box(L, 0.03, 0.05, MAT.steel), 0, 2.78, z, root);                                        // 리니어 가이드
+      }
+      bridge = put(new THREE.Group(), 0, 0, 0, root);                                          // X축 주행 브리지
+      put(box(0.22, 0.2, 3.4, MAT.yellow), 0, 2.86, 0, bridge);
+      for (const z of [-1.6, 1.6]) put(box(0.34, 0.16, 0.26, MAT.dark), 0, 2.86, z, bridge);          // 레일 위 주행 블록
+      car = put(new THREE.Group(), 0, 2.7, 0, bridge);                                         // Y축 캐리지
+      put(box(0.36, 0.26, 0.36, color), 0, 0, 0, car);
+      rod = put(box(0.08, 1.0, 0.08, MAT.steel), 0, -0.6, 0, car);                             // Z축
+      put(box(0.34, 0.06, 0.26, MAT.dark), 0, -0.5, 0, rod);
     }
-    const bridge = put(new THREE.Group(), 0, 0, 0, root);                                          // X축 주행 브리지
-    put(box(0.22, 0.2, 3.4, MAT.yellow), 0, 2.86, 0, bridge);
-    for (const z of [-1.6, 1.6]) put(box(0.34, 0.16, 0.26, MAT.dark), 0, 2.86, z, bridge);          // 레일 위 주행 블록
-    const car = put(new THREE.Group(), 0, 2.7, 0, bridge);                                         // Y축 캐리지
-    put(box(0.36, 0.26, 0.36, color), 0, 0, 0, car);
-    const rod = put(box(0.08, 1.0, 0.08, MAT.steel), 0, -0.6, 0, car);                             // Z축
-    put(box(0.34, 0.06, 0.26, MAT.dark), 0, -0.5, 0, rod);
     const tip = put(new THREE.Object3D(), 0, -0.53, 0, rod);
     // 집기 → 들어 올림 → X·Y 이동 → 내려놓기 → 복귀 (키프레임: [진행, X, Y, Z 하강])
     const K = [[0, -1, -0.8, 0], [0.12, -1, -0.8, 1], [0.22, -1, -0.8, 1], [0.32, -1, -0.8, 0], [0.55, 0.55, 0.7, 0], [0.65, 0.55, 0.7, 1], [0.73, 0.55, 0.7, 1], [0.82, 0.55, 0.7, 0], [1, -1, -0.8, 0]];
@@ -1986,7 +2025,7 @@ export class FactoryView {
       for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; put(cyl(0.035, 0.035, 0.06, MAT.bolt, 6), 0.03, Math.cos(a) * 0.22, Math.sin(a) * 0.22, bolts).rotation.z = Math.PI / 2; }
       const amr = makeCarrierAMR(); amr.position.y = -BELT_Y; amr.rotation.y = Math.PI / 2; g.add(amr);
       const dtImg = makeDoortrimPlate(); g.add(dtImg);   // 도어트림 실물 이미지 판 (부품분류셀부터)
-      const eaImg = makeEaxlePlate(); g.add(eaImg);      // e-axle 실물 이미지 판 (부품분류셀부터)
+      const eaImg = makeEaxlePlate(); g.add(eaImg);      // e-axle: Blender 입체 모델 (불러오지 못하면 실물 이미지 판) — 부품분류셀부터
       g.userData = { base, part, carton, tag, panel, arm, clips, housing, bolts, amr, dtImg, eaImg };
       this.dyn.add(g);
     }
@@ -2024,7 +2063,7 @@ export class FactoryView {
       // e-axle: 부품분류셀부터 원통 하우징·박스 대신 실물 단면 이미지 판 (체결 후 양 끝 플랜지 볼트 표시)
       carton.visible = false; part.visible = false; base.visible = false; housing.visible = false; bolts.visible = false; eaImg.visible = true;
       eaImg.userData.bolts.visible = !!item.fastened;
-      tag.visible = !!item.inspected; tag.position.y = 0.2;
+      tag.visible = !!item.inspected; tag.position.y = eaImg.userData.tagY ?? 0.2;
       return;
     }
     if (item.product) {
