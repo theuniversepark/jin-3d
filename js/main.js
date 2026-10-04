@@ -13,6 +13,7 @@ import { LLMController } from './llm.js';
 import { LineDesigner } from './designer.js';
 import { renderConcept } from './concept.js';
 import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
+import { PacketCapture } from './pcap.js';
 import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
 import { GateView } from './gateview.js';
 import { EpisodeRecorder, buildEpisodesZip, EP_HZ, SAMPLE } from './vla.js';
@@ -342,6 +343,53 @@ const FORMATS = [
   ['csv', 'CSV', '시계열·이벤트 긴 형식 (타임스탬프·자산·항목·값·단위)'],
   ['aml', 'AutomationML', 'CAEX 3.0 공장 계층 + AAS id + 최신 값, CSV 시계열 참조'],
 ];
+// ── 패킷 덤프: 캡처 상태·통계·버튼 (데이터 연동 창) ─────────────────
+let pcapNote = '';
+function pcapHtml() {
+  const P = hub.pcap, S = P.stats, H = P.hosts(), n = (v) => v.toLocaleString('ko-KR');
+  const state = P.full ? '<b class="bad">용량 한도(200MB) 도달 — 자동 중지</b>' : P.on ? `<b class="ok">⏺ 캡처 중</b> · ${P.duration.toFixed(0)}초 (공장 시계)` : S.packets ? '중지됨' : '대기';
+  return `<div class="grid2">
+    <span>상태</span><b>${state}</b>
+    <span>캡처 지점</span><b>MQTT 브로커 NIC <code>10.20.0.10:1883</code> — 양방향(클라이언트 → 브로커 · 브로커 → 구독자), Ethernet · IPv4 · TCP · MQTT 3.1.1</b>
+    <span>패킷</span><b>${n(S.packets)}개 (→ 브로커 ${n(S.up)} · 브로커 → ${n(S.down)}) · ${kb(P.bytes)}</b>
+    <span>MQTT</span><b>PUBLISH 발행 ${n(S.publishUp)} · 구독자 전달 ${n(S.publishDown)} · PUBACK ${n(S.puback)} · CONNECT ${n(S.connect)} · SUBSCRIBE ${n(S.subscribe)} · PING ${n(S.ping)}</b>
+    <span>영상</span><b>${P.video === false ? '끔' : `프레임 ${n(S.video)}개`} — CCTV·로봇 카메라 JPEG를 OPC UA ua-data ByteString(base64)으로 1초마다 (<code>…/Video_&lt;카메라&gt;</code>)</b>
+    <span>호스트</span><b>FACOS 10.20.0.20 · 설비·셀 LAN 10.20.1.x ${H.lan} · 5G 이동 로봇 10.45.x.x ${H['5g']} · CCTV 10.20.2.x ${H.cam}</b></div>
+    <div class="dh-save">
+      ${P.on ? '<button data-pcap="stop"><b>⏹ 캡처 중지</b><small>지금까지 기록 유지</small></button>' : '<button data-pcap="start"><b>⏺ 캡처 시작</b><small>새로 기록 (이전 기록 지움)</small></button>'}
+      <button data-pcap="save"><b>💾 .pcap 저장</b><small>Wireshark · tcpdump로 열기</small></button>
+      <label class="chk"><input type="checkbox" id="pcapVideo" ${P.video === false ? '' : 'checked'} ${P.on ? 'disabled' : ''}/> 영상 포함 (CCTV·로봇 카메라)</label></div>
+    <div class="dh-note">${escH(pcapNote)}</div>
+    <div class="cmp-note">• Wireshark 필터 예: <code>mqtt</code> · <code>mqtt.msgtype == 3</code>(PUBLISH) · <code>mqtt.topic contains "Commands"</code>(상위 명령) · <code>ip.src == 10.45.0.0/16</code>(5G 로봇 업링크) · <code>mqtt.topic contains "Video_"</code>(영상). PUBLISH 페이로드는 OPC UA PubSub JSON — 우클릭 → Follow → TCP Stream으로 볼 수 있습니다.<br>
+    • 캡처는 발행할 때만 기록합니다(📡 발행 체크). 5G 로봇 패킷은 무선 지연(약 8ms, 핸드오버 중이면 버퍼 대기만큼 더)이 반영된 시각입니다. 헤드리스 시험: <code>npm test</code>(tests/pcap.mjs) — 체크섬·TCP 순서번호·MQTT 짝 검증.</div>`;
+}
+// 영상 프레임: 캡처 중이면 1초마다 CCTV 한 대 + 로봇 카메라 한 대를 JPEG로 찍어 OPC UA 메시지로 발행
+hub.pcap = new PacketCapture();
+let pcapVidT = 0, pcapCam = 0, pcapBot = 0, pcapSeq = 0;
+const pcapCv = document.createElement('canvas'); pcapCv.width = 320; pcapCv.height = 180;
+const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
+function pcapPublishFrame(key, kind, cam, w, h, bytes, simT, extra = {}) {
+  const t = hub.iso(simT), name = `Video_${cam.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  const msg = { MessageId: crypto.randomUUID?.() ?? `${Date.now()}`, MessageType: 'ua-data', PublisherId: PUBLISHER_ID, WriterGroupName: WRITER_GROUP,
+    Messages: [{ DataSetWriterId: 0, DataSetWriterName: name, SequenceNumber: ++pcapSeq, Timestamp: t, MessageType: 'ua-keyframe',
+      Payload: { CameraId: { Value: cam, SourceTimestamp: t }, Encoding: { Value: 'image/jpeg', SourceTimestamp: t }, Width: { Value: w, SourceTimestamp: t }, Height: { Value: h, SourceTimestamp: t },
+        ...Object.fromEntries(Object.entries(extra).map(([k, v]) => [k, { Value: v, SourceTimestamp: t }])), Image: { Type: 'ByteString', Value: b64(bytes), SourceTimestamp: t } } }] };
+  hub.pcap.publish({ key, kind, topic: hub.topic('data', name), payload: JSON.stringify(msg), tMs: hub.epochMs + simT * 1000, subs: kind === 'cam' ? [] : [hub.topic('data', 'Commands')], video: true });
+}
+function pcapVideoTick(rdt) {
+  const P = hub.pcap; if (!P.on || P.video === false || glLost) return;
+  pcapVidT += rdt; if (pcapVidT < 1) return; pcapVidT = 0;
+  const simT = sim.time, cams = sim.cctv?.cams ?? [];
+  if (cams.length && !cctvView.lost) {
+    const c = cams[pcapCam++ % cams.length], r = cctvView.renderPanel(c.id, pcapCv);
+    if (r) pcapCv.toBlob((bl) => bl?.arrayBuffer().then((ab) => pcapPublishFrame(`CCTV-${c.id}`, 'cam', `CCTV_${c.id}`, 320, 180, new Uint8Array(ab), simT, { Place: r.place, Detections: r.dets.length })), 'image/jpeg', 0.7);
+  }
+  if (camWall.on && camWall.list?.length) {
+    const f = camWall.list[pcapBot++ % camWall.list.length], pr = camWall.captureFrame(f.ref, 160, 120);
+    const a = f.ref.type === 'mover' ? hub.assets.find((x) => x.mover?.id === f.ref.id) : null, ue = a ? sim.net?.ueOf(a.mover) : null;
+    pr?.then((bytes) => bytes && pcapPublishFrame(a ? a.id : f.ref.stationId ?? 'Cell', ue ? '5g' : 'lan', `Robot_${a ? a.id : `${f.ref.stationId}_${f.ref.idx ?? 0}`}`, 160, 120, bytes, simT));
+  }
+}
 function renderData() {
   const st = hub.stats(), mq = hub.mqtt, ms = mq.status;
   const kinds = hub.assets.reduce((m, a) => ((m[a.kind] = (m[a.kind] ?? 0) + 1), m), {});
@@ -373,6 +421,7 @@ function renderData() {
         <span>상위 명령</span><b><code>opcua/json/data/${PUBLISHER_ID}/${WRITER_GROUP}/Commands</code> (명령 상태가 바뀔 때마다: 전송 · 수신 확인 · 실행 · 완료/거부)</b>
         <span>이벤트 · AAS 모델</span><b><code>opcua/json/data/${PUBLISHER_ID}/${WRITER_GROUP}/Events</code> · <code>aas/${PUBLISHER_ID}/environment</code> (retain)</b></div>
         <details><summary>마지막 NetworkMessage — <code>${escH(hub.lastMsg?.topic ?? '')}</code></summary><pre class="dh-pre">${escH(preview)}</pre></details></section>
+      <section class="span2"><h4>📦 패킷 덤프 (pcap · Wireshark)</h4>${pcapHtml()}</section>
       <section class="span2"><h4>💾 저장 (현재까지 수집한 데이터)</h4>
         <div class="dh-save">${FORMATS.map(([k, n, d]) => `<button data-fmt="${k}"><b>${n}</b><small>${d}</small></button>`).join('')}</div>
         <div class="dh-note">${escH(dataNote)}</div></section>
@@ -392,6 +441,22 @@ dataBody.addEventListener('change', (e) => {
   if (e.target.id === 'dhPub') { hub.publishOn = e.target.checked; e.target.blur(); renderData(); }
 });
 dataBody.addEventListener('click', (e) => {
+  const pb = e.target.closest('button[data-pcap]');
+  if (pb) {
+    const P = hub.pcap, a = pb.dataset.pcap;
+    if (a === 'start') { P.start(hub.epochMs + sim.time * 1000, { video: document.getElementById('pcapVideo')?.checked !== false }); pcapNote = '캡처 시작 — 이후 발행되는 메시지가 패킷으로 기록됩니다'; }
+    else if (a === 'stop') { P.stop(); pcapNote = '캡처 중지 — .pcap으로 저장할 수 있습니다'; }
+    else if (a === 'save') {
+      if (hub.shared) pcapNote = '공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.';
+      else if (!P.stats.packets) pcapNote = '아직 캡처한 패킷이 없습니다. 캡처를 시작하고 시뮬레이션을 잠시 돌린 뒤 저장하세요.';
+      else {
+        const blob = new Blob([P.build()], { type: 'application/vnd.tcpdump.pcap' }), name = `${hub.fileBase()}_mqtt.pcap`, l = document.createElement('a');
+        l.href = URL.createObjectURL(blob); l.download = name; document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(l.href), 5000);
+        pcapNote = `저장: ${name} (${kb(blob.size)}) — Wireshark에서 열면 MQTT로 디코딩됩니다`;
+      }
+    }
+    return renderData();
+  }
   const b = e.target.closest('button[data-fmt]'); if (!b) return;
   if (hub.shared) { dataNote = '공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.'; return renderData(); }
   if (!hub.samples.length) { dataNote = '아직 수집된 데이터가 없습니다. 시뮬레이션을 잠시 돌린 뒤 저장하세요.'; return renderData(); }
@@ -430,19 +495,21 @@ labelRenderer.domElement.addEventListener('pointerup', (e) => {
   ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   // CCTV 전광판 칸을 누르면 그 CCTV 영상 창
-  if (cctvView.group.visible) { const b = ray.intersectObject(cctvView.screen, false)[0]; if (b?.uv) { const id = cctvView.boardCamAt(b.uv); if (id) { openCctv(id); return; } } }
+  if (cctvView.group.visible) { const b = ray.intersectObject(cctvView.screen, false)[0]; if (b?.uv) { const id = cctvView.boardCamAt(b.uv); if (id) { closePopups('cctvPanel'); openCctv(id); return; } } }
   // 로봇 비전 관제 화면의 영상 칸을 누르면 그 로봇을 선택한다
   if (camWall.group.visible) {
     const w = ray.intersectObject(camWall.screen, false)[0];
     if (w?.uv && camWall.list?.length) {
       const col = Math.min(CAM_COLS - 1, Math.floor(w.uv.x * CAM_COLS)), row = w.uv.y > 0.5 ? 0 : 1;
       const f = camWall.list[row * CAM_COLS + col];
-      if (f) { view.selected = f.ref.type === 'cell' ? f.ref.stationId : null; view.selectRobot(f.ref); ui.showRobot(); robotTimer = 1; return; }
+      if (f) { closePopups('detail'); view.selected = f.ref.type === 'cell' ? f.ref.stationId : null; view.selectRobot(f.ref); ui.showRobot(); robotTimer = 1; return; }
     }
   }
   // 로봇(셀 로봇·AMR·AGV·휴머노이드·사족보행)을 누르면 관절·센서 텔레메트리, 설비를 누르면 설비 상세
   const hit = view.pick(ray.intersectObjects(view.pickTargets(), true));
-  if (hit?.type === 'cctv') { openCctv(hit.id); return; }
+  if (hit?.type === 'cctv') { closePopups('cctvPanel'); openCctv(hit.id); return; }
+  if (hit?.type === 'gnb') { closePopups('gnbPanel'); openGnb(hit.id); return; }
+  closePopups('detail');   // 로봇·설비를 누르거나 빈 곳을 누르면 CCTV·기지국 창은 닫는다
   if (hit && hit.type !== 'station') {
     view.selected = hit.type === 'cell' ? hit.stationId : null;
     view.selectRobot(hit); ui.showRobot(); robotTimer = 1;
@@ -453,6 +520,19 @@ labelRenderer.domElement.addEventListener('pointerup', (e) => {
   if (st) { view.selected = hit.id; ui.showDetail(st); }
   else { view.selected = null; ui.hideDetail(); }
 });
+// 팝업 창(로봇·설비 정보, CCTV 영상, 5G 기지국 정보) — 창 바깥을 누르면 닫는다
+// 3D 화면은 누름과 뗌 위치가 같을 때만(드래그 회전·이동은 닫지 않음) 위 pointerup에서 처리하고, 그 밖의 화면(패널·버튼 등)은 누르는 순간 닫는다
+function closePopups(keep = null) {
+  if (keep !== 'detail' && !document.getElementById('detail').classList.contains('hidden')) { view.selected = null; view.selectRobot(null); ui.hideDetail(); }
+  if (keep !== 'cctvPanel' && !cctvPanel.hidden) { cctvPanel.hidden = true; cctvSel = null; }
+  if (keep !== 'gnbPanel' && !gnbPanel.hidden) { gnbPanel.hidden = true; gnbSel = null; view.selectGnb(null); }
+}
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target; if (!(t instanceof Element)) return;
+  if (t === labelRenderer.domElement || labelRenderer.domElement.contains(t) || t === renderer.domElement) return;   // 3D 화면은 pointerup에서
+  const inside = ['detail', 'cctvPanel', 'gnbPanel'].find((id) => document.getElementById(id)?.contains(t));
+  closePopups(inside ?? null);
+}, true);
 ui.onDetailAction = (act, st) => {
   if (act === 'fault') { sim.log('warn', `[시나리오] ${st.name} 고장 주입`, {}); sim.injectFault(st); }
   if (act === 'pm') {
@@ -526,6 +606,45 @@ function renderNetCard() {
     <span>업링크 MQTT ${n(Q.sent)}건 (${(Q.bytes / 1e6).toFixed(1)}MB) → 브로커 도착 ${n(Q.delivered)}건 · 전송 중 ${Q.inflight} · <b class="ok">유실 ${Q.lost}건</b> · 핸드오버 버퍼 포워딩 ${n(Q.fwd)}건</span>
     <span>${STACK}</span>
     <div class="ho">${net.log.slice(0, 8).map((h) => `${[3600, 60, 1].map((d, i) => String(Math.floor((Math.floor(h.t) + 8 * 3600) / d) % (i ? 60 : 24)).padStart(2, '0')).join(':')} ${h.ue} PCI ${h.from} → ${h.to} (${h.rsrpFrom} → ${h.rsrpTo}dBm) · 중단 ${h.ms}ms · 포워딩 ${h.fwd}건 ${h.ok ? '✓' : '✗'}`).join('<br>') || '핸드오버 기록 없음'}</div>`;
+}
+// 5G 기지국을 누르면: PCI·무선 사양·서비스 영역·이웃 셀·접속 단말·업링크·핸드오버 (1초마다 갱신)
+const gnbPanel = document.getElementById('gnbPanel');
+let gnbSel = null, gnbT = 0, gnbPrev = null;
+function openGnb(id) { gnbSel = id; gnbPanel.hidden = false; gnbPrev = null; view.selectGnb(id); renderGnb(); }
+document.getElementById('gnbClose').onclick = () => { gnbPanel.hidden = true; gnbSel = null; view.selectGnb(null); };
+function renderGnb() {
+  const net = sim.net, idx = net?.plan?.cells.findIndex((c) => c.id === gnbSel) ?? -1;
+  if (!net?.on || idx < 0) { gnbPanel.hidden = true; gnbSel = null; view.selectGnb(null); return; }
+  const I = net.cellInfo(idx), c = I.c, S = I.S, n = (v) => Math.round(v).toLocaleString('ko-KR'), t = sim.time;
+  const rate = gnbPrev && t > gnbPrev.t ? ((S.rxB - gnbPrev.b) * 8) / (t - gnbPrev.t) / 1000 : null; gnbPrev = { t, b: S.rxB };
+  const clk = (tt) => [3600, 60, 1].map((d, i) => String(Math.floor((Math.floor(tt) + 8 * 3600) / d) % (i ? 60 : 24)).padStart(2, '0')).join(':');
+  const kinds = {}; for (const u of I.ues) kinds[u.kindLabel] = (kinds[u.kindLabel] ?? 0) + 1;
+  document.getElementById('gnbTitle').textContent = `📶 ${c.id} · PCI ${c.pci}`;
+  document.getElementById('gnbSub').textContent = `5G NR 소형 셀 (gNB) · ${NR.band} · 상태 정상 · 접속 단말 ${I.ues.length}대`;
+  const row = (k, v, cls = '') => `<span>${k}</span><b class="${cls}">${v}</b>`;
+  document.getElementById('gnbBody').innerHTML = `
+    <div class="gnb-sec"><h4>식별 · 무선 사양</h4><div class="gnb-grid">
+      ${row('PCI (물리 셀 ID)', `${c.pci} = 3 × SSS ${c.sss} + PSS ${c.pci % 3}`)}
+      ${row('대역 · 대역폭', `${NR.band} ${NR.fc}GHz (이음5G 특화망) · ${NR.bwMHz}MHz · SCS ${NR.scs}kHz (273 RB)`)}
+      ${row('송신 출력 · 안테나', `${NR.txDbm}dBm · ${NR.gainDbi}dBi (천장 무지향)`)}
+      ${row('설치 위치', `x ${c.x} · z ${c.z} m · 높이 ${c.y}m (천장 브래킷)`)}
+      ${row('핸드오버 설정', `A3 오프셋 ${NR.a3}dB · TTT ${NR.ttt * 1000}ms · Xn 핸드오버 · PDCP 버퍼 포워딩`)}
+    </div></div>
+    <div class="gnb-sec"><h4>서비스 영역 (이 셀이 최강인 영역)</h4><div class="gnb-grid">
+      ${row('면적', `약 ${n(I.area)}m² (2m 격자 ${n(I.area / 4)}지점) · 설계 반경 ${NR.R}m`)}
+      ${row('RSRP 평균 / 최저', `${I.avgRsrp.toFixed(1)} / ${I.minRsrp.toFixed(1)} dBm (설계 ${NR.design})`, I.minRsrp >= NR.design ? 'ok' : 'warn')}
+      ${row('SINR 평균', `${I.avgSinr.toFixed(1)} dB (인접 셀 ${NR.load * 100}% 부하 간섭)`)}
+    </div></div>
+    <div class="gnb-sec"><h4>이웃 셀 ${I.neighbors.length}개</h4><table><tr><th>셀</th><th>PCI</th><th>맞닿은 경계</th><th>PCI mod 3</th><th>핸드오버 →</th></tr>
+      ${I.neighbors.sort((a, b) => b.border - a.border).map((x) => `<tr><td>${x.c.id}</td><td>${x.c.pci}</td><td>${x.border}m</td><td class="${x.conflict ? 'warn' : 'ok'}">${x.conflict ? '같음 (모서리)' : '다름'}</td><td>${x.hoTo}회</td></tr>`).join('')}</table></div>
+    <div class="gnb-sec"><h4>접속 단말 ${I.ues.length}대 ${Object.entries(kinds).map(([k, v]) => `· ${k} ${v}`).join(' ')}</h4><table><tr><th>로봇</th><th>종류</th><th>RSRP</th><th>SINR</th><th>상태</th></tr>
+      ${I.ues.map((u) => `<tr><td>${u.uid ?? u.id}</td><td>${u.kindLabel}</td><td>${u.rsrp.toFixed(1)}</td><td>${u.sinr.toFixed(1)}</td><td>${u.hoUntil >= 0 ? '<span class="warn">핸드오버 진입 중</span>' : '연결'}</td></tr>`).join('') || '<tr><td colspan="5">접속한 단말 없음</td></tr>'}</table></div>
+    <div class="gnb-sec"><h4>업링크 · 핸드오버</h4><div class="gnb-grid">
+      ${row('업링크 수신 (MQTT)', `${n(S.rx)}건 · ${(S.rxB / 1e6).toFixed(1)}MB${rate != null ? ` · 현재 ${rate.toFixed(0)} kbps` : ''}`)}
+      ${row('핸드오버 들어옴 / 나감', `${n(S.hoIn)} / ${n(S.hoOut)}회 · 나가는 핸드오버 실패 ${S.hoFail}회`, S.hoFail ? 'warn' : 'ok')}
+      ${row('접속 단말 업링크', `송신 ${n(I.ues.reduce((a, u) => a + u.sent, 0))} · 도착 ${n(I.ues.reduce((a, u) => a + u.delivered, 0))} · 버퍼 ${I.ues.reduce((a, u) => a + u.buf, 0)} · 유실 ${I.ues.reduce((a, u) => a + u.sent - u.delivered - u.buf, 0)}건`, I.ues.some((u) => u.sent - u.delivered - u.buf) ? 'warn' : 'ok')}
+    </div>
+    <div style="margin-top:4px">${I.log.map((h) => `${clk(h.t)} ${h.ue} PCI ${h.from} → ${h.to} · ${h.rsrpFrom} → ${h.rsrpTo}dBm · 중단 ${h.ms}ms · 포워딩 ${h.fwd}건`).join('<br>') || '최근 핸드오버 없음'}</div></div>`;
 }
 let netT = 0;
 window.__netRefresh = () => { if (!netCard.hidden) renderNetCard(); };
@@ -696,9 +815,11 @@ function frame() {
     llm.update();
   }
   hub.tick(rdt);
+  pcapVideoTick(rdt);
   view.update(rdt, running, speed);
   keyPan(rdt, shiftHeld);
   netT += rdt; if (netT > 1 && !netCard.hidden) { netT = 0; renderNetCard(); }
+  gnbT += rdt; if (gnbT > 1 && gnbSel) { gnbT = 0; renderGnb(); }
   controls.update();
   uiTimer += rdt; screenTimer += rdt;
   if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); gateView.tick(); updateAlarmButtons(); updateCmdUI(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }

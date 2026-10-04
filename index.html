@@ -13,6 +13,10 @@
   <div id="viewport"></div>
   <div id="cctvCard" hidden></div>
   <div id="net5gCard" hidden></div>
+  <section id="gnbPanel" class="gnb-panel" hidden aria-label="5G 기지국 정보">
+    <div class="gnb-head"><div><h3 id="gnbTitle">5G 기지국</h3><small id="gnbSub"></small></div><button type="button" id="gnbClose" title="닫기">✕</button></div>
+    <div id="gnbBody"></div>
+  </section>
   <section id="cctvPanel" class="cc-panel" hidden aria-label="CCTV 영상">
     <div class="cc-head"><div><h3 id="cctvTitle">CCTV</h3><small id="cctvSub"></small></div>
       <span class="cc-ptz"><button type="button" data-cctv="prev" title="이전 카메라">◀ 카메라</button><button type="button" data-cctv="left" title="PTZ 왼쪽">⟲</button><button type="button" data-cctv="right" title="PTZ 오른쪽">⟳</button><button type="button" data-cctv="next" title="다음 카메라">카메라 ▶</button></span>

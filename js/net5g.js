@@ -38,7 +38,13 @@ export function plan5G(sim) {
   const pts = [];
   for (let x = B.x0; x <= B.x1 + 1e-9; x += STEP) for (let z = B.z0; z <= B.z1 + 1e-9; z += STEP) pts.push({ x, z });
   const cands = [];
-  for (let x = -48; x <= 36; x += 4) for (let z = -18; z <= 18; z += 4) if (!ob.some((b) => x > b.x0 - 0.5 && x < b.x1 + 0.5 && z > b.z0 - 0.5 && z < b.z1 + 0.5)) cands.push({ x, y: NR.y, z });
+  // 천장 후보: 설비 위는 피하고, 천장 CCTV 돔과는 CLEAR(2.5m) 이상 떨어뜨린다 (같은 자리에 겹쳐 달지 않음 · 카메라 시야를 가리지 않게)
+  const domes = sim.cctv.cams.filter((c) => c.region === 'inside'), CLEAR = 2.5;
+  for (let x = -48; x <= 36; x += 4) for (let z = -18; z <= 18; z += 4) {
+    if (ob.some((b) => x > b.x0 - 0.5 && x < b.x1 + 0.5 && z > b.z0 - 0.5 && z < b.z1 + 0.5)) continue;
+    if (domes.some((c) => Math.hypot(c.x - x, c.z - z) < CLEAR)) continue;
+    cands.push({ x, y: NR.y, z });
+  }
   const R = cands.map((c) => pts.map((p) => rsrp(c, p, ob).v));
   const ok = (k, i) => R[k][i] >= NR.design && Math.hypot(cands[k].x - pts[i].x, cands[k].z - pts[i].z) <= NR.R;
   const covered = new Uint8Array(pts.length), chosen = [];
@@ -115,6 +121,7 @@ export class Private5G {
     this.log = [];
     if (!this.on) return;
     this.plan = plan5G(sim);
+    this.cellStats = this.plan.cells.map(() => ({ rx: 0, rxB: 0, hoIn: 0, hoOut: 0, hoFail: 0, to: new Map() }));   // 기지국별 업링크 수신·핸드오버 (배치는 캐시 공유라 통계는 시뮬레이션마다 따로)
     const add = (id, uid, kind, pos) => this.ues.push(new UE(this, id, uid, kind, pos));
     for (const c of sim.carriers) add(c.id, c.uid, 'carrier', () => ({ x: c.x, y: UE_Y, z: c.z, m: c }));
     for (const v of sim.vehicles) if (v.kind === 'agv') add(v.id, v.uid, 'agv', () => ({ x: v.x, y: UE_Y, z: v.z, m: v }));
@@ -186,13 +193,14 @@ export class Private5G {
   }
   completeHO(u) {
     const s = this.sim, r = u.hoRec;
-    if (u.F[u.hoTarget] < NR.rlf) { r.ok = false; this.stats.hoFail++; }   // 타깃 셀이 너무 약하면 실패 (재설정)
+    if (u.F[u.hoTarget] < NR.rlf) { r.ok = false; this.stats.hoFail++; this.cellStats[u.hoFrom].hoFail++; }   // 타깃 셀이 너무 약하면 실패 (재설정)
     // 핸드오버 동안 PDCP 버퍼에 쌓인 패킷 → Xn 데이터 포워딩으로 타깃 셀이 순서대로 전달 (유실 없음)
     r.fwd = u.buf; u.fwd += u.buf; this.stats.fwd += u.buf;
     u.maxDelay = Math.max(u.maxDelay, u.hoMs + 4);
     while (u.buf > 0) { u.buf--; u.delivered++; this.stats.delivered++; }
     const back = u.hos[0] && u.hos[0].from === r.to && s.time - u.hos[0].t < 1;
     if (back) { u.pingpong++; this.stats.pingpong++; }
+    this.cellStats[u.hoFrom].hoOut++; this.cellStats[u.hoFrom].to.set(u.hoTarget, (this.cellStats[u.hoFrom].to.get(u.hoTarget) ?? 0) + 1); this.cellStats[u.hoTarget].hoIn++; this.cellStats[u.hoTarget].rx += r.fwd; this.cellStats[u.hoTarget].rxB += r.fwd * 320;
     u.serv = u.hoTarget; u.hoUntil = -1; u.hoTarget = null; u.hoN++; this.stats.ho++; this.stats.hoMs += r.ms;
     u.hos.unshift(r); if (u.hos.length > 20) u.hos.pop();
     this.log.unshift({ ...r, ue: u.uid ?? u.id }); if (this.log.length > 60) this.log.pop();
@@ -203,9 +211,20 @@ export class Private5G {
     if (u.hoUntil >= 0) { u.buf++; return; }
     if (u.F[u.serv] < NR.rlf) { u.buf++; return; }   // 링크가 약하면 재전송 대기 (QoS 1) — 붙으면 보낸다
     u.delivered++; this.stats.delivered++;
+    const cs = this.cellStats[u.serv]; cs.rx++; cs.rxB += bytes;
   }
   // DataHub(AAS → OPC UA → MQTT) 메시지가 이동 로봇에서 나갈 때 — 그 로봇의 5G 모뎀으로 보낸다
   publish(mover, bytes) { const u = this.ueOf(mover); if (u) this.uplink(u, bytes); return u; }
+  // 기지국 한 대의 현재 상태 (기지국을 누르면 나오는 창)
+  cellInfo(idx) {
+    const P = this.plan, c = P.cells[idx], S = this.cellStats[idx];
+    let n = 0, sum = 0, min = Infinity, sinr = 0;
+    P.pts.forEach((p, i) => { if (P.server[i] === idx) { n++; sum += P.best[i]; min = Math.min(min, P.best[i]); sinr += P.sinr[i]; } });
+    const ues = this.ues.filter((u) => (u.hoUntil >= 0 ? u.hoTarget : u.serv) === idx);
+    return { c, S, area: n * 4, avgRsrp: n ? sum / n : NaN, minRsrp: min, avgSinr: n ? sinr / n : NaN, ues,
+      neighbors: c.neighbors.map((k) => ({ c: P.cells[k], border: c.border[k] * 2, conflict: P.cells[k].pci % 3 === c.pci % 3, hoTo: S.to.get(k) ?? 0 })),
+      log: this.log.filter((h) => h.fromId === c.id || h.toId === c.id).slice(0, 8) };
+  }
   summary() {
     const S = this.stats, inflight = this.ues.reduce((a, u) => a + u.buf, 0);
     return { ues: this.ues.length, ho: S.ho, hoFail: S.hoFail, hoOk: S.ho ? (S.ho - S.hoFail) / S.ho : 1, pingpong: S.pingpong, rlf: S.rlf, avgHoMs: S.ho ? S.hoMs / S.ho : 0,

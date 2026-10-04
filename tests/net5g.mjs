@@ -10,6 +10,8 @@ console.log('== 기지국 배치 · PCI');
 for (const [nm, ln] of [['정밀조립Zone 1:1', zoneLine()], ['정밀조립Zone 2:1', zoneLine('2:1')], ['기본 라인', DEFAULT_LINE]]) {
   const s = new Simulation('dark', 1, { line: ln, quiet: true }), p = plan5G(s), S = p.stats;
   check(`${nm}: 음영지역 0곳 (모든 지점 RSRP ≥ ${NR.design}dBm 설계 기준)`, S.holes === 0 && S.design === 1, `기지국 ${p.cells.length}대 · 지점 ${S.points} · 최저 ${S.minRsrp.toFixed(1)}dBm · SINR≥0dB ${(S.sinrOk * 100).toFixed(0)}%`);
+  const domes = s.cctv.cams.filter((c) => c.region === 'inside'), gap = Math.min(...p.cells.map((c) => Math.min(...domes.map((k) => Math.hypot(k.x - c.x, k.z - c.z)))));
+  check(`${nm}: 기지국과 천장 CCTV가 겹치지 않음 (2.5m 이상 떨어짐)`, gap >= 2.5, `최소 간격 ${gap.toFixed(1)}m`);
   const pcis = p.cells.map((c) => c.pci);
   check(`${nm}: PCI 고유(0~1007)`, new Set(pcis).size === pcis.length && pcis.every((v) => v >= 0 && v <= 1007), pcis.join(','));
   const M = S.mod3, long = p.cells.every((c) => c.neighbors.every((n) => c.border[n] < 15 || p.cells[n].pci % 3 !== c.pci % 3));

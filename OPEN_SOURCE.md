@@ -40,7 +40,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 | Anthropic Claude API (모델 `claude-opus-5-5`) | 대화 기반 Agent 해석, 자연어 공정 설계 (API 키가 있을 때만) |
 | https://console.anthropic.com/settings/keys | 설정 화면의 API 키 발급 안내 링크 |
 | 캠틱종합기술원 — https://camtic.or.kr | 로고 이미지 `assets/camtic_logo.png` 출처 |
-| 사용자 제공 이미지 | 도어트림 실물 이미지 `assets/doortrim.png` (부품분류셀 이후 AMR 위 도어트림 표시) |
+| 사용자 제공 이미지 | 도어트림 실물 이미지 `assets/doortrim.png` · e-axle 실물 단면 이미지 `assets/eaxle.png` (부품분류셀 이후 AMR 위 제품 표시) |
 
 - AAS 데이터 안의 `https://admin-shell.io/...`, `https://camtic.or.kr/aas/jin3d/...` 등은 의미 식별자(semanticId·id)이며 실행 중 접속하지 않습니다.
 - 폰트는 외부에서 받지 않고 운영체제 기본 폰트(Apple SD Gothic Neo, 대체 Noto Sans KR·맑은 고딕)를 씁니다.
@@ -58,6 +58,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 | AutomationML / CAEX 3.0 (IEC 62714) | `.aml` 내보내기 |
 | W3C RDF 1.1 Turtle | `.ttl` 내보내기 |
 | IEC 60204-1 (정지 카테고리 0·2) · ISO/TS 15066 (협동 로봇 속도 제한) | 비상정지·보호정지·안전 감속 명령 정의 |
+| libpcap 파일 형식 (tcpdump.org) · IETF RFC 791(IPv4) · RFC 9293(TCP) · OASIS MQTT 3.1.1 | 패킷 덤프 `.pcap` 생성 (`js/pcap.js`, 직접 작성 — Wireshark·tcpdump는 분석용 외부 도구이며 포함하지 않음) |
 | 3GPP TR 38.901 (InF 실내 공장 채널 모델) · TS 38.211 (PCI = 3·SSS + PSS) · TS 38.331 (A3 이벤트·TTT) · TS 38.300 (Xn 핸드오버·PDCP 포워딩) | Private 5G 기지국 배치·PCI·핸드오버 시뮬레이션 (`js/net5g.js`) |
 
 ## 5. 참고한 AI 알고리즘 (모델·가중치는 포함하지 않음 — 출력 형식만 재현)
@@ -74,7 +75,7 @@ CCTV 영상 AI 파이프라인(`js/cctv.js` `AI_MODELS`, `js/cctvview.js`)은 �
 
 ## 6. 직접 작성한 부분
 
-**FACOS(공장 운영 SW) 전체** — 시뮬레이션 엔진, 운영 에이전트, 오케스트레이터, 상위 명령·지시 게이트, 대화 기반 해석기, 출하·입고 트럭·물류 창고·드론, 설비 현황판, VLA 조립 동작(역기구학), VLA 에피소드 기록·zip 데이터셋·학습·배포 파이프라인, AIOS 공장 운영 AI(운영 데이터셋·정책 학습·트윈 검증·오케스트레이터 배포), 로봇 카메라 영상(렌더 타깃), CCTV 사각지대 배치·CCTV 에이전트·전광판·AI 오버레이(위 5절 알고리즘의 출력 형식 재현), Private 5G 기지국 배치·핸드오버 시뮬레이션, AAS·AASX·OPC UA 메시지 생성기, 3D 모델(설비·로봇·트럭·드론 등), 화면 UI는 이 저장소에서 직접 작성했습니다. 외부 3D 모델 파일이나 외부 이미지는 위 로고 외에는 쓰지 않습니다.
+**FACOS(공장 운영 SW) 전체** — 시뮬레이션 엔진, 운영 에이전트, 오케스트레이터, 상위 명령·지시 게이트, 대화 기반 해석기, 출하·입고 트럭·물류 창고·드론, 설비 현황판, VLA 조립 동작(역기구학), VLA 에피소드 기록·zip 데이터셋·학습·배포 파이프라인, AIOS 공장 운영 AI(운영 데이터셋·정책 학습·트윈 검증·오케스트레이터 배포), 로봇 카메라 영상(렌더 타깃), CCTV 사각지대 배치·CCTV 에이전트·전광판·AI 오버레이(위 5절 알고리즘의 출력 형식 재현), Private 5G 기지국 배치·핸드오버 시뮬레이션, MQTT/TCP/IP 패킷 덤프(pcap), AAS·AASX·OPC UA 메시지 생성기, 3D 모델(설비·로봇·트럭·드론 등), 화면 UI는 이 저장소에서 직접 작성했습니다. 외부 3D 모델 파일이나 외부 이미지는 위 로고 외에는 쓰지 않습니다.
 
 FACOS는 공장 운영용 오픈소스 프레임워크(ROS 2·Open-RMF·Eclipse BaSyx·Node-RED 등)를 쓰지 않고 이 저장소에서 직접 작성했습니다. 위 1절 라이브러리는 3D 화면·앱 실행·MQTT 전송·Claude API 호출·첨부 파일 읽기에만 쓰이고, 판단·운영 로직(오케스트레이터·에이전트·셀 게이트·명령 센터·VLA·AIOS·CCTV 에이전트·Private 5G)은 모두 직접 작성한 코드입니다. VLA·AIOS 학습은 신경망이 아니라 규칙 기반 정책 탐색이며, 효과는 시뮬레이션에서 측정한 값입니다.
 

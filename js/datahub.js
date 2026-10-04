@@ -131,6 +131,7 @@ export class DataHub {
     this.noServer = this.shared || !!globalThis.window?.JIN3D_NO_SERVER;   // 정적 웹(GitHub Pages): 발행만 못 하고 저장은 된다
     this.mqtt = { available: this.noServer ? false : null, status: null, sent: 0, failed: 0, lastError: null };
     this.queue = []; this.flushT = 0; this.lastMsg = null;
+    this.pcap = null;   // 패킷 덤프 (js/pcap.js) — 켜져 있으면 발행하는 메시지를 MQTT/TCP/IP 패킷으로도 기록
   }
 
   // 시뮬레이션 시작·재시작 시: 기준 시계와 자산 목록을 새로 만든다
@@ -171,6 +172,7 @@ export class DataHub {
       if (this.publishOn) this.enqueueCommand(rec);
     }
     if (sim.time - this.lastT >= this.interval) this.sample();
+    this.pcap?.tick(this.epochMs + sim.time * 1000);   // MQTT keep-alive (PINGREQ/PINGRESP)
     this.flushT += rdt;
     if (this.flushT > 0.8) { this.flushT = 0; this.flush(); }
   }
@@ -194,6 +196,15 @@ export class DataHub {
   }
 
   // ── OPC UA PubSub (Part 14) JSON NetworkMessage ─────────────────
+  // 패킷 덤프로 보내기: 자산 메시지는 그 자산(이동 로봇은 5G 단말, 설비는 유선 LAN), 이벤트·명령은 FACOS가 발행
+  // 구독: FACOS는 데이터·이벤트·메타데이터·AAS 전부(opcua/json/# · aas/#), 각 자산은 상위 명령 토픽
+  tap(a, topic, body, simT, retain = false, ue = null) {
+    const P = this.pcap; if (!P?.on) return;
+    if (!P.clients.has('FACOS')) P.client('FACOS', 'facos', this.epochMs + simT * 1000 - 50, ['opcua/json/#', 'aas/#']);
+    const cmd = [this.topic('data', 'Commands')];
+    P.publish(a ? { key: a.id, kind: a.mover ? (ue ? '5g' : 'lan') : 'lan', topic, payload: body, tMs: this.epochMs + simT * 1000, retain, subs: cmd, extraMs: ue && ue.hoUntil >= 0 ? (ue.hoUntil - this.sim.time) * 1000 : 0 }
+      : { key: 'FACOS', kind: 'facos', topic, payload: body, tMs: this.epochMs + simT * 1000 });
+  }
   count(payload) { this.msgs++; this.bytes += payload.length; return payload; }
   topic(kind, writer) { return `opcua/json/${kind}/${PUBLISHER_ID}/${WRITER_GROUP}/${writer}`; }
   enqueueData(s) {
@@ -214,7 +225,8 @@ export class DataHub {
       const body = this.count(JSON.stringify(msg));
       this.queue.push({ topic: this.topic('data', a.id), payload: body });
       // 이동 로봇의 AAS·OPC UA 메시지는 그 로봇의 5G 모뎀 → Private 5G(업링크) → UPF → MQTT 브로커로 간다
-      if (a.mover) this.sim.net?.publish(a.mover, body.length + 60);   // + MQTT 고정·가변 헤더·토픽
+      const ue = a.mover ? this.sim.net?.publish(a.mover, body.length + 60) : null;   // + MQTT 고정·가변 헤더·토픽
+      this.tap(a, this.topic('data', a.id), body, s.simT, false, ue);
     }
   }
   enqueueEvent(ev) {
@@ -225,7 +237,9 @@ export class DataHub {
         Payload: { EventId: uuid(), EventType: `ns=1;s=Jin3D.${ev.level}`, SourceName: ev.source, Time: ev.t, Severity: { alert: 800, warn: 600, plan: 400, act: 300, ok: 200, info: 100, llm: 300, chat: 100 }[ev.level] ?? 100, Message: { Text: `${ev.title}${ev.text ? ' — ' + ev.text : ''}`, Locale: 'ko-KR' } },
       }],
     };
-    this.queue.push({ topic: this.topic('data', 'Events'), payload: this.count(JSON.stringify(msg)) });
+    const body = this.count(JSON.stringify(msg));
+    this.queue.push({ topic: this.topic('data', 'Events'), payload: body });
+    this.tap(null, this.topic('data', 'Events'), body, ev.simT ?? this.sim.time);
   }
   // 상위 명령 메시지: 명령 상태가 바뀔 때마다 한 건 (오케스트레이터 → 셀 컨트롤러 명령과 셀의 ACK·완료 보고)
   enqueueCommand(r) {
@@ -238,7 +252,9 @@ export class DataHub {
       }],
     };
     this.lastCmd = { topic: this.topic('data', 'Commands'), msg };
-    this.queue.push({ topic: this.topic('data', 'Commands'), payload: this.count(JSON.stringify(msg)) });
+    const body = this.count(JSON.stringify(msg));
+    this.queue.push({ topic: this.topic('data', 'Commands'), payload: body });
+    this.tap(null, this.topic('data', 'Commands'), body, r.simT ?? this.sim.time);
   }
   // DataSetMetaData (retain): 필드 이름·타입·단위와 AAS 의미 정보(semanticId·서브모델 id·idShort 경로)
   enqueueMetadata() {

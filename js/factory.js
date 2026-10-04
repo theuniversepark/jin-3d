@@ -225,32 +225,46 @@ function makeAGV(i) {
 }
 
 // 조립 대상물 운반 AMR — 리프트 위 지그 상판이 컨베이어 높이(BELT_Y)에 맞춰져 있다. 길이 방향이 로컬 +z
-// 도어트림 실물 이미지 (assets/doortrim.png) — 흰 바탕은 가장자리에서부터 채워 투명하게(부품 안쪽의 밝은 부분은 그대로)
-let DT_TEX = null;
-function doortrimTex() {
-  if (DT_TEX) return DT_TEX;
-  const N = 512, cv = document.createElement('canvas'); cv.width = cv.height = N;
-  DT_TEX = new THREE.CanvasTexture(cv); DT_TEX.colorSpace = THREE.SRGBColorSpace; DT_TEX.anisotropy = 8;
+// 제품 실물 이미지 (assets/doortrim.png · assets/eaxle.png) — 흰 바탕은 가장자리에서부터 채워 투명하게(부품 안쪽의 밝은 부분은 그대로)
+const IMG_TEX = new Map();
+function productTex(path, w, h) {
+  if (IMG_TEX.has(path)) return IMG_TEX.get(path);
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8; IMG_TEX.set(path, tex);
   const img = new Image();
   img.onload = () => {
-    const g = cv.getContext('2d'); g.drawImage(img, 0, 0, N, N);
-    const d = g.getImageData(0, 0, N, N), a = d.data, seen = new Uint8Array(N * N), stack = [];
+    const g = cv.getContext('2d'); g.drawImage(img, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h), a = d.data, seen = new Uint8Array(w * h), stack = [];
     const white = (i) => { const r = a[i * 4], gg = a[i * 4 + 1], b = a[i * 4 + 2]; return r > 226 && gg > 226 && b > 226 && Math.max(r, gg, b) - Math.min(r, gg, b) < 24; };
-    for (let k = 0; k < N; k++) stack.push(k, (N - 1) * N + k, k * N, k * N + N - 1);
-    while (stack.length) { const i = stack.pop(); if (seen[i] || !white(i)) continue; seen[i] = 1; a[i * 4 + 3] = 0; const x = i % N, y = (i / N) | 0; if (x > 0) stack.push(i - 1); if (x < N - 1) stack.push(i + 1); if (y > 0) stack.push(i - N); if (y < N - 1) stack.push(i + N); }
-    g.putImageData(d, 0, 0); DT_TEX.needsUpdate = true;
+    for (let k = 0; k < w; k++) stack.push(k, (h - 1) * w + k);
+    for (let k = 0; k < h; k++) stack.push(k * w, k * w + w - 1);
+    while (stack.length) { const i = stack.pop(); if (seen[i] || !white(i)) continue; seen[i] = 1; a[i * 4 + 3] = 0; const x = i % w, y = (i / w) | 0; if (x > 0) stack.push(i - 1); if (x < w - 1) stack.push(i + 1); if (y > 0) stack.push(i - w); if (y < h - 1) stack.push(i + w); }
+    g.putImageData(d, 0, 0); tex.needsUpdate = true;
   };
-  img.src = 'assets/doortrim.png';
-  return DT_TEX;
+  img.src = path;
+  return tex;
 }
-function makeDoortrimPlate() {
-  const g = new THREE.Group(), S = 0.8, tex = doortrimTex();   // AMR 지그 상판(1.1 × 0.8m) 짧은 변에 맞춘 0.8m 정사각 (이미지 비율 그대로)
-  const top = put(new THREE.Mesh(new THREE.PlaneGeometry(S, S), new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, roughness: 0.55, metalness: 0.05 })), 0, 0.06, 0, g);
+// 이미지 판: 위면에 실물 이미지, 아래로 어두운 판을 겹쳐 두께감 (W × D, 두께 = layers × step)
+function makeImagePlate(tex, W, D, layers, step) {
+  const g = new THREE.Group(), top0 = 0.02 + layers * step;
+  const top = put(new THREE.Mesh(new THREE.PlaneGeometry(W, D), new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, roughness: 0.5, metalness: 0.1 })), 0, top0, 0, g);
   top.rotation.x = -Math.PI / 2; top.castShadow = true;
-  for (let k = 1; k <= 3; k++) {   // 두께감: 아래로 겹친 어두운 판 (트림 패널 약 5cm)
-    const m = put(new THREE.Mesh(new THREE.PlaneGeometry(S, S), new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, color: 0x4a4650, roughness: 0.8 })), 0, 0.06 - k * 0.016, 0, g);
+  for (let k = 1; k <= layers; k++) {
+    const m = put(new THREE.Mesh(new THREE.PlaneGeometry(W, D), new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, color: 0x4a4650, roughness: 0.8 })), 0, top0 - k * step, 0, g);
     m.rotation.x = -Math.PI / 2;
   }
+  g.userData.top = top0;
+  return g;
+}
+// 도어트림: AMR 지그 상판(1.1 × 0.8m) 짧은 변에 맞춘 0.8m 정사각 (이미지 비율 그대로), 트림 패널 약 5cm
+function makeDoortrimPlate() { return makeImagePlate(productTex('assets/doortrim.png', 512, 512), 0.8, 0.8, 3, 0.016); }
+// e-axle: 세로로 긴 단면 이미지(1:2)를 AMR 진행 방향(긴 변 1.1m)으로 눕혀 1.04 × 0.52m, 하우징 두께감 약 12cm. 체결 후 볼트 표시
+function makeEaxlePlate() {
+  const g = new THREE.Group(), p = makeImagePlate(productTex('assets/eaxle.png', 256, 512), 0.52, 1.04, 6, 0.02);
+  p.rotation.y = Math.PI / 2; g.add(p);
+  const bolts = put(new THREE.Group(), 0, p.userData.top + 0.02, 0, g);
+  for (const sx of [-0.44, 0.44]) for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; put(cyl(0.022, 0.022, 0.04, MAT.bolt, 6), sx + Math.cos(a) * 0.07, 0, Math.sin(a) * 0.07, bolts); }
+  g.userData.bolts = bolts;
   return g;
 }
 function makeCarrierAMR() {
@@ -1256,6 +1270,7 @@ export class FactoryView {
     this.netLeds = [];
     for (const c of plan.cells) {
       const cg = put(new THREE.Group(), c.x, 0, c.z, g); cg.userData.gnbId = c.id;
+      put(new THREE.Mesh(new THREE.SphereGeometry(0.8, 8, 6), new THREE.MeshBasicMaterial({ visible: false })), 0, c.y, 0, cg);   // 누르기 쉬운 선택 영역
       put(cyl(0.035, 0.035, 8 - (c.y + 0.2), MAT.steel, 6), 0, (8 + c.y + 0.2) / 2, 0, cg);   // 천장 브래킷
       put(box(0.55, 0.32, 0.38, body), 0, c.y + 0.05, 0, cg);                                   // 무선 유닛 (RU)
       for (const sd of [-1, 1]) put(box(0.08, 0.42, 0.16, ant), sd * 0.2, c.y - 0.28, 0, cg);    // 안테나
@@ -1278,6 +1293,15 @@ export class FactoryView {
     this.netLinks.frustumCulled = false;
     for (const sp of g.children) sp.traverse?.((o) => { if (o.userData.netLabel) o.visible = !!this.netOn; });
     g.traverse((o) => (o.castShadow = false));
+  }
+  // 선택한 기지국 표시: 바닥 링 + 서비스 영역 테두리 원(셀 반경)
+  selectGnb(id) {
+    if (this.gnbSel) { this.root.remove(this.gnbSel); this.gnbSel = null; }
+    const c = this.sim?.net?.plan?.cells.find((x) => x.id === id); if (!c) return;
+    const g = this.gnbSel = put(new THREE.Group(), c.x, 0, c.z, this.root);
+    const m1 = put(new THREE.Mesh(new THREE.RingGeometry(0.9, 1.15, 40), new THREE.MeshBasicMaterial({ color: 0xb89bff, transparent: true, opacity: 0.9, depthWrite: false, side: THREE.DoubleSide })), 0, 0.07, 0, g); m1.rotation.x = -Math.PI / 2;
+    const m2 = put(new THREE.Mesh(new THREE.RingGeometry(NR.R - 0.15, NR.R, 96), new THREE.MeshBasicMaterial({ color: 0xb89bff, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide })), 0, 0.07, 0, g); m2.rotation.x = -Math.PI / 2;
+    put(cyl(0.02, 0.02, c.y - 0.4, emis(0xb89bff, 2), 8), 0, (c.y - 0.4) / 2, 0, g);
   }
   setNetMap(on) { this.netOn = on; if (this.netMap) this.netMap.visible = on; this.netG?.traverse((o) => { if (o.userData.netLabel) o.visible = on; }); }
   updateNetLinks() {
@@ -1752,6 +1776,7 @@ export class FactoryView {
         if (u.robotIdx != null && u.stationId) return { type: 'cell', stationId: u.stationId, idx: u.robotIdx };
         if (u.moverId) return { type: 'mover', id: u.moverId };
         if (u.cctvId) return { type: 'cctv', id: u.cctvId };
+        if (u.gnbId) return { type: 'gnb', id: u.gnbId };
         if (u.itemId != null) {
           const it = [...this.sim.conveyors.flatMap((c) => c.items.map((e) => e.item)), ...this.sim.processing.map((st) => st.item)].find((x) => x?.id === u.itemId);
           if (it?.carrier) return { type: 'mover', id: it.carrier.id };
@@ -1763,7 +1788,7 @@ export class FactoryView {
     return null;
   }
   pickTargets() {
-    return [...this.stationViews.map((s) => s.group), this.dyn, ...(this.cctvG ? [this.cctvG] : [])];
+    return [...this.stationViews.map((s) => s.group), this.dyn, ...(this.cctvG ? [this.cctvG] : []), ...(this.netG?.visible ? [this.netG] : [])];
   }
   selectRobot(ref) {
     this.telemetry = ref ? new RobotTelemetry(this, ref) : null;
@@ -1862,17 +1887,18 @@ export class FactoryView {
       for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; put(cyl(0.035, 0.035, 0.06, MAT.bolt, 6), 0.03, Math.cos(a) * 0.22, Math.sin(a) * 0.22, bolts).rotation.z = Math.PI / 2; }
       const amr = makeCarrierAMR(); amr.position.y = -BELT_Y; amr.rotation.y = Math.PI / 2; g.add(amr);
       const dtImg = makeDoortrimPlate(); g.add(dtImg);   // 도어트림 실물 이미지 판 (부품분류셀부터)
-      g.userData = { base, part, carton, tag, panel, arm, clips, housing, bolts, amr, dtImg };
+      const eaImg = makeEaxlePlate(); g.add(eaImg);      // e-axle 실물 이미지 판 (부품분류셀부터)
+      g.userData = { base, part, carton, tag, panel, arm, clips, housing, bolts, amr, dtImg, eaImg };
       this.dyn.add(g);
     }
     g.visible = true;
     return g;
   }
   styleItem(g, item, inSort = false) {
-    const { base, part, carton, tag, panel, arm, clips, housing, bolts, amr, dtImg } = g.userData;
+    const { base, part, carton, tag, panel, arm, clips, housing, bolts, amr, dtImg, eaImg } = g.userData;
     amr.visible = !!item.carrier;
     const dt = item.product === 'doortrim', ea = item.product === 'eaxle';
-    dtImg.visible = false; clips.position.y = 0.46;
+    dtImg.visible = false; eaImg.visible = false; clips.position.y = 0.46;
     panel.visible = dt && !!item.assembled; arm.visible = dt && !!item.assembled; clips.visible = dt && !!item.pressed;
     housing.visible = ea && !!item.assembled; bolts.visible = ea && !!item.fastened;
     if (item.scrap) {   // 불량품을 빼낸 빈 AMR
@@ -1893,6 +1919,13 @@ export class FactoryView {
       carton.visible = false; part.visible = false; base.visible = false; panel.visible = false; arm.visible = false; dtImg.visible = true;
       clips.position.y = 0.08;   // 압입 클립은 이미지 판 위에
       tag.visible = !!item.inspected; tag.position.y = 0.12;
+      return;
+    }
+    if (ea && (item.sorted || inSort)) {
+      // e-axle: 부품분류셀부터 원통 하우징·박스 대신 실물 단면 이미지 판 (체결 후 양 끝 플랜지 볼트 표시)
+      carton.visible = false; part.visible = false; base.visible = false; housing.visible = false; bolts.visible = false; eaImg.visible = true;
+      eaImg.userData.bolts.visible = !!item.fastened;
+      tag.visible = !!item.inspected; tag.position.y = 0.2;
       return;
     }
     if (item.product) {
