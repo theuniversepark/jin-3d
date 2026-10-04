@@ -40,6 +40,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 | Anthropic Claude API (모델 `claude-opus-5-5`) | 대화 기반 Agent 해석, 자연어 공정 설계 (API 키가 있을 때만) |
 | https://console.anthropic.com/settings/keys | 설정 화면의 API 키 발급 안내 링크 |
 | 캠틱종합기술원 — https://camtic.or.kr | 로고 이미지 `assets/camtic_logo.png` 출처 |
+| 사용자 제공 이미지 | 도어트림 실물 이미지 `assets/doortrim.png` (부품분류셀 이후 AMR 위 도어트림 표시) |
 
 - AAS 데이터 안의 `https://admin-shell.io/...`, `https://camtic.or.kr/aas/jin3d/...` 등은 의미 식별자(semanticId·id)이며 실행 중 접속하지 않습니다.
 - 폰트는 외부에서 받지 않고 운영체제 기본 폰트(Apple SD Gothic Neo, 대체 Noto Sans KR·맑은 고딕)를 씁니다.

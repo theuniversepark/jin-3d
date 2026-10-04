@@ -225,6 +225,34 @@ function makeAGV(i) {
 }
 
 // 조립 대상물 운반 AMR — 리프트 위 지그 상판이 컨베이어 높이(BELT_Y)에 맞춰져 있다. 길이 방향이 로컬 +z
+// 도어트림 실물 이미지 (assets/doortrim.png) — 흰 바탕은 가장자리에서부터 채워 투명하게(부품 안쪽의 밝은 부분은 그대로)
+let DT_TEX = null;
+function doortrimTex() {
+  if (DT_TEX) return DT_TEX;
+  const N = 512, cv = document.createElement('canvas'); cv.width = cv.height = N;
+  DT_TEX = new THREE.CanvasTexture(cv); DT_TEX.colorSpace = THREE.SRGBColorSpace; DT_TEX.anisotropy = 8;
+  const img = new Image();
+  img.onload = () => {
+    const g = cv.getContext('2d'); g.drawImage(img, 0, 0, N, N);
+    const d = g.getImageData(0, 0, N, N), a = d.data, seen = new Uint8Array(N * N), stack = [];
+    const white = (i) => { const r = a[i * 4], gg = a[i * 4 + 1], b = a[i * 4 + 2]; return r > 226 && gg > 226 && b > 226 && Math.max(r, gg, b) - Math.min(r, gg, b) < 24; };
+    for (let k = 0; k < N; k++) stack.push(k, (N - 1) * N + k, k * N, k * N + N - 1);
+    while (stack.length) { const i = stack.pop(); if (seen[i] || !white(i)) continue; seen[i] = 1; a[i * 4 + 3] = 0; const x = i % N, y = (i / N) | 0; if (x > 0) stack.push(i - 1); if (x < N - 1) stack.push(i + 1); if (y > 0) stack.push(i - N); if (y < N - 1) stack.push(i + N); }
+    g.putImageData(d, 0, 0); DT_TEX.needsUpdate = true;
+  };
+  img.src = 'assets/doortrim.png';
+  return DT_TEX;
+}
+function makeDoortrimPlate() {
+  const g = new THREE.Group(), S = 0.8, tex = doortrimTex();   // AMR 지그 상판(1.1 × 0.8m) 짧은 변에 맞춘 0.8m 정사각 (이미지 비율 그대로)
+  const top = put(new THREE.Mesh(new THREE.PlaneGeometry(S, S), new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, roughness: 0.55, metalness: 0.05 })), 0, 0.06, 0, g);
+  top.rotation.x = -Math.PI / 2; top.castShadow = true;
+  for (let k = 1; k <= 3; k++) {   // 두께감: 아래로 겹친 어두운 판 (트림 패널 약 5cm)
+    const m = put(new THREE.Mesh(new THREE.PlaneGeometry(S, S), new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, color: 0x4a4650, roughness: 0.8 })), 0, 0.06 - k * 0.016, 0, g);
+    m.rotation.x = -Math.PI / 2;
+  }
+  return g;
+}
 function makeCarrierAMR() {
   const g = new THREE.Group();
   put(box(0.95, 0.3, 1.45, MAT.white), 0, 0.22, 0, g);
@@ -1833,16 +1861,18 @@ export class FactoryView {
       put(cyl(0.3, 0.3, 0.05, MAT.housing, 18), 0, 0, 0, bolts).rotation.z = Math.PI / 2;
       for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; put(cyl(0.035, 0.035, 0.06, MAT.bolt, 6), 0.03, Math.cos(a) * 0.22, Math.sin(a) * 0.22, bolts).rotation.z = Math.PI / 2; }
       const amr = makeCarrierAMR(); amr.position.y = -BELT_Y; amr.rotation.y = Math.PI / 2; g.add(amr);
-      g.userData = { base, part, carton, tag, panel, arm, clips, housing, bolts, amr };
+      const dtImg = makeDoortrimPlate(); g.add(dtImg);   // 도어트림 실물 이미지 판 (부품분류셀부터)
+      g.userData = { base, part, carton, tag, panel, arm, clips, housing, bolts, amr, dtImg };
       this.dyn.add(g);
     }
     g.visible = true;
     return g;
   }
-  styleItem(g, item) {
-    const { base, part, carton, tag, panel, arm, clips, housing, bolts, amr } = g.userData;
+  styleItem(g, item, inSort = false) {
+    const { base, part, carton, tag, panel, arm, clips, housing, bolts, amr, dtImg } = g.userData;
     amr.visible = !!item.carrier;
     const dt = item.product === 'doortrim', ea = item.product === 'eaxle';
+    dtImg.visible = false; clips.position.y = 0.46;
     panel.visible = dt && !!item.assembled; arm.visible = dt && !!item.assembled; clips.visible = dt && !!item.pressed;
     housing.visible = ea && !!item.assembled; bolts.visible = ea && !!item.fastened;
     if (item.scrap) {   // 불량품을 빼낸 빈 AMR
@@ -1856,6 +1886,13 @@ export class FactoryView {
       part.visible = false; base.visible = false; carton.visible = true;
       carton.material = dt ? MAT.carton : MAT.crate;
       tag.visible = true; tag.position.y = 0.61;
+      return;
+    }
+    if (dt && (item.sorted || inSort)) {
+      // 도어트림: 부품분류셀부터 박스 대신 실물 이미지 판 (조립·압입 후에도 같은 판, 압입 클립 표시)
+      carton.visible = false; part.visible = false; base.visible = false; panel.visible = false; arm.visible = false; dtImg.visible = true;
+      clips.position.y = 0.08;   // 압입 클립은 이미지 판 위에
+      tag.visible = !!item.inspected; tag.position.y = 0.12;
       return;
     }
     if (item.product) {
@@ -1876,12 +1913,12 @@ export class FactoryView {
 
   syncItems() {
     const sim = this.sim, seen = new Set();
-    const place = (item, x, y = BELT_Y, z = 0, yaw = 0) => {
+    const place = (item, x, y = BELT_Y, z = 0, yaw = 0, inSort = false) => {
       let g = this.itemMeshes.get(item.id);
       if (!g) { g = this.getItemMesh(); this.itemMeshes.set(item.id, g); }
       seen.add(item.id);
       g.userData.itemId = item.id;
-      this.styleItem(g, item);
+      this.styleItem(g, item, inSort);
       g.position.set(x, y, z);
       g.rotation.y = yaw;
     };
@@ -1895,7 +1932,7 @@ export class FactoryView {
       const q = { x: from.x + (st.x - from.x) * k, z: from.z + (st.z - from.z) * k };
       let y = BELT_Y;
       if (st.state === 'BUSY' && (st.type === 'cnc' || st.type === 'press')) y += Math.sin(this.time * 60) * 0.006;
-      place(st.item, q.x, y, q.z);
+      place(st.item, q.x, y, q.z, 0, st.type === 'sort');
     }
     for (const [id, g] of this.itemMeshes) if (!seen.has(id)) { g.visible = false; this.itemPool.push(g); this.itemMeshes.delete(id); }
   }
