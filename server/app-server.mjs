@@ -8,6 +8,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { runAgentTurn, MODEL } from './llm-agent.mjs';
 import { designLine } from './line-designer.mjs';
 import { startMqtt, mqttStatus, mqttPublish } from './mqtt-gateway.mjs';
+import { ffmpegInfo, queueConvert, convertClip } from './video-convert.mjs';
 import { odooStatus, odooConfig, odooSync, odooReset } from './odoo-gateway.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -54,6 +55,32 @@ function listEpisodes(res) {
 // CCTV 자동 녹화(NVR) 구간 저장소 — POST /api/cctv?id=run-..._cctv_0001&ext=webm|json → data/cctv/<id>.<ext>
 // 보관 기간: 구간 파일이 576개(5분 구간 약 48시간)를 넘으면 오래된 것부터 지운다
 const CCTV_KEEP = 576;
+// 오래된 구간 지우기: 영상(WebM·MP4) · 색인 · 변환 결과 · 카메라별 MP4 폴더
+// MP4(전체 + 카메라별)는 더 짧게 보관: 144구간(5분 구간 약 12시간, JIN3D_MP4_KEEP으로 변경) — 원본 WebM은 576구간
+const MP4_KEEP = Number(process.env.JIN3D_MP4_KEEP) || 144;
+function pruneMp4(dir) {
+  const mp4s = fs.readdirSync(dir).filter((f) => f.endsWith('.mp4.json')).map((f) => ({ id: f.replace(/\.mp4\.json$/, ''), t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.t - b.t);
+  for (const m of mp4s.slice(0, Math.max(0, mp4s.length - MP4_KEEP))) { for (const f of [`${m.id}.mp4`, `${m.id}.mp4.json`]) fs.rmSync(path.join(dir, f), { force: true }); fs.rmSync(path.join(dir, m.id), { recursive: true, force: true }); }
+}
+function dropSegment(dir, id) {
+  for (const f of [`${id}.webm`, `${id}.json`, `${id}.mp4`, `${id}.mp4.json`]) fs.rmSync(path.join(dir, f), { force: true });
+  fs.rmSync(path.join(dir, id), { recursive: true, force: true });
+}
+// GET /api/convert?kind=robotcam|cctv&id=<구간> → MP4 변환(전체 + 카메라별)이 끝날 때까지 기다렸다가 결과
+async function convertApi(res, url) {
+  const kind = url.searchParams.get('kind'), id = url.searchParams.get('id') ?? '';
+  if (!['robotcam', 'cctv'].includes(kind) || !SAFE.test(id)) return send(res, 400, { error: 'kind·id 형식 오류' });
+  if (!ffmpegInfo().available) return send(res, 503, { error: 'ffmpeg 없음' });
+  try { return send(res, 200, await queueConvert(path.join(DATA_DIR(), kind), id)); } catch (e) { return send(res, 500, { error: e.message }); }
+}
+// POST /api/clip-mp4?fps=8 (본문: WebM) → MP4 (CCTV 정보 창 개별 녹화)
+async function clipMp4(req, res, url) {
+  if (!ffmpegInfo().available) return send(res, 503, { error: 'ffmpeg 없음' });
+  try {
+    const buf = await readRaw(req, 200 * 1024 * 1024), mp4 = await convertClip(buf, Math.min(30, Math.max(1, Number(url.searchParams.get('fps')) || 8)));
+    res.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': mp4.length }); res.end(mp4);
+  } catch (e) { return send(res, 500, { error: e.message }); }
+}
 async function saveCctv(req, res, url) {
   const id = url.searchParams.get('id') ?? '', ext = url.searchParams.get('ext') ?? 'webm';
   if (!SAFE.test(id) || !['webm', 'json'].includes(ext)) return send(res, 400, { error: 'id·ext 형식 오류' });
@@ -63,7 +90,8 @@ async function saveCctv(req, res, url) {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${id}.${ext}`), buf);
     const vids = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')).map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.t - b.t);
-    for (const v of vids.slice(0, Math.max(0, vids.length - CCTV_KEEP))) { fs.rmSync(path.join(dir, v.f), { force: true }); fs.rmSync(path.join(dir, v.f.replace(/\.webm$/, '.json')), { force: true }); }
+    for (const v of vids.slice(0, Math.max(0, vids.length - CCTV_KEEP))) dropSegment(dir, v.f.replace(/\.webm$/, ''));
+    if (ext === 'json' && ffmpegInfo().available) queueConvert(dir, id).then(() => pruneMp4(dir)).catch(() => {});   // 색인까지 받으면 MP4로 변환 (전체 + 카메라별)
     return send(res, 200, { ok: true, bytes: buf.length });
   } catch (e) { return send(res, 400, { error: e.message }); }
 }
@@ -75,7 +103,8 @@ async function saveRobotcam(req, res, url) {
     const buf = await readRaw(req, 96 * 1024 * 1024), dir = path.join(DATA_DIR(), 'robotcam');
     fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, `${id}.${ext}`), buf);
     const vids = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')).map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.t - b.t);
-    for (const v of vids.slice(0, Math.max(0, vids.length - CCTV_KEEP))) { fs.rmSync(path.join(dir, v.f), { force: true }); fs.rmSync(path.join(dir, v.f.replace(/\.webm$/, '.json')), { force: true }); }
+    for (const v of vids.slice(0, Math.max(0, vids.length - CCTV_KEEP))) dropSegment(dir, v.f.replace(/\.webm$/, ''));
+    if (ext === 'json' && ffmpegInfo().available) queueConvert(dir, id).then(() => pruneMp4(dir)).catch(() => {});   // 색인까지 받으면 MP4로 변환 (전체 + 카메라별)
     return send(res, 200, { ok: true, bytes: buf.length });
   } catch (e) { return send(res, 400, { error: e.message }); }
 }
@@ -86,11 +115,12 @@ function listDir(res, sub) {
 }
 // GET /videos/(cctv|robotcam)/<파일>.webm|json → 저장한 영상 파일 (AAS 영상 링크가 가리키는 주소)
 function serveVideo(res, url) {
-  const m = url.pathname.match(/^\/videos\/(cctv|robotcam)\/([A-Za-z0-9_.-]{1,80})\.(webm|json)$/);
-  if (!m || !SAFE.test(m[2])) return send(res, 404, { error: 'not found' });
-  const f = path.join(DATA_DIR(), m[1], `${m[2]}.${m[3]}`);
+  // /videos/<kind>/<구간>.(webm|mp4|json) 또는 카메라별 /videos/<kind>/<구간>/<로봇_카메라>.mp4
+  const m = url.pathname.match(/^\/videos\/(cctv|robotcam)\/(?:([A-Za-z0-9_.-]{1,64})\/)?([A-Za-z0-9_.-]{1,80})\.(webm|json|mp4)$/);
+  if (!m || (m[2] && !SAFE.test(m[2])) || !/^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(m[3]) || m[3].includes('..')) return send(res, 404, { error: 'not found' });
+  const f = path.join(DATA_DIR(), m[1], ...(m[2] ? [m[2]] : []), `${m[3]}.${m[4]}`);
   if (!fs.existsSync(f)) return send(res, 404, { error: 'not found' });
-  res.writeHead(200, { 'Content-Type': m[3] === 'webm' ? 'video/webm' : 'application/json', 'Content-Length': fs.statSync(f).size, 'Cache-Control': 'no-store' });
+  res.writeHead(200, { 'Content-Type': { webm: 'video/webm', mp4: 'video/mp4', json: 'application/json' }[m[4]], 'Content-Length': fs.statSync(f).size, 'Cache-Control': 'no-store' });
   fs.createReadStream(f).pipe(res);
 }
 // GET /api/cctv → 저장된 녹화 구간 수·용량
@@ -191,12 +221,14 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
   await startMqtt();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    if (url.pathname === '/api/status') return send(res, 200, { llm: hasApiKey(), model: MODEL, episodes: true, aios: true, cctv: true, robotcam: true, dataDir: DATA_DIR() });
+    if (url.pathname === '/api/status') return send(res, 200, { llm: hasApiKey(), model: MODEL, episodes: true, aios: true, cctv: true, robotcam: true, dataDir: DATA_DIR(), ffmpeg: ffmpegInfo() });
     if (url.pathname === '/api/cctv' && req.method === 'POST') return saveCctv(req, res, url);
     if (url.pathname === '/api/cctv') return listCctv(res);
     if (url.pathname === '/api/robotcam' && req.method === 'POST') return saveRobotcam(req, res, url);
     if (url.pathname === '/api/robotcam') return listDir(res, 'robotcam');
     if (url.pathname.startsWith('/videos/')) return serveVideo(res, url);
+    if (url.pathname === '/api/convert') return convertApi(res, url);
+    if (url.pathname === '/api/clip-mp4' && req.method === 'POST') return clipMp4(req, res, url);
     if (url.pathname === '/api/episodes' && req.method === 'POST') return saveEpisode(req, res, url);
     if (url.pathname === '/api/episodes') return listEpisodes(res);
     if (url.pathname === '/api/aios' && req.method === 'POST') return saveAios(req, res, url);

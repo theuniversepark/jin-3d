@@ -64,8 +64,30 @@ export class CCTVRecorder {
   async flush() { const seg = this.seg; if (!seg) return null; this.stopSegment(); await seg.done; return seg; }
   // AAS(공장 자산)용 영상 링크: 구간마다 전체 분할 영상 하나 + 카메라 배치 색인
   videos() {
-    return this.segs.map((s) => ({ segment: s.id, file: `${s.id}.webm`, camera: 'cctv_all', label: `CCTV ${s.cams}대 전체 분할 (칸 = 카메라, 색인 JSON)`, rect: null, start: s.iso0, end: s.iso1, fps: REC.fps,
-      stored: !!s.stored, url: s.stored ? `${location.origin}/videos/cctv/${s.id}.webm` : null, localPath: s.stored && this.dir ? `${this.dir}/${s.id}.webm` : `${s.id}.webm`, index: `${s.id}.json`, blob: s.blob }));
+    const o = location.origin, out = [];
+    for (const s of this.segs) {
+      const base = { segment: s.id, file: `${s.id}.webm`, start: s.iso0, end: s.iso1, fps: REC.fps, stored: !!s.stored, index: `${s.id}.json`, blob: s.blob,
+        url: s.stored ? `${o}/videos/cctv/${s.id}.webm` : null, localPath: s.stored && this.dir ? `${this.dir}/${s.id}.webm` : `${s.id}.webm` };
+      out.push({ ...base, camera: 'cctv_all', label: `CCTV ${s.cams}대 전체 분할 (칸 = 카메라, 색인 JSON)`, rect: null, ...(s.mp4 ? { mp4Url: `${o}/videos/cctv/${s.id}.mp4`, mp4Path: this.dir ? `${this.dir}/${s.id}.mp4` : `${s.id}.mp4` } : {}) });
+      // ffmpeg로 잘라 낸 카메라별 MP4
+      for (const c of s.mp4?.cameras ?? []) out.push({ ...base, blob: null, camera: c.robot, label: `${c.robot} · ${c.label}`, rect: s.index.find((x) => x.id === c.robot)?.rect ?? null,
+        mp4Url: `${o}/videos/cctv/${c.file}`, mp4Path: this.dir ? `${this.dir}/${c.file}` : c.file });
+    }
+    return out;
+  }
+  async convertAll() {
+    if (!this.server || !this.ffmpeg) return 0;
+    let n = 0;
+    for (const s of this.segs) { if (!s.stored || s.mp4) continue; try { const r = await fetch(`/api/convert?kind=cctv&id=${encodeURIComponent(s.id)}`); if (r.ok) { s.mp4 = await r.json(); n++; } } catch { /* WebM만 */ } }
+    return n;
+  }
+  // 가장 최근 구간 MP4(서버 ffmpeg) — 변환이 끝날 때까지 기다렸다가 로컬 파일로
+  async saveLatestMp4() {
+    const s = [...this.segs].reverse().find((x) => x.stored); if (!s || !this.ffmpeg) return false;
+    const r = await fetch(`/api/convert?kind=cctv&id=${encodeURIComponent(s.id)}`); if (!r.ok) return false; s.mp4 = await r.json();
+    const v = await fetch(`/videos/cctv/${s.id}.mp4`); if (!v.ok) return false;
+    saveBlob(await v.blob(), `${s.id}.mp4`); saveBlob(new Blob([JSON.stringify({ ...s.meta, mp4: s.mp4 }, null, 1)], { type: 'application/json' }), `${s.id}.json`);
+    return true;
   }
   stopSegment() {
     if (!this.rec) return;
@@ -137,7 +159,16 @@ export class CameraClip {
     const rec = new MediaRecorder(stream, { mimeType: mime || undefined, videoBitsPerSecond: 1_500_000 });
     rec.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data); };
     const t0 = new Date(), name = `CCTV_${camId}_${t0.getFullYear()}${two(t0.getMonth() + 1)}${two(t0.getDate())}_${two(t0.getHours())}${two(t0.getMinutes())}${two(t0.getSeconds())}.webm`;
-    rec.onstop = () => { const b = new Blob(chunks, { type: 'video/webm' }); if (b.size) saveBlob(b, name); this.last = { name, bytes: b.size, label }; };
+    rec.onstop = async () => {
+      const b = new Blob(chunks, { type: 'video/webm' }); if (!b.size) return;
+      // 서버에 ffmpeg가 있으면 MP4(H.264)로 바꿔 저장, 없으면 WebM 그대로
+      if (this.mp4?.()) {
+        this.converting = true;
+        try { const r = await fetch('/api/clip-mp4?fps=8', { method: 'POST', body: b }); if (r.ok) { const m = await r.blob(); const n2 = name.replace(/\.webm$/, '.mp4'); saveBlob(m, n2); this.last = { name: n2, bytes: m.size, label }; this.converting = false; return; } } catch { /* WebM으로 */ }
+        this.converting = false;
+      }
+      saveBlob(b, name); this.last = { name, bytes: b.size, label };
+    };
     rec.start(1000);
     this.rec = rec; this.cam = camId; this.t0 = performance.now(); this.name = name;
     return true;

@@ -27,7 +27,7 @@ import { zipStore } from './aasx.js';
 import { DRONE_SIZING } from './drone.js';
 import { CCTVView, CCTV_CLASSES } from './cctvview.js';
 import { AI_MODELS } from './cctv.js';
-import { NR, STACK } from './net5g.js';
+import { NR, STACK, LAT, UE_LOAD, maxRobots } from './net5g.js';
 import { OrchView } from './orchview.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
@@ -96,6 +96,8 @@ const hub = new DataHub();
 const camWall = new RobotCamWall(scene, renderer);   // 로봇 비전 관제 디스플레이 (피지컬AI 단계)
 const cctvView = new CCTVView(scene, () => camWall.renderer, scene);   // CCTV 전광판 · CCTV 영상 창
 const cctvRec = new CCTVRecorder(cctvView, () => camWall.renderer), cctvClip = new CameraClip();
+let ffmpegVer = null;   // 서버 ffmpeg 버전 (MP4 변환)
+cctvClip.mp4 = () => cctvRec.server && cctvRec.ffmpeg;   // 개별 녹화는 서버 ffmpeg로 MP4 저장
 const robotRec = new RobotVideoRecorder(camWall);   // 모든 로봇 카메라 영상 자동 녹화 (AAS 영상 링크)   // CCTV 자동 녹화(NVR, 전체 분할) · 개별 카메라 녹화
 const epRec = new EpisodeRecorder(view, camWall, hub);   // VLA 에피소드 기록기 (피지컬AI 단계)
 view.epRec = epRec;
@@ -576,12 +578,13 @@ dataBody.addEventListener('click', (e) => {
   if (!hub.samples.length) { dataNote = '아직 수집된 데이터가 없습니다. 시뮬레이션을 잠시 돌린 뒤 저장하세요.'; return renderData(); }
   const fmt = b.dataset.fmt, aas = ['json', 'xml', 'rdf'].includes(fmt);
   // AAS 저장: 진행 중인 로봇 카메라·CCTV 녹화 구간을 먼저 마감해 로컬(서버 data/)에 저장하고, 영상 파일 링크를 자산별 VideoRecordings 서브모델로 넣는다
-  (aas ? Promise.all([robotRec.flush(), cctvRec.flush()]) : Promise.resolve()).then(() => {
+  if (aas && robotRec.ffmpeg) { dataNote = '영상 구간 마감 · ffmpeg MP4 변환 중… (전체 + 카메라별)'; renderData(); }
+  (aas ? Promise.all([robotRec.flush(), cctvRec.flush()]).then(() => Promise.all([robotRec.convertAll(), cctvRec.convertAll()])) : Promise.resolve()).then(() => {
     const videosOf = (a) => { const k = hub.videoKey(a); return !k ? [] : k === 'cctv' ? cctvRec.videos() : robotRec.videosFor(k); };
     const out = hub.download(fmt, aas ? videosOf : null);
     let nv = 0; if (aas) nv = hub.assets.reduce((n, a) => n + videosOf(a).length, 0);
     const dl = aas && !robotRec.server ? downloadVideos([...robotRec.segs.map((sg) => robotRec.entry(sg, sg.index[0] ?? {})), ...cctvRec.videos()]) : 0;   // 서버가 없으면 영상도 로컬 파일로
-    dataNote = out ? `저장: ${out.name} (${kb(out.bytes)})${aas ? ` · 영상 링크 ${nv}개 (로봇 카메라 ${robotRec.segs.length}구간 · CCTV ${cctvRec.segs.length}구간${robotRec.server ? ' — data/robotcam · data/cctv에 저장' : dl ? ` — 영상 ${dl}개 함께 저장` : ''})` : ''}${fmt === 'aml' ? ' — 시계열은 같은 이름의 CSV를 함께 저장해 두면 연결됩니다' : ''}` : '';
+    dataNote = out ? `저장: ${out.name} (${kb(out.bytes)})${aas ? ` · 영상 링크 ${nv}개${robotRec.ffmpeg ? ' (MP4 · ffmpeg 카메라별)' : ''} (로봇 카메라 ${robotRec.segs.length}구간 · CCTV ${cctvRec.segs.length}구간${robotRec.server ? ' — data/robotcam · data/cctv에 저장' : dl ? ` — 영상 ${dl}개 함께 저장` : ''})` : ''}${fmt === 'aml' ? ' — 시계열은 같은 이름의 CSV를 함께 저장해 두면 연결됩니다' : ''}` : '';
     renderData();
   });
 });
@@ -730,14 +733,14 @@ ui.onDetailAction = (act, st) => {
   if (act === 'robotSave' && view.telemetry && hub.shared) ui.robotSaved('공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.');
   else if (act === 'robotSave' && view.telemetry) {
     const fmt = document.getElementById('rbFmt').value, tele = view.telemetry;
-    ui.robotSaved('영상 녹화 구간 마감 · 저장 중…');
-    // 이 로봇 카메라 영상: 진행 중 구간을 마감·로컬 저장한 뒤 영상 파일 링크를 AAS(VideoRecordings)에, AASX에는 링크 파일(.url)도 함께
-    robotRec.flush().then(() => {
+    ui.robotSaved(robotRec.ffmpeg ? '영상 녹화 구간 마감 · ffmpeg MP4 변환 중… (카메라별)' : '영상 녹화 구간 마감 · 저장 중…');
+    // 이 로봇 카메라 영상: 진행 중 구간을 마감·로컬 저장 → ffmpeg로 MP4(카메라별) 변환 → 영상 파일 링크를 AAS(VideoRecordings)에, AASX에는 링크 파일(.url)도 함께
+    robotRec.flush().then(() => robotRec.convertAll()).then(() => {
       try {
         const a = hub.robotAsset(tele), key = tele.ref.type === 'cell' ? a.id : `m:${tele.ref.id}`, videos = robotRec.videosFor(key);
         const out = hub.downloadRobot(tele, fmt, videos);
         const dl = !robotRec.server ? downloadVideos(videos) : 0;
-        ui.robotSaved(`저장: ${out.name} (${out.bytes > 1048576 ? (out.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(out.bytes / 1024)) + ' KB'}) · 영상 링크 ${videos.length}개${robotRec.server ? ` (영상 ${new Set(videos.map((v) => v.segment)).size}구간 data/robotcam에 저장)` : dl ? ` · 영상 ${dl}개 함께 저장` : ''}`);
+        ui.robotSaved(`저장: ${out.name} (${out.bytes > 1048576 ? (out.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(out.bytes / 1024)) + ' KB'}) · 영상 링크 ${videos.length}개${videos.some((v) => v.mp4Url) ? ' (MP4)' : ''}${robotRec.server ? ` (영상 ${new Set(videos.map((v) => v.segment)).size}구간 data/robotcam에 저장)` : dl ? ` · 영상 ${dl}개 함께 저장` : ''}`);
       } catch (e) { ui.robotSaved(`저장 실패: ${e.message}`); }
     });
   }
@@ -796,10 +799,12 @@ function renderNetCard() {
   setHTML(netCard, `<b>📶 Private 5G 특화망 · 기지국 ${P.cells.length}대 · 음영지역 ${S.holes}곳</b>
     <span>${NR.band} ${NR.fc}GHz · ${NR.bwMHz}MHz · 천장 소형 셀 ${NR.txDbm}dBm — 건물 안 ${n(S.points)}개 지점(2m) 최저 RSRP <b class="ok">${S.minRsrp.toFixed(1)}dBm</b> (설계 ${NR.design} · 최소 ${NR.require}) · 평균 ${S.avgRsrp.toFixed(1)} · SINR ≥ 0dB ${(S.sinrOk * 100).toFixed(0)}% · 핸드오버 겹침 영역 ${(S.hoZone * 100).toFixed(0)}%</span>
     <span class="pci">PCI ${P.cells.map((c) => `${c.id.slice(4)}:${c.pci}`).join(' · ')} — 셀마다 고유 · 이웃 셀 PSS(PCI mod 3) 최적 배정 (같은 mod 3 경계 ${((S.mod3.conflictBorder / S.mod3.border) * 100).toFixed(1)}%, 모서리 접촉만)</span>
-    <span>5G 모뎀 ${Q.ues}대 (${Object.entries(kinds).map(([k, v]) => `${k} ${v}`).join(' · ')}) — 핸드오버 <b>${n(Q.ho)}</b>회 · 성공 <b class="ok">${(Q.hoOk * 100).toFixed(1)}%</b> · 평균 중단 ${Q.avgHoMs.toFixed(0)}ms · 핑퐁 ${Q.pingpong} · 무선 링크 실패 ${Q.rlf}</span>
-    <span>업링크 MQTT ${n(Q.sent)}건 (${(Q.bytes / 1e6).toFixed(1)}MB) → 브로커 도착 ${n(Q.delivered)}건 · 전송 중 ${Q.inflight} · <b class="ok">유실 ${Q.lost}건</b> · 핸드오버 버퍼 포워딩 ${n(Q.fwd)}건</span>
+    <span>5G 모뎀 ${Q.ues}대 (${Object.entries(kinds).map(([k, v]) => `${k} ${v}`).join(' · ')}) — 핸드오버 <b>${n(Q.ho)}</b>회 · 성공 <b class="ok">${(Q.hoOk * 100).toFixed(1)}%</b> · 평균 실행 ${Q.avgHoMs.toFixed(0)}ms · <b class="ok">끊김 0ms (DAPS)</b> · 핑퐁 ${Q.pingpong} · 무선 링크 실패 ${Q.rlf}</span>
+    <span>⏱ 지연 요구 p99 ≤ ${LAT.req}ms (로봇 → 5GC UPF) — 지금 최악 셀 <b class="${Q.worstCellP99 <= LAT.req ? 'ok' : 'warn'}">${Q.worstCellP99.toFixed(1)}ms</b> · 최대 ${Number.isFinite(Q.maxLat) ? Q.maxLat.toFixed(1) : '포화'}ms · 10ms 초과 <b class="${Q.latViol ? 'warn' : 'ok'}">${n(Q.latViol)}회</b> / 측정 ${n(Q.latSamples)}회 · 부하 분산 핸드오버 ${n(Q.lbHo)}회 · 혼잡 셀 진입 거절 ${n(Q.lbBlock)}회${net.stats.lbAdmit ? ` · 접속 분산 ${net.stats.lbAdmit}대` : ''}</span>
+    <span>📐 기지국당 임계 대수 (p99 ≤ ${LAT.req}ms, 설계 RSRP ${NR.design}dBm): ${Object.entries(UE_LOAD).filter(([k]) => k !== 'agv' && k !== 'ammr').map(([k, L]) => `${{ carrier: 'AMR·AGV', forklift: '지게차', quadruped: '사족보행', drone: '드론', humanoid: '휴머노이드·AMMR' }[k]} ${maxRobots(k)}대(${L.mbps}Mbps)`).join(' · ')} — 고정 지연 ${LAT.fixedMs.toFixed(1)}ms + 그랜트 경쟁(슬롯당 ${LAT.grantsPerSlot}대) + 부하 대기. 넘으면 신호 충분한(≥ −95dBm) 이웃 기지국으로 부하 분산 핸드오버</span>
+    <span>업링크 MQTT ${n(Q.sent)}건 (${(Q.bytes / 1e6).toFixed(1)}MB) → 브로커 도착 ${n(Q.delivered)}건 · 전송 중 ${Q.inflight} · <b class="ok">유실 ${Q.lost}건</b> · 핸드오버 버퍼 ${n(Q.fwd)}건 (DAPS)</span>
     <span>${STACK}</span>
-    <div class="ho">${net.log.slice(0, 8).map((h) => `${[3600, 60, 1].map((d, i) => String(Math.floor((Math.floor(h.t) + 8 * 3600) / d) % (i ? 60 : 24)).padStart(2, '0')).join(':')} ${h.ue} PCI ${h.from} → ${h.to} (${h.rsrpFrom} → ${h.rsrpTo}dBm) · 중단 ${h.ms}ms · 포워딩 ${h.fwd}건 ${h.ok ? '✓' : '✗'}`).join('<br>') || '핸드오버 기록 없음'}</div>`);
+    <div class="ho">${net.log.slice(0, 8).map((h) => `${[3600, 60, 1].map((d, i) => String(Math.floor((Math.floor(h.t) + 8 * 3600) / d) % (i ? 60 : 24)).padStart(2, '0')).join(':')} ${h.ue} PCI ${h.from} → ${h.to} (${h.rsrpFrom} → ${h.rsrpTo}dBm) · ${h.reason === 'load' ? '<b class="warn">부하 분산</b>' : 'A3'} · 실행 ${h.ms}ms · 끊김 0ms ${h.ok ? '✓' : '✗'}`).join('<br>') || '핸드오버 기록 없음'}</div>`);
 }
 // 5G 기지국을 누르면: PCI·무선 사양·서비스 영역·이웃 셀·접속 단말·업링크·핸드오버 (1초마다 갱신)
 const gnbPanel = document.getElementById('gnbPanel');
@@ -822,7 +827,7 @@ function renderGnb() {
       ${row('대역 · 대역폭', `${NR.band} ${NR.fc}GHz (이음5G 특화망) · ${NR.bwMHz}MHz · SCS ${NR.scs}kHz (273 RB)`)}
       ${row('송신 출력 · 안테나', `${NR.txDbm}dBm · ${NR.gainDbi}dBi (천장 무지향)`)}
       ${row('설치 위치', `x ${c.x} · z ${c.z} m · 높이 ${c.y}m (천장 브래킷)`)}
-      ${row('핸드오버 설정', `A3 오프셋 ${NR.a3}dB · TTT ${NR.ttt * 1000}ms · Xn 핸드오버 · PDCP 버퍼 포워딩`)}
+      ${row('핸드오버 설정', `A3 오프셋 ${NR.a3}dB · TTT ${NR.ttt * 1000}ms · Xn DAPS 핸드오버(끊김 0ms) · 부하 분산(MLB) · 수락 제어`)}
     </div></div>
     <div class="gnb-sec"><h4>서비스 영역 (이 셀이 최강인 영역)</h4><div class="gnb-grid">
       ${row('면적', `약 ${n(I.area)}m² (2m 격자 ${n(I.area / 4)}지점) · 설계 반경 ${NR.R}m`)}
@@ -831,14 +836,20 @@ function renderGnb() {
     </div></div>
     <div class="gnb-sec"><h4>이웃 셀 ${I.neighbors.length}개</h4><table><tr><th>셀</th><th>PCI</th><th>맞닿은 경계</th><th>PCI mod 3</th><th>핸드오버 →</th></tr>
       ${I.neighbors.sort((a, b) => b.border - a.border).map((x) => `<tr><td>${x.c.id}</td><td>${x.c.pci}</td><td>${x.border}m</td><td class="${x.conflict ? 'warn' : 'ok'}">${x.conflict ? '같음 (모서리)' : '다름'}</td><td>${x.hoTo}회</td></tr>`).join('')}</table></div>
-    <div class="gnb-sec"><h4>접속 단말 ${I.ues.length}대 ${Object.entries(kinds).map(([k, v]) => `· ${k} ${v}`).join(' ')}</h4><table><tr><th>로봇</th><th>종류</th><th>RSRP</th><th>SINR</th><th>상태</th></tr>
-      ${I.ues.map((u) => `<tr><td>${u.uid ?? u.id}</td><td>${u.kindLabel}</td><td>${u.rsrp.toFixed(1)}</td><td>${u.sinr.toFixed(1)}</td><td>${u.hoUntil >= 0 ? '<span class="warn">핸드오버 진입 중</span>' : '연결'}</td></tr>`).join('') || '<tr><td colspan="5">접속한 단말 없음</td></tr>'}</table></div>
+    <div class="gnb-sec"><h4>지연 · 용량 (p99 ≤ ${LAT.req}ms)</h4><div class="gnb-grid">
+      ${row('지연 p99 (로봇 → UPF)', `${Number.isFinite(I.lat.p99) ? I.lat.p99.toFixed(2) : '포화'}ms = 고정 ${LAT.fixedMs.toFixed(1)} + 그랜트 경쟁 ${I.lat.sched.toFixed(2)} + 부하 대기 ${Number.isFinite(I.lat.queue) ? I.lat.queue.toFixed(2) : '∞'}`, I.lat.p99 <= LAT.req ? 'ok' : 'warn')}
+      ${row('접속 / 임계 대수', `${I.cap.now}대 / ${I.cap.max}대 (지금 단말 구성 평균 ${I.cap.avgMbps.toFixed(1)}Mbps 기준) · 영상 송신 ${I.lat.nAct ?? 0}대`, I.cap.now <= I.cap.max ? 'ok' : 'warn')}
+      ${row('상향 트래픽 · 자원 점유', `${I.lat.mbps.toFixed(1)}Mbps · ${(I.lat.rho * 100).toFixed(0)}%`)}
+      ${row('부하 분산', `목표 ${LAT.target}ms를 넘으면 신호 충분한(≥ −95dBm) 이웃 셀로 핸드오버 · 이 셀이 받으면 목표를 넘는 핸드오버·접속은 거절`)}
+    </div></div>
+    <div class="gnb-sec"><h4>접속 단말 ${I.ues.length}대 ${Object.entries(kinds).map(([k, v]) => `· ${k} ${v}`).join(' ')}</h4><table><tr><th>로봇</th><th>종류</th><th>RSRP</th><th>SINR</th><th>상향</th><th>지연</th><th>상태</th></tr>
+      ${I.ues.map((u) => `<tr><td>${u.uid ?? u.id}</td><td>${u.kindLabel}</td><td>${u.rsrp.toFixed(1)}</td><td>${u.sinr.toFixed(1)}</td><td>${(u.mbps ?? 0).toFixed(1)}Mbps</td><td>${u.lat.toFixed(1)}ms</td><td>${u.hoUntil >= 0 ? `<span class="warn">핸드오버 진입 중${u.hoRec?.reason === 'load' ? ' (부하 분산)' : ''}</span>` : '연결'}</td></tr>`).join('') || '<tr><td colspan="7">접속한 단말 없음</td></tr>'}</table></div>
     <div class="gnb-sec"><h4>업링크 · 핸드오버</h4><div class="gnb-grid">
       ${row('업링크 수신 (MQTT)', `${n(S.rx)}건 · ${(S.rxB / 1e6).toFixed(1)}MB${rate != null ? ` · 현재 ${rate.toFixed(0)} kbps` : ''}`)}
       ${row('핸드오버 들어옴 / 나감', `${n(S.hoIn)} / ${n(S.hoOut)}회 · 나가는 핸드오버 실패 ${S.hoFail}회`, S.hoFail ? 'warn' : 'ok')}
       ${row('접속 단말 업링크', `송신 ${n(I.ues.reduce((a, u) => a + u.sent, 0))} · 도착 ${n(I.ues.reduce((a, u) => a + u.delivered, 0))} · 버퍼 ${I.ues.reduce((a, u) => a + u.buf, 0)} · 유실 ${I.ues.reduce((a, u) => a + u.sent - u.delivered - u.buf, 0)}건`, I.ues.some((u) => u.sent - u.delivered - u.buf) ? 'warn' : 'ok')}
     </div>
-    <div style="margin-top:4px">${I.log.map((h) => `${clk(h.t)} ${h.ue} PCI ${h.from} → ${h.to} · ${h.rsrpFrom} → ${h.rsrpTo}dBm · 중단 ${h.ms}ms · 포워딩 ${h.fwd}건`).join('<br>') || '최근 핸드오버 없음'}</div></div>`);
+    <div style="margin-top:4px">${I.log.map((h) => `${clk(h.t)} ${h.ue} PCI ${h.from} → ${h.to} · ${h.rsrpFrom} → ${h.rsrpTo}dBm · ${h.reason === 'load' ? '부하 분산' : 'A3'} · 실행 ${h.ms}ms · 끊김 0ms`).join('<br>') || '최근 핸드오버 없음'}</div></div>`);
 }
 let netT = 0, pcapBoxT = 0, bzT = 0;
 window.__netRefresh = () => { if (!netCard.hidden) renderNetCard(); };
@@ -861,6 +872,7 @@ cctvPanel.addEventListener('click', (e) => {
   // 영상 저장: 이 카메라 녹화(WebM, 다시 누르면 정지·저장) · 스냅샷(JPEG) · 자동 녹화(NVR) 최근 구간
   else if (a === 'rec') { if (cctvClip.active) cctvClip.stop(); else cctvClip.start(cctvCv, cctvSel, cctvView.place(sim.cctv.cams.find((c) => c.id === cctvSel) ?? {})); renderCctvPanel(true); }
   else if (a === 'snap') { saveSnapshot(cctvCv, cctvSel); }
+  else if (a === 'nvr' && cctvRec.server && cctvRec.ffmpeg) { b.disabled = true; b.textContent = '⏳ MP4 변환 중…'; cctvRec.saveLatestMp4().then((ok) => { if (!ok) cctvRec.saveLatest(); renderCctvPanel(true); }); }
   else if (a === 'nvr') { if (!cctvRec.saveLatest()) sim.log('info', 'CCTV 자동 녹화', { obs: '아직 끝난 녹화 구간이 없습니다', act: `${CCTV_REC.segS / 60}분 구간이 끝나면 저장할 수 있습니다` }); }
   else if (a === 'csv') {
     const rows = [['번호', '시각', '구분', '카메라', '위치', '클래스', '모델', '신뢰도', '인시던트', '상태', '처리 시간(초)', '결과', '비고']];
@@ -878,10 +890,10 @@ function renderCctvPanel(force) {
   // 영상 저장 줄: 개별 녹화·스냅샷 + 자동 녹화(NVR) 상태
   const R = cctvRec.stats(), shared = !!window.JIN3D_SHARED, mb = (b) => `${(b / 1048576).toFixed(1)}MB`;
   setHTML(document.getElementById('cctvSave'), `<div class="cc-save">
-    <button type="button" data-cctv="rec" class="${cctvClip.active ? 'rec' : ''}" ${shared ? 'disabled' : ''} title="이 카메라 영상을 WebM 파일로 녹화 — 다시 누르면 정지하고 로컬 파일로 저장">${cctvClip.active ? `⏹ 녹화 정지·저장 (${Math.floor(cctvClip.secs)}초)` : '⏺ 이 카메라 녹화'}</button>
+    <button type="button" data-cctv="rec" class="${cctvClip.active ? 'rec' : ''}" ${shared ? 'disabled' : ''} title="이 카메라 영상을 녹화 — 다시 누르면 정지하고 로컬 파일로 저장 (서버에 ffmpeg가 있으면 MP4, 없으면 WebM)">${cctvClip.active ? `⏹ 녹화 정지·저장 (${Math.floor(cctvClip.secs)}초)` : '⏺ 이 카메라 녹화'}</button>
     <button type="button" data-cctv="snap" ${shared ? 'disabled' : ''} title="지금 화면(AI 오버레이 포함)을 JPEG 파일로 저장">📸 스냅샷</button>
-    <button type="button" data-cctv="nvr" ${shared || !R.kept ? 'disabled' : ''} title="자동 녹화(전체 CCTV 분할 영상)의 가장 최근 구간과 카메라 배치 색인(JSON)을 로컬 파일로 저장">⬇ 전체 CCTV 최근 녹화</button>
-    <small>${shared ? '공유 페이지에서는 파일 저장이 막혀 있습니다 — 맥 앱·웹 버전에서 저장' : !R.on ? '이 브라우저는 영상 녹화를 지원하지 않습니다' : `<b class="cc-rec">● 자동 녹화</b> 전체 ${sim.cctv.cams.length}대 · ${CCTV_REC.fps}fps · 구간 #${R.seq} ${Math.floor(R.cur / 60)}:${String(Math.floor(R.cur % 60)).padStart(2, '0')} / ${CCTV_REC.segS / 60}분 · ${R.server ? `서버 저장 ${R.saved}구간 ${mb(R.bytes)} (data/cctv/)` : `브라우저 보관 ${R.kept}구간`}${cctvClip.last ? ` · 마지막 저장 ${cctvClip.last.name}` : ''}`}</small></div>`);
+    <button type="button" data-cctv="nvr" ${shared || !R.kept ? 'disabled' : ''} title="자동 녹화(전체 CCTV 분할 영상)의 가장 최근 구간과 카메라 배치 색인(JSON)을 로컬 파일로 저장 — 서버에 ffmpeg가 있으면 MP4">⬇ 전체 CCTV 최근 녹화${cctvRec.ffmpeg ? ' (MP4)' : ''}</button>
+    <small>${shared ? '공유 페이지에서는 파일 저장이 막혀 있습니다 — 맥 앱·웹 버전에서 저장' : !R.on ? '이 브라우저는 영상 녹화를 지원하지 않습니다' : `<b class="cc-rec">● 자동 녹화</b>${cctvRec.ffmpeg ? ` · MP4 저장 (ffmpeg ${ffmpegVer ?? ''} — 전체 + 카메라별)` : ' · WebM'}${cctvClip.converting ? ' · 개별 녹화 MP4 변환 중…' : ''} · 전체 ${sim.cctv.cams.length}대 · ${CCTV_REC.fps}fps · 구간 #${R.seq} ${Math.floor(R.cur / 60)}:${String(Math.floor(R.cur % 60)).padStart(2, '0')} / ${CCTV_REC.segS / 60}분 · ${R.server ? `서버 저장 ${R.saved}구간 ${mb(R.bytes)} (data/cctv/)` : `브라우저 보관 ${R.kept}구간`}${cctvClip.last ? ` · 마지막 저장 ${cctvClip.last.name}` : ''}`}</small></div>`);
   const cnt = {}; for (const d of res.dets) cnt[d.cls] = (cnt[d.cls] ?? 0) + 1;
   setHTML(document.getElementById('cctvDet'), dark
     ? `<div class="cc-models">${Object.entries(AI_MODELS).map(([k, m]) => `<span class="cc-m${res.dets.some((d) => d.model === k) ? ' on' : ''}" style="--c:${m.color}" title="${escV(m.desc)}">${escV(m.name)}</span>`).join('')}</div>
@@ -1095,7 +1107,7 @@ designer = new LineDesigner({
 });
 llm.probe();
 // 에피소드 서버 저장이 가능한지 (맥 앱·npm start) — 정적 호스팅·공유 페이지는 브라우저 보관만
-if (!window.JIN3D_SHARED && !window.JIN3D_NO_SERVER) fetch('/api/status').then((r) => r.json()).then((j) => { epRec.server = !!j.episodes; cctvRec.server = !!j.cctv; robotRec.server = !!j.robotcam; if (j.dataDir) { cctvRec.dir = `${j.dataDir}/cctv`; robotRec.dir = `${j.dataDir}/robotcam`; } }).catch(() => {});
+if (!window.JIN3D_SHARED && !window.JIN3D_NO_SERVER) fetch('/api/status').then((r) => r.json()).then((j) => { epRec.server = !!j.episodes; cctvRec.server = !!j.cctv; robotRec.server = !!j.robotcam; robotRec.ffmpeg = cctvRec.ffmpeg = !!j.ffmpeg?.available; ffmpegVer = j.ffmpeg?.version ?? null; if (j.dataDir) { cctvRec.dir = `${j.dataDir}/cctv`; robotRec.dir = `${j.dataDir}/robotcam`; } }).catch(() => {});
 
 // ── 맥 앱(Jin-3D) 전용: API 키 설정 ─────────────────
 const bridge = window.jin3d;

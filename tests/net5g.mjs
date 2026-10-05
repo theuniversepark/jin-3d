@@ -24,9 +24,9 @@ console.log('== 이동 로봇 5G · 핸드오버 · 무손실 (피지컬AI 1시�
   check('이동 로봇 모두 5G 모뎀 (AMR·AGV·자율 지게차·휴머노이드·사족보행·드론·AMMR)', ['carrier', 'agv', 'forklift', 'humanoid', 'quadruped', 'drone', 'ammr'].every((k) => kinds.has(k)) && N.ues.every((u) => u.serv != null), `${Q.ues}대`);
   check('핸드오버가 일어나고 모두 성공 (A3 + TTT)', Q.ho > 100 && Q.hoFail === 0, `${Q.ho}회 · 평균 중단 ${Q.avgHoMs.toFixed(0)}ms · 핑퐁 ${Q.pingpong}`);
   check('무선 링크 실패 0 (음영지역 없음)', Q.rlf === 0 && N.ues.every((u) => u.rsrp >= NR.require));
-  check('업링크 데이터 유실 0 (핸드오버 중 버퍼 → 포워딩)', Q.lost === 0 && Q.delivered + Q.inflight === Q.sent && Q.fwd > 0, `송신 ${Q.sent} · 도착 ${Q.delivered} · 포워딩 ${Q.fwd}`);
+  check('업링크 데이터 유실 0 (DAPS 핸드오버 — 실행 중에도 소스 셀로 계속 전송, 버퍼·끊김 없음)', Q.lost === 0 && Q.delivered + Q.inflight === Q.sent && Q.daps && Q.inflight === 0, `송신 ${Q.sent} · 도착 ${Q.delivered} · 버퍼 ${Q.fwd}`);
   const hos = N.ues.flatMap((u) => u.hos);
-  check('핸드오버 기록: 다른 PCI로 · 타깃 셀이 더 강함', hos.length > 0 && hos.every((h) => h.from !== h.to && h.rsrpTo > h.rsrpFrom), `${hos.length}건`);
+  check('핸드오버 기록: 다른 PCI로 · A3는 타깃 셀이 더 강함 (부하 분산은 신호 충분한 이웃 셀)', hos.length > 0 && hos.every((h) => h.from !== h.to && (h.reason === 'load' ? h.rsrpTo >= -96 : h.rsrpTo > h.rsrpFrom)), `${hos.length}건`);
 }
 { const s = new Simulation('smart', 2, { line: zoneLine(), quiet: true }); for (let t = 0; t < 600; t += 0.1) s.step(0.1);
   check('자동화 단계: AMR·AGV 5G 연결, 유실 0', s.net.on && s.net.ues.length > 0 && s.net.ues.every((u) => ['carrier', 'agv'].includes(u.kind)) && s.net.summary().lost === 0, `${s.net.ues.length}대`); }

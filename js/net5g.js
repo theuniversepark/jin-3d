@@ -13,8 +13,52 @@ export const NR = {
   band: 'n79', fc: 4.75, bwMHz: 100, scs: 30, nRE: 3276,       // 이음5G 4.72~4.82GHz · 100MHz · 30kHz (273RB)
   txDbm: 24, gainDbi: 5, nfDb: 7, y: 7.2,                       // 실내 소형 셀: 24dBm, 안테나 5dBi, 천장 7.2m
   design: -80, require: -100, rlf: -112, R: 18,                // 설계 RSRP · 서비스 최소 RSRP · 무선 링크 실패 · 셀 반경(용량)
-  a3: 3, ttt: 0.16, hoMs: [30, 45], period: 0.1, load: 0.5,     // A3 오프셋 · Time-To-Trigger · 핸드오버 중단 · 측정 주기 · 인접 셀 부하
+  a3: 3, ttt: 0.16, hoMs: [30, 45], period: 0.1, load: 0.5,     // A3 오프셋 · Time-To-Trigger · 핸드오버 실행 시간 · 측정 주기 · 인접 셀 부하
+  daps: true,                                                   // DAPS 핸드오버 (Rel-16): 실행 중에도 소스 셀로 계속 보내 끊김 0ms — 지연 10ms 요구
 };
+// ── 지연 요구 10ms (p99, 로봇 → 5GC UPF 단방향 업링크) ─────────────────
+// 3GPP TS 22.104(공장 자동화) · TR 38.824(URLLC) 기준 구성: TDD DSUUU(2.5ms 주기, 상향 우세 — 이음5G 공장 업링크 영상)·30kHz,
+// 설정 그랜트(Configured Grant, SR 없음), HARQ BLER 10%(p99에 재전송 1회), DAPS 핸드오버(끊김 0ms, Rel-16).
+// p99 지연 = 고정 지연(TDD 정렬 · 슬롯 전송 · gNB 처리 · HARQ 1회 · 전달망 · UPF) + 스케줄링 경쟁(UL 그랜트/슬롯) + 부하 대기(M/M/1 꼬리)
+export const LAT = {
+  req: 10, target: 9,                         // 요구(ms) · 부하 분산 목표(여유 1ms)
+  periodMs: 2.5, ulSlotsPerMs: 1.2, ulFrac: 0.6, overhead: 0.85, seMax: 5.5, mtuBits: 12000,
+  grantsPerSlot: 6,                           // UL 슬롯 하나에 줄 수 있는 그랜트 수 (PDCCH CORESET 용량)
+  fixed: { align: 1.0, tx: 0.5, proc: 1.0, harq: 2.5, transport: 0.6, upf: 0.3 },   // ms
+};
+LAT.fixedMs = Object.values(LAT.fixed).reduce((a, b) => a + b, 0);   // 5.9ms
+// 로봇 종류별 업링크 (활동 중): 텔레메트리 10Hz 320B + 카메라 영상(H.264). 쉬는 중(주차·충전·대기)은 영상 끔
+export const UE_LOAD = {
+  carrier: { cams: 1, mbps: 2.0, label: '전방 카메라 1대' }, agv: { cams: 1, mbps: 2.0, label: '전방 카메라 1대' },
+  forklift: { cams: 2, mbps: 3.5, label: '포크·후방 카메라 2대' }, quadruped: { cams: 2, mbps: 5.0, label: '스테레오·열화상 2대' },
+  drone: { cams: 1, mbps: 4.0, label: '짐벌 카메라 1대' },
+  humanoid: { cams: 4, mbps: 8.5, label: '머리 스테레오 4 + 양손 1.5×2 + 등 1.5' }, ammr: { cams: 4, mbps: 8.5, label: '머리 스테레오 4 + 양손 1.5×2 + 등 1.5' },
+};
+const TELE_MBPS = 0.0256;
+// 상향 SINR (링크 예산): 단말 23dBm을 전 대역 RE에 나눠 보낸다고 볼 때 gNB 수신 전력 − 잡음(NF 5dB) − 간섭 여유(IoT 3dB).
+// 경로손실은 하향 RSRP에서 거꾸로 구한다 (PL = RE당 송신 전력 + 안테나 이득 − RSRP)
+export const ulSinr = (rsrpDb) => { const pl = NR.txDbm - 10 * Math.log10(NR.nRE) + NR.gainDbi - rsrpDb; return 23 - 10 * Math.log10(NR.nRE) + NR.gainDbi - pl - (-174 + 10 * Math.log10(NR.scs * 1e3) + 5) - 3; };
+// 스펙트럼 효율 (링크 적응 근사: 0.75·log2(1+SINR), 최대 5.5 b/s/Hz) — 셀 상향 용량 = 100MHz × 0.6 × SE × 0.85
+export const specEff = (sinrDb) => Math.max(0.2, Math.min(LAT.seMax, 0.75 * Math.log2(1 + Math.pow(10, sinrDb / 10))));
+// 셀 하나의 p99 지연 (ms): ues = [{ mbps, se }]
+export function cellLatency(ues) {
+  const n = ues.length; if (!n) return { p99: LAT.fixedMs, rho: 0, sched: 0, queue: 0, n: 0, mbps: 0 };
+  const bwHz = NR.bwMHz * 1e6 * LAT.ulFrac * LAT.overhead;
+  const rho = ues.reduce((a, u) => a + (u.mbps * 1e6) / (bwHz * u.se), 0);            // 상향 자원 점유율
+  const mbps = ues.reduce((a, u) => a + u.mbps, 0), seAvg = mbps / Math.max(1e-9, ues.reduce((a, u) => a + u.mbps / u.se, 0));
+  const nAct = ues.filter((u) => u.mbps > 0.1).length;                                // 영상을 보내는 단말만 그랜트 경쟁 (텔레메트리는 설정 그랜트로 충분)
+  const sched = Math.max(0, Math.ceil(nAct / LAT.grantsPerSlot) - 1) / LAT.ulSlotsPerMs;  // 그랜트 차례를 기다리는 슬롯
+  const mu = (bwHz * seAvg) / LAT.mtuBits;                                             // 패킷/초
+  const queue = rho >= 1 ? Infinity : rho > 0.01 ? (Math.log(rho / 0.01) / (mu * (1 - rho))) * 1000 : 0;   // M/M/1 대기 99% 꼬리
+  return { p99: LAT.fixedMs + sched + queue, rho, sched, queue, n, nAct, mbps };
+}
+// 임계 대수: 같은 종류 로봇만 한 셀에 있을 때 p99 ≤ 10ms를 지키는 최대 대수 (평균 SINR 기준)
+// rsrpDb: 셀 안 단말의 하향 RSRP (설계 기준 −80dBm → 상향 SINR로 바꿔 계산)
+export function maxRobots(kind, rsrpDb = NR.design, req = LAT.req) {
+  const L = UE_LOAD[kind], se = specEff(ulSinr(rsrpDb)); let n = 0;
+  while (n < 400 && cellLatency(Array.from({ length: n + 1 }, () => ({ mbps: L.mbps + TELE_MBPS, se }))).p99 <= req) n++;
+  return n;
+}
 const STEP = 2, UE_Y = 1.0, WALL_DB = 0;
 const L10 = Math.log10, RE_DBM = NR.txDbm - 10 * L10(NR.nRE);                         // 자원 요소(RE)당 송신 전력
 const NOISE = -174 + 10 * L10(NR.scs * 1e3) + NR.nfDb;                                  // RE당 잡음 (dBm)
@@ -108,6 +152,7 @@ class UE {
     this.hoUntil = -1; this.hoTarget = null; this.hos = []; this.hoN = 0; this.pingpong = 0; this.rlf = 0; this.weak = 0;
     this.seq = 0; this.sent = 0; this.delivered = 0; this.buf = 0; this.fwd = 0; this.lost = 0; this.dup = 0; this.bytes = 0; this.maxDelay = 0; this.lastSeq = 0;
     this.acc = 0; this.ooo = 0;
+    this.lat = LAT.fixedMs; this.maxLat = 0; this.latViol = 0; this.lb = 0;   // p99 지연 · 최대 · 10ms 초과 측정 수 · 부하 분산 핸드오버
   }
   get kindLabel() { return KIND[this.kind] ?? this.kind; }
   get servCell() { return this.serv != null ? this.net.plan.cells[this.serv] : null; }
@@ -117,7 +162,8 @@ export class Private5G {
   constructor(sim) {
     this.sim = sim; this.on = sim.mode.key !== 'traditional' && !sim.twin;
     this.ues = []; this.t = 0; this.next = 0; this.rng = 0x5eed5;
-    this.stats = { ho: 0, hoFail: 0, pingpong: 0, rlf: 0, sent: 0, delivered: 0, lost: 0, fwd: 0, hoMs: 0, bytes: 0 };
+    this.stats = { ho: 0, hoFail: 0, pingpong: 0, rlf: 0, sent: 0, delivered: 0, lost: 0, fwd: 0, hoMs: 0, bytes: 0, lbHo: 0, lbBlock: 0, latViol: 0, latSamples: 0, maxLat: 0 };
+    this.lbOn = true; this.nextLb = 0;   // 부하 분산 (MLB) 켜짐
     this.log = [];
     if (!this.on) return;
     this.plan = plan5G(sim);
@@ -134,6 +180,63 @@ export class Private5G {
     for (const u of this.ues) this.measure(u, true);
   }
   ueOf(obj) { return this.byMover?.get(obj) ?? null; }
+  // 단말 추가 (시험·증설 검토용: 로봇을 더 들였을 때) — pos()는 { x, y, z, m }
+  addUE(id, uid, kind, pos) { const u = new UE(this, id, uid, kind, pos); this.ues.push(u); this.measure(u, true); u.mbps = this.demand(u); this.admit(u); return u; }
+  // 단말 업링크 수요(Mbps): 움직이거나 일하는 중이면 카메라 영상 전부, 쉬는 중이면 10%
+  demand(u) {
+    const p = u.pos(), m = p.m, L = UE_LOAD[u.kind] ?? { mbps: 1 };
+    const active = m ? (m.moving || (m.task && !m.chgNow && !m.charging) || m.state === 'line' || m.mode === 'mission' || m.mode === 'patrol') : true;
+    return TELE_MBPS + (active ? L.mbps : 0);   // 쉬는 중(주차·충전·대기)은 영상을 끄고 텔레메트리만
+  }
+  cellOf(u) { return u.hoUntil >= 0 ? u.hoTarget : u.serv; }   // 핸드오버 중인 단말은 옮겨 갈 셀 부하로 센다 (DAPS라 패킷은 끊기지 않음)
+  // 셀별 지연 (지금 접속 단말 기준) — extra: 이 셀에 단말 하나를 더하거나(+) 뺄 때(−) 예상
+  cellLoad(idx, add = null, remove = null) {
+    const list = [];
+    for (const u of this.ues) { if (u === remove) continue; if (this.cellOf(u) === idx) list.push({ mbps: u.mbps ?? this.demand(u), se: specEff(ulSinr(u.F[idx])) }); }
+    if (add) list.push({ mbps: add.mbps ?? this.demand(add), se: specEff(ulSinr(add.F[idx] ?? -110)) });
+    return cellLatency(list);
+  }
+  // 셀의 임계 대수 (지금 단말 구성·SINR로 p99 ≤ 10ms를 지키는 최대 대수): 평균 단말을 하나씩 더해 본다
+  cellCapacity(idx) {
+    const us = this.ues.filter((u) => this.cellOf(u) === idx), base = us.map((u) => ({ mbps: u.mbps ?? this.demand(u), se: specEff(ulSinr(u.F[idx])) }));
+    const avg = base.length ? { mbps: base.reduce((a, b) => a + b.mbps, 0) / base.length, se: base.reduce((a, b) => a + b.se, 0) / base.length } : { mbps: UE_LOAD.carrier.mbps, se: specEff(ulSinr(NR.design)) };
+    let n = 0; while (n < 400 && cellLatency(Array.from({ length: n + 1 }, () => avg)).p99 <= LAT.req) n++;
+    return { max: n, now: us.length, avgMbps: avg.mbps };
+  }
+  // 부하 분산 (MLB, 3GPP SON): p99가 목표(9ms)를 넘거나 임계 대수를 넘는 셀에서, 이웃 셀 신호가 충분하고(≥ −95dBm)
+  // 옮겨도 이웃 셀 p99가 목표 안인 단말을 골라 이웃 셀로 핸드오버(DAPS) — 신호 손해가 가장 작은 단말부터
+  balance() {
+    const cells = this.plan.cells, loads = cells.map((_, i) => this.cellLoad(i));
+    this.cellLat = loads;
+    for (let i = 0; i < cells.length; i++) {
+      if (loads[i].p99 <= LAT.target) continue;
+      const cands = [];
+      for (const u of this.ues) {
+        if (u.serv !== i || u.hoUntil >= 0) continue;
+        for (let n = 0; n < cells.length; n++) {
+          if (n === i || u.F[n] < -95) continue;
+          const after = this.cellLoad(n, u);
+          if (after.p99 > LAT.target) continue;
+          cands.push({ u, n, loss: u.F[i] - u.F[n], after });
+        }
+      }
+      cands.sort((a, b) => a.loss - b.loss);
+      // 목표 지연 안으로 들어올 때까지 한 번에 여러 대 (같은 단말 · 다시 꽉 찬 이웃 셀은 건너뜀)
+      const moved = new Set();
+      for (const c of cands) {
+        if (loads[i].p99 <= LAT.target) break;
+        if (moved.has(c.u) || this.cellLoad(c.n, c.u).p99 > LAT.target) continue;
+        moved.add(c.u); c.u.lbHold = { from: i, until: this.sim.time + 5 }; this.startHO(c.u, c.n, 'load'); this.stats.lbHo++; c.u.lb++;
+        loads[i] = this.cellLoad(i); loads[c.n] = this.cellLoad(c.n);
+      }
+    }
+  }
+  // 접속(RRC 연결) 수락 제어: 가장 센 셀이 받으면 목표를 넘으면, 신호가 충분한(≥ −95dBm) 다른 셀 중 여유 있는 셀로 연결
+  admit(u) {
+    if (!this.lbOn || this.cellLoad(u.serv, u).p99 <= LAT.target) return;
+    const alt = [...u.F.keys()].filter((n) => n !== u.serv && u.F[n] >= -95).sort((a, b) => u.F[b] - u.F[a]).find((n) => this.cellLoad(n, u).p99 <= LAT.target);
+    if (alt != null) { u.lbHold = { from: u.serv, until: this.sim.time + 5 }; u.serv = alt; this.stats.lbAdmit = (this.stats.lbAdmit ?? 0) + 1; }
+  }
   noise() { this.rng = (this.rng * 1103515245 + 12345) & 0x7fffffff; return (this.rng / 0x7fffffff - 0.5) * 3; }   // 측정 잡음 ±1.5dB (별도 난수 — 시뮬레이션 난수 순서를 바꾸지 않음)
   // 셀 n의 RSRP: 바닥 로봇은 셀별 RSRP 지도, 드론(설비 위 비행)은 3D 거리 LOS 경로손실
   level(n, p) {
@@ -172,23 +275,44 @@ export class Private5G {
       }
       if (!meas) continue;
       const bi = this.measure(u);
+      u.mbps = this.demand(u);
       const cells = this.plan.cells;
       // A3: 인접 셀이 서빙 셀보다 3dB 넘게 강한 상태가 TTT(160ms) 이어지면 핸드오버 (TTT 동안 대상이 바뀌면 다시 셈)
-      if (bi !== u.serv && u.F[bi] > u.F[u.serv] + NR.a3) {
+      // 수락 제어: 옮겨 갈 셀이 이 단말을 받으면 p99가 목표(9ms)를 넘는 경우 거절 — 서빙 신호가 서비스 최소(−100dBm) 아래면 예외.
+      // 부하 분산으로 옮긴 단말은 5초 동안 원래(혼잡) 셀로 A3 복귀하지 않는다 (핑퐁 방지)
+      const held = u.lbHold && this.sim.time < u.lbHold.until && u.lbHold.from === bi;
+      if (bi !== u.serv && u.F[bi] > u.F[u.serv] + NR.a3 && !held) {
         if (u.cand !== bi) { u.cand = bi; u.tttT = 0; }
         u.tttT += NR.period;
-        if (u.tttT >= NR.ttt - 1e-9) this.startHO(u, bi);
+        if (u.tttT >= NR.ttt - 1e-9) {
+          if (this.lbOn && u.F[u.serv] >= NR.require && this.cellLoad(bi, u).p99 > LAT.target) { this.stats.lbBlock++; u.tttT = 0; }
+          else this.startHO(u, bi);
+        }
       } else { u.cand = null; u.tttT = 0; }
       // 무선 링크 실패 감시 (Qout −112dBm 1초) — 음영지역이 없으면 일어나지 않아야 한다
       if (u.F[u.serv] < NR.rlf) { u.weak += NR.period; if (u.weak >= 1) { u.rlf++; this.stats.rlf++; u.weak = 0; u.serv = bi; } } else u.weak = 0;
       void cells;
     }
+    if (meas) {
+      if (this.lbOn) this.balance();   // 측정마다(100ms) 부하 분산 — 목표(9ms)를 넘는 셀만
+      this.sampleLatency();
+    }
   }
-  startHO(u, target) {
+  // 지연 측정 (100ms마다): 단말마다 서빙 셀 p99 지연 — 10ms 초과 수를 센다 (DAPS라 핸드오버 중에도 소스 셀 지연)
+  sampleLatency() {
+    const cells = this.plan.cells, L = cells.map((_, i) => this.cellLoad(i)); this.cellLat = L;
+    for (const u of this.ues) {
+      const l = L[this.cellOf(u)]?.p99 ?? LAT.fixedMs, hoPenalty = u.hoUntil >= 0 && !NR.daps ? u.hoMs : 0;
+      u.lat = l + hoPenalty; u.maxLat = Math.max(u.maxLat, u.lat);
+      this.stats.latSamples++; this.stats.maxLat = Math.max(this.stats.maxLat, u.lat);
+      if (u.lat > LAT.req) { u.latViol++; this.stats.latViol++; }
+    }
+  }
+  startHO(u, target, reason = 'a3') {
     const s = this.sim, c0 = this.plan.cells[u.serv], c1 = this.plan.cells[target];
     const ms = NR.hoMs[0] + (this.noise() + 1.5) / 3 * (NR.hoMs[1] - NR.hoMs[0]);
     u.hoTarget = target; u.hoUntil = s.time + ms / 1000; u.hoFrom = u.serv; u.hoT0 = s.time; u.hoMs = ms;
-    u.hoRec = { t: s.time, from: c0.pci, to: c1.pci, fromId: c0.id, toId: c1.id, rsrpFrom: Math.round(u.F[u.serv] * 10) / 10, rsrpTo: Math.round(u.F[target] * 10) / 10, ms: Math.round(ms), fwd: 0, ok: true };
+    u.hoRec = { t: s.time, from: c0.pci, to: c1.pci, fromId: c0.id, toId: c1.id, rsrpFrom: Math.round(u.F[u.serv] * 10) / 10, rsrpTo: Math.round(u.F[target] * 10) / 10, ms: Math.round(ms), fwd: 0, ok: true, reason, daps: NR.daps };
     u.cand = null; u.tttT = 0;
   }
   completeHO(u) {
@@ -208,7 +332,7 @@ export class Private5G {
   // MQTT PUBLISH (QoS 1) 한 건: 핸드오버 중이면 PDCP 버퍼, 아니면 바로 브로커 도착(PUBACK)
   uplink(u, bytes) {
     u.seq++; u.sent++; u.bytes += bytes; this.stats.sent++; this.stats.bytes += bytes;
-    if (u.hoUntil >= 0) { u.buf++; return; }
+    if (u.hoUntil >= 0 && !NR.daps) { u.buf++; return; }   // DAPS가 아니면 핸드오버 동안 버퍼 (끊김) — DAPS는 소스 셀로 계속 보낸다
     if (u.F[u.serv] < NR.rlf) { u.buf++; return; }   // 링크가 약하면 재전송 대기 (QoS 1) — 붙으면 보낸다
     u.delivered++; this.stats.delivered++;
     const cs = this.cellStats[u.serv]; cs.rx++; cs.rxB += bytes;
@@ -221,13 +345,15 @@ export class Private5G {
     let n = 0, sum = 0, min = Infinity, sinr = 0;
     P.pts.forEach((p, i) => { if (P.server[i] === idx) { n++; sum += P.best[i]; min = Math.min(min, P.best[i]); sinr += P.sinr[i]; } });
     const ues = this.ues.filter((u) => (u.hoUntil >= 0 ? u.hoTarget : u.serv) === idx);
-    return { c, S, area: n * 4, avgRsrp: n ? sum / n : NaN, minRsrp: min, avgSinr: n ? sinr / n : NaN, ues,
+    return { c, S, area: n * 4, avgRsrp: n ? sum / n : NaN, minRsrp: min, avgSinr: n ? sinr / n : NaN, ues, lat: this.cellLoad(idx), cap: this.cellCapacity(idx),
       neighbors: c.neighbors.map((k) => ({ c: P.cells[k], border: c.border[k] * 2, conflict: P.cells[k].pci % 3 === c.pci % 3, hoTo: S.to.get(k) ?? 0 })),
       log: this.log.filter((h) => h.fromId === c.id || h.toId === c.id).slice(0, 8) };
   }
   summary() {
     const S = this.stats, inflight = this.ues.reduce((a, u) => a + u.buf, 0);
+    const L = this.cellLat ?? [], worst = L.reduce((a, l) => Math.max(a, l.p99), 0);
     return { ues: this.ues.length, ho: S.ho, hoFail: S.hoFail, hoOk: S.ho ? (S.ho - S.hoFail) / S.ho : 1, pingpong: S.pingpong, rlf: S.rlf, avgHoMs: S.ho ? S.hoMs / S.ho : 0,
+      lbHo: S.lbHo, lbBlock: S.lbBlock, latViol: S.latViol, latSamples: S.latSamples, maxLat: S.maxLat, worstCellP99: worst, daps: NR.daps,
       sent: S.sent, delivered: S.delivered, inflight, lost: S.sent - S.delivered - inflight, fwd: S.fwd, bytes: S.bytes };
   }
 }

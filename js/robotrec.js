@@ -3,6 +3,8 @@
 // 구간마다 칸 색인(JSON: 로봇 · 카메라 · AAS 자산 · 칸 좌표)을 같이 남기고, AAS 파일을 만들 때 그 로봇이 찍힌 영상 파일 링크를 넣는다(aas.js videoSubmodel).
 import * as THREE from 'three';
 import { recSupported, pickMime, saveBlob } from './cctvrec.js';
+// 카메라별 MP4 파일 이름 (server/video-convert.mjs camFile과 같은 규칙)
+export const camFile = (t) => `${String(t.robot ?? t.id ?? 'cam').replace(/[^A-Za-z0-9_-]/g, '_')}_${String(t.camera ?? 'view').replace(/[^A-Za-z0-9_-]/g, '_')}.mp4`;
 
 export const RREC = { fps: 2, segS: 300, keep: 2, tw: 256, th: 144, cols: 9, perFrame: 3, bitrate: 1_200_000, head: 30 };
 const FONT = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
@@ -117,9 +119,21 @@ export class RobotVideoRecorder {
     return out;
   }
   entry(s, t) {
-    const file = `${s.id}.webm`;
+    const file = `${s.id}.webm`, cf = camFile(t), mp4 = s.mp4?.cameras?.some((c) => c.file === `${s.id}/${cf}`);
     return { segment: s.id, file, camera: t.camera, label: t.label, robot: t.robot, rect: t.rect, start: s.iso0, end: s.iso1, fps: RREC.fps, stored: !!s.stored, bytes: s.bytes,
-      url: s.stored ? `${this.origin}/videos/robotcam/${file}` : null, localPath: s.stored && this.dir ? `${this.dir}/${file}` : file, index: `${s.id}.json`, blob: s.blob };
+      url: s.stored ? `${this.origin}/videos/robotcam/${file}` : null, localPath: s.stored && this.dir ? `${this.dir}/${file}` : file, index: `${s.id}.json`, blob: s.blob,
+      // ffmpeg MP4: 이 카메라만 잘라낸 영상 (칸 좌표 없이 바로 재생)
+      ...(mp4 ? { mp4Url: `${this.origin}/videos/robotcam/${s.id}/${cf}`, mp4Path: this.dir ? `${this.dir}/${s.id}/${cf}` : `${s.id}/${cf}`, mosaicMp4: `${this.origin}/videos/robotcam/${s.id}.mp4` } : {}) };
+  }
+  // AAS 저장 전: 저장된 구간들의 MP4 변환(전체 + 카메라별)을 서버(ffmpeg)에 요청하고 끝날 때까지 기다린다
+  async convertAll(kind = 'robotcam', segs = this.segs) {
+    if (!this.server || !this.ffmpeg) return 0;
+    let n = 0;
+    for (const s of segs) {
+      if (!s.stored || s.mp4) continue;
+      try { const r = await fetch(`/api/convert?kind=${kind}&id=${encodeURIComponent(s.id)}`); if (r.ok) { s.mp4 = await r.json(); n++; } } catch { /* 변환 실패 — WebM 링크만 */ }
+    }
+    return n;
   }
   stats() { return { on: this.on, server: this.server, seq: this.seq, saved: this.saved, bytes: this.bytes, cams: this.tiles.length, cur: this.seg ? (performance.now() - this.seg.real0) / 1000 : 0 }; }
 }

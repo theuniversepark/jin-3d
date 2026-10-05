@@ -30,6 +30,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 | Python 3 | PSF | https://python.org | 개발 보조 스크립트, AAS 검증 |
 | Git · GitHub CLI | GPL-2.0 · MIT | https://git-scm.com · https://cli.github.com | 형상 관리, 저장소·배포 상태 확인 |
 | macOS codesign | Apple 기본 도구 | — | Mac 앱 서명 (ad-hoc) |
+| FFmpeg (libx264 포함) | LGPL-2.1-or-later / GPL-2.0-or-later (libx264 사용 빌드) | https://ffmpeg.org | 로봇 카메라·CCTV 녹화 영상(WebM)을 MP4(H.264)로 변환하고 카메라별로 잘라 냄 (`server/video-convert.mjs`). **앱에 포함하지 않고** 이 컴퓨터에 설치된 ffmpeg를 외부 프로그램으로 실행만 함 (FFMPEG_PATH → Homebrew → ~/.local/bin → PATH 순으로 찾음). 없으면 WebM으로만 저장 |
 
 ## 3. 외부 사이트·서비스
 

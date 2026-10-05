@@ -263,13 +263,16 @@ export function videoSubmodel(assetId, videos, title = '로봇 카메라 영상 
     modelType: 'Submodel', idShort: 'VideoRecordings', id: smId(assetId, 'VideoRecordings'), kind: 'Instance', semanticId: ext(SEM.videos),
     description: [{ language: 'ko', text: `${title} — 자동 녹화 영상 파일 링크 (WebM, 분할 영상의 칸 = 이 자산의 카메라)` }],
     submodelElements: [
-      prop('VideoCount', 'int', videos.length), prop('Format', 'string', 'video/webm (VP9/VP8)'),
+      prop('VideoCount', 'int', videos.length), prop('Format', 'string', videos.some((v) => v.mp4Url) ? 'video/mp4 (H.264, ffmpeg 카메라별) · 원본 video/webm' : 'video/webm (VP9/VP8)'),
       smc('Videos', videos.map((v, k) => smc(`Video${k + 1}_${safeId(v.camera)}`, [
         prop('Camera', 'string', v.label ?? v.camera), prop('CameraKey', 'string', v.camera), prop('Segment', 'string', v.segment),
         prop('StartTime', 'dateTime', v.start), prop('EndTime', 'dateTime', v.end), prop('FrameRate', 'double', v.fps),
         prop('CropRect', 'string', v.rect ? v.rect.join(',') : '', null, '분할 영상 안 이 카메라 칸 x,y,폭,높이 (px)'),
-        { modelType: 'File', idShort: 'Video', contentType: 'video/webm', value: v.url ?? v.file },
-        ...(v.localPath ? [prop('LocalPath', 'string', v.localPath, null, '로컬 저장 경로')] : []),
+        // MP4(ffmpeg, 이 카메라만 잘라낸 영상)가 있으면 Video = MP4, 원본 분할 영상(WebM)은 SourceVideo
+        ...(v.mp4Url ? [{ modelType: 'File', idShort: 'Video', contentType: 'video/mp4', value: v.mp4Url }, prop('LocalPath', 'string', v.mp4Path, null, '로컬 저장 경로 (MP4)'),
+          { modelType: 'File', idShort: 'SourceVideo', contentType: 'video/webm', value: v.url ?? v.file }]
+          : [{ modelType: 'File', idShort: 'Video', contentType: 'video/webm', value: v.url ?? v.file }]),
+        ...(v.localPath ? [prop(v.mp4Url ? 'SourceLocalPath' : 'LocalPath', 'string', v.localPath, null, v.mp4Url ? '원본 분할 영상 로컬 경로 (WebM)' : '로컬 저장 경로')] : []),
         ...(v.linkPath ? [{ modelType: 'File', idShort: 'LinkFile', contentType: 'application/internet-shortcut', value: v.linkPath }] : []),
         ...(v.index ? [prop('IndexFile', 'string', v.index, null, '카메라 배치 색인 (JSON)')] : []),
       ]))),
@@ -282,7 +285,7 @@ export function videoLinkFiles(assetId, videos) {
   videos.forEach((v, k) => {
     const path = `/aasx/${assetId}/files/videos/${safeId(v.segment)}_${safeId(v.camera)}.url`;
     v.linkPath = path;
-    files.push({ path, contentType: 'application/internet-shortcut', data: `[InternetShortcut]\r\nURL=${v.url ?? `file://${v.localPath ?? v.file}`}\r\n` });
+    files.push({ path, contentType: 'application/internet-shortcut', data: `[InternetShortcut]\r\nURL=${v.mp4Url ?? v.url ?? `file://${v.localPath ?? v.file}`}\r\n` });
   });
   if (videos.length) files.push({ path: `/aasx/${assetId}/files/videos/video_links.json`, contentType: 'application/json',
     data: JSON.stringify(videos.map(({ blob, ...v }) => v), null, 1) });
