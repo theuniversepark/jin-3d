@@ -773,3 +773,7 @@ em.up { color: var(--good); } em.dn { color: var(--bad); }
 .cc-save button:disabled { opacity: 0.45; cursor: default; }
 .cc-save small { color: var(--ink2); flex-basis: 100%; }
 .cc-rec { color: #ff6b6b; }
+/* 에이전트 구조 (단일 · 혼합형 다중) */
+.engine.arch-row { margin-top: 4px; }
+.arch-cmp { border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 3px 9px; font-size: 11px; color: var(--ink2); }
+.arch-cmp:hover { border-color: var(--accent); color: var(--ink); }

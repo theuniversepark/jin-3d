@@ -90,6 +90,13 @@
       </div>
       <label class="chk" title="Agent 응답을 기다리는 동안 시뮬레이션을 멈춥니다"><input type="checkbox" id="pauseThink" checked /> 응답 대기 시 일시정지</label>
     </div>
+    <div class="engine arch-row">
+      <div class="seg small" id="archSeg" title="에이전트 구조: 단일 자율 에이전트 / 혼합형 다중 에이전트(반사 계층 + 정비·품질·흐름 에이전트 제안 + 메인 조정자)">
+        <button data-arch="single" class="on">단일 에이전트</button>
+        <button data-arch="hybrid">혼합형 다중</button>
+      </div>
+      <button type="button" id="archCompare" class="arch-cmp" title="같은 조건의 디지털트윈에서 단일 vs 혼합형을 실제로 돌려 비교">🔬 트윈 비교</button>
+    </div>
     <div class="llm-status" id="llmStatus"></div>
     <div class="thought" id="thought"></div>
     <div class="loop"><span>관찰</span>→<span>판단</span>→<span>실행</span></div>
@@ -192,6 +199,12 @@
     <div class="modal-card wide">
       <div class="modal-h"><h2>KPI 영향 분석 · 개선 제안 <small>이벤트·문제 → UPH · OEE · WIP · POWER 손실 분해 → 개선 방법 · 제안 → 디지털트윈 검증 → 적용하시겠습니까? (적용 · 보류 · 실측 · 되돌리기)</small></h2><button id="closeImpact">✕</button></div>
       <div id="impactBody"></div>
+    </div>
+  </div>
+  <div class="modal hidden" id="archModal">
+    <div class="modal-card wide">
+      <div class="modal-h"><h2>에이전트 구조 비교 <small>단일 자율 에이전트 vs 혼합형 다중 에이전트 — 같은 라인·시드·현장 이벤트·설비 고장으로 디지털트윈을 실제로 돌려 비교</small></h2><button id="closeArch">✕</button></div>
+      <div id="archBody"></div>
     </div>
   </div>
   <div class="modal hidden" id="facosModal">

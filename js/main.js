@@ -7,6 +7,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Simulation, MODES, ST_LABEL } from './sim.js';
 import { FactoryAgent } from './agent.js';
+import { HybridAgent, compareArchitecturesAsync } from './multiagent.js';
 import { FactoryView } from './factory.js';
 import { UI } from './ui.js';
 import { LLMController } from './llm.js';
@@ -115,7 +116,7 @@ document.getElementById('log').addEventListener('click', (e) => {
   if (rec) gateView.show(rec, sim);
 });
 llm.onMix = (key) => { currentLine = lines.zone = { ...currentLine, mix: key }; saveLines(); renderZoneCard(); designer?.sync(); };
-let sim, agent;
+let sim, agent, agentArch = 'single';   // 에이전트 구조: single · hybrid (혼합형 다중 에이전트)
 let modeKey = 'smart', speed = 3, running = true, labelsOn = true;
 const SEED = 20261001;
 
@@ -191,7 +192,7 @@ function setRender(style) {
 function start(key) {
   modeKey = key;
   sim = new Simulation(key, SEED, { line: currentLine });
-  agent = new FactoryAgent(sim);
+  agent = agentArch === 'hybrid' ? new HybridAgent(sim) : new FactoryAgent(sim);
   view.setup(sim, labelsOn, changedIds);
   view.selected = null;
   hub.reset(sim, view);
@@ -351,6 +352,45 @@ document.getElementById('btnSupply').addEventListener('click', () => {
 document.getElementById('btnLabels').addEventListener('click', (e) => {
   labelsOn = !labelsOn; e.currentTarget.classList.toggle('on', labelsOn); view.setLabels(labelsOn);
 });
+// 에이전트 구조 전환 (운전 중에도): 의사결정 기록·쿨다운·고속 운전 상태를 넘겨받는다
+function setArch(arch) {
+  if (arch === agentArch) return;
+  agentArch = arch;
+  const old = agent, nu = arch === 'hybrid' ? new HybridAgent(sim) : new FactoryAgent(sim);
+  for (const k of ['decisions', 'byCat', 'history', 'cool', 'boosted', 'disruptHandled', 'supplyWait', 'llm', 'lastThought']) nu[k] = old[k];
+  agent = nu; llm.agent = agent; ui.agent = agent;   // 대화 기록은 그대로 (llm.attach는 기록을 비움)
+  document.querySelectorAll('#archSeg button').forEach((b) => b.classList.toggle('on', b.dataset.arch === arch));
+  sim.log('info', `에이전트 구조 전환 · ${arch === 'hybrid' ? '혼합형 다중 에이전트' : '단일 자율 에이전트'}`, { act: arch === 'hybrid' ? '반사 계층(배차·절전·충전·투입 보류) + 정비·품질·흐름 에이전트 제안 → 메인 조정자 판정' : '정비·품질·흐름·물류·에너지·충전 모듈이 바로 판단·실행' });
+  ui.update();
+}
+document.getElementById('archSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-arch]'); if (b) setArch(b.dataset.arch); });
+const archModal = document.getElementById('archModal'), archBody = document.getElementById('archBody');
+let archRes = null, archBusy = null;
+document.getElementById('closeArch').addEventListener('click', () => archModal.classList.add('hidden'));
+document.getElementById('archCompare').addEventListener('click', () => { archModal.classList.remove('hidden'); renderArch(); });
+archBody.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-arch-run]'); if (!b || archBusy) return;
+  const T = +b.dataset.archRun, mode = modeKey === 'traditional' ? 'smart' : modeKey;
+  archBusy = { done: 0, total: 6, mode }; renderArch();
+  compareArchitecturesAsync({ mode, line: currentLine, T, seeds: [7, 19, 31] }, (d, n) => { archBusy.done = d; archBusy.total = n; renderArch(); }).then((r) => { archRes = r; archBusy = null; renderArch(); });
+});
+function renderArch() {
+  const f1 = (v) => v.toFixed(1), pct = (v) => `${(v * 100).toFixed(2)}%`;
+  const rows = [['UPH', 'uph', f1, 1], ['OEE', 'oee', pct, 1], ['평균 WIP', 'wip', (v) => v.toFixed(2), -1], ['kWh/개', 'kwhUnit', (v) => v.toFixed(4), -1], ['설비 고장', 'failures', f1, -1], ['예지정비', 'pm', f1, 0], ['정지(고장·정비) 분', 'downMin', f1, -1], ['출하', 'shipped', f1, 1],
+    ['판단·실행 건수', 'decisions', (v) => v.toFixed(0), 0], ['제안 → 실행 평균 지연(초)', 'avgLat', (v) => v.toFixed(2), -1], ['최대 지연(초)', 'latMax', (v) => v.toFixed(0), -1], ['충돌 판정', 'conflicts', f1, 0], ['보류', 'deferred', (v) => v.toFixed(0), 0], ['되돌림(진동)', 'reversals', f1, -1]];
+  const R = archRes, mk = (lab) => (R ? lab : '');
+  const tbl = R ? `<table class="imp-t"><thead><tr><th>지표 (시드 ${R.seeds.length}개 평균)</th><th>단일 에이전트</th><th>혼합형 다중</th><th>차이</th></tr></thead><tbody>${rows.map(([l, k, fm, better]) => {
+    const a = R.single[k] ?? 0, b = R.hybrid[k] ?? 0, d = b - a, good = better ? Math.sign(d) === better && Math.abs(d) > 1e-9 : false, bad = better ? Math.sign(d) === -better && Math.abs(d) > 1e-9 : false;
+    return `<tr><td>${l}</td><td>${fm(a)}</td><td>${fm(b)}</td><td><em class="${good ? 'up' : bad ? 'dn' : ''}">${d >= 0 ? '+' : ''}${k === 'oee' ? (d * 100).toFixed(2) + '%p' : fm(d)}</em></td></tr>`; }).join('')}</tbody></table>` : '';
+  const verdict = R ? (() => { const du = (R.hybrid.uph - R.single.uph) / Math.max(1, R.single.uph) * 100, dO = (R.hybrid.oee - R.single.oee) * 100;
+    return Math.abs(du) < 0.3 && Math.abs(dO) < 0.2 ? `두 구조의 생산 지표 차이가 거의 없습니다 (UPH ${du >= 0 ? '+' : ''}${du.toFixed(1)}%). 이 단계에서는 도메인 에이전트가 제안할 일이 적어(피지컬AI는 정비·보정을 순찰 로봇·셀 자율 보정이 먼저 처리) 단일 에이전트로 충분합니다.`
+      : `혼합형이 UPH ${du >= 0 ? '+' : ''}${du.toFixed(1)}% · OEE ${dO >= 0 ? '+' : ''}${dO.toFixed(2)}%p — 메인 조정자가 병목 셀 가동 중 예지정비를 대기 구간까지 미루고(충돌 ${R.hybrid.conflicts.toFixed(0)}회), 정비 인력 수만큼만 정비를 겁니다. 대신 제안 → 실행이 평균 ${R.hybrid.avgLat.toFixed(1)}초(최대 ${R.hybrid.latMax.toFixed(0)}초) 늦습니다.`; })() : '';
+  setHTML(archBody, `<p class="imp-note">비교 단계: <b>${modeKey === 'traditional' ? '자동화 (레거시는 에이전트가 수동 운영이라 같음)' : sim.mode.label}</b> · 라인: ${currentLine.name} · 시드 7·19·31 · 피지컬AI는 10분마다 현장 이벤트, 20분마다 설비 고장 주입 · 지금 운영 중인 구조: <b>${agentArch === 'hybrid' ? '혼합형 다중' : '단일'}</b></p>
+    <div class="imp-head"><span></span><div>${archBusy ? `<span class="imp-note">⏳ 트윈 실행 중 ${archBusy.done}/${archBusy.total}…</span>` : `<button type="button" class="imp-md" data-arch-run="3600">▶ 1시간 × 3 비교</button> <button type="button" class="imp-md" data-arch-run="7200">▶ 2시간 × 3 비교</button>`}</div></div>
+    ${R ? `<h3>결과 — ${R.mode === 'dark' ? '피지컬AI' : '자동화'} · ${R.T / 3600}시간</h3>${tbl}<p class="imp-note">${verdict}</p>` : '<p class="imp-note">▶ 버튼을 누르면 단일·혼합형을 같은 조건으로 3번씩 실제로 돌립니다 (몇 초 걸립니다).</p>'}
+    <h3>혼합형 다중 에이전트 구성</h3><ul class="imp-log"><li><b>반사 계층</b> (매 1초, 바로 실행): 자재 배차 · 셀 절전 · AGV 충전 · 정지 설비 앞 투입 보류</li><li><b>정비 에이전트</b>(5초) · <b>품질 에이전트</b>(2초) · <b>흐름 에이전트</b>(3초): 공장 상태를 보고 제안과 근거만 올림</li><li><b>메인 조정자</b> (매 1초): 안전 우선순위(P1 대응 중 정비·보정 보류) → 처리된 제안 정리 → 충돌 판정(병목 가동 중 정비는 위급하지 않으면 대기 구간까지 · 정비 인력 수만큼 · 정비 필요 셀 고속 운전 거절 · 투입 간격 20초 안 되돌림 금지) → 승인 제안 실행</li></ul>
+    ${mk('')}`);
+}
 document.getElementById('engineSeg').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
   llm.setEnabled(b.dataset.engine === 'llm');
