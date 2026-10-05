@@ -234,7 +234,7 @@ AMR이 구분 적재장 입구(경로 끝)에서 **가운데 정지 구간까지
 - **기준 시계**: 공장 전체가 하나의 시계를 씁니다. 시뮬레이션 0초 = 시작일 08:00(현지) 기준이고, 모든 운영 데이터·이벤트·OPC UA 메시지·저장 파일의 시각이 이 시계의 ISO 8601 UTC 값입니다. 상단 시계에 마우스를 올리면 UTC 기준 시각이 보입니다.
 - **이동 로봇 전송 경로 (Private 5G)**: AMR·AGV·자율 지게차·휴머노이드·사족보행·드론·AMMR의 AAS·OPC UA 메시지는 그 로봇의 5G 모뎀 → Private 5G 업링크 → 5GC UPF → MQTT 브로커로 갑니다(DAPS 핸드오버로 끊김·유실 0, 아래 'Private 5G 특화망'). 설비·셀처럼 고정된 자산은 유선(공장 LAN)입니다.
 - **수집**: 수집 주기(기본 10초, 시뮬레이션 시간)마다 모든 자산의 값을 한 시각으로 묶어 기록하고, 운영 로그는 발생 시각 그대로 이벤트로 기록합니다. 최근 6000회차를 보관합니다.
-- **AAS 모델** (IDTA Part 1 메타모델 v3.0): 자산마다 AAS 하나 — 라인, 설비·셀, 셀 로봇(관절·TCP), 운반 AMR, AGV/지게차, 휴머노이드, 사족보행, 정비로봇. 서브모델은 Nameplate · TechnicalData · OperationalData(실시간 값) · TimeSeries(IDTA 02008). 제조사명은 "Jin-3D 가상 자산"입니다.
+- **AAS 모델** (IDTA Part 1 메타모델 — 기본 **v3.1**, 저장 옵션 v3.0): 자산마다 AAS 하나 — 라인, 설비·셀, 셀 로봇(관절·TCP), 운반 AMR, AGV/지게차, 휴머노이드, 사족보행, 정비로봇. 서브모델은 Nameplate · TechnicalData · OperationalData(실시간 값) · TimeSeries(IDTA 02008). 제조사명은 "Jin-3D 가상 자산"입니다.
 - **OPC UA PubSub over MQTT** (OPC UA Part 14, JSON 인코딩, MQTT 전송): 서버에 내장 MQTT 브로커(aedes)가 `mqtt://127.0.0.1:1883`에서 실행됩니다.
   - 데이터: `opcua/json/data/jin3d/MetaFactory/<자산 id>` — NetworkMessage(`ua-data`) 안의 DataSetMessage(`ua-keyframe`), 필드마다 `Value`·`SourceTimestamp`
   - 메타데이터: `opcua/json/metadata/jin3d/MetaFactory/<자산 id>` (retain) — DataSetMetaData(필드 이름·BuiltInType·단위)와 AAS id·서브모델 id·idShort·semanticId
@@ -555,6 +555,9 @@ VLA가 끝단 로봇의 추론 모델이라면, **AIOS**는 공장 운영 시스
     - `TelemetryTimeSeries` — 정밀 기록: 로봇을 선택한 뒤 1초(시뮬레이션) 간격으로 관절 위치·속도·토크·모터 온도, TCP, 공정 센서, 주행·라이다 등. 패널을 닫았다가 같은 로봇을 다시 선택해도 이어서 쌓입니다(로봇당 최대 2만 개, 새 실행 시 초기화).
   - AASX에는 정밀 기록 CSV를 보조 파일(aas-suppl)로 함께 넣고, TelemetryTimeSeries의 ExternalSegment가 그 파일을 가리킵니다.
   - 시각은 모두 공장 기준 시계(ISO 8601 UTC)입니다. AASX 안의 AAS XML과 JSON·XML은 `aas-core3.0` 검증 오류 0건을 확인했습니다 (`js/aasx.js`, `js/aas.js`).
+  - **AAS 메타모델 버전 (기본 v3.1)**: 저장 형식 옆 **AAS v3.1 | v3.0** 선택(데이터 연동 창에도 같은 선택, 브라우저에 기억). XML·RDF 네임스페이스만 다르고 구성은 같습니다(JSON은 공통). **v3.1**(`https://admin-shell.io/aas/3/1`)은 Eclipse BaSyx Python SDK 2.x 등 최신 도구용이고, **v3.0**(`…/aas/3/0`)은 3.0만 읽는 구버전 도구용입니다.
+  - **BaSyx 파싱 문제 수정**: 이전 저장본은 ① v3.0 네임스페이스라 BaSyx SDK 2.2.0이 엄격 모드에서 `required namespaces are not declared: https://admin-shell.io/aas/3/1`로 거부하고, 관대 모드(뷰어)에서는 셸·서브모델을 모두 건너뛰어 **빈 트리**로 열렸습니다. ② AMMR 로봇의 `HoldingPart`(부품 파지) 값 형식이 규격 이름이 아닌 `bool`로 나가 JSON 파싱이 실패했습니다(→ `xs:boolean`, 모르는 형식은 `xs:string`). ③ AASX 안의 영상 링크 목록(`video_links.json`)을 File 요소(`VideoLinkList`)로 가리켜 AAS 도구가 함께 읽게 했습니다. 수정 후 앱에서 저장한 셀 AMMR AASX(객체 93개 · 보조 파일 10개), 정비 휴머노이드 AASX(50개 · 18개), AMMR AAS JSON(93개)이 BaSyx SDK 엄격 모드로 읽히고 BaSyx compliance tool 검사도 통과합니다(영상 MP4·WebM 링크는 패키지 밖 주소라 BaSyx가 "건너뜀" 정보 로그만 남김 — 오류 아님).
+  - 검증: `npm test`(tests/aasbasyx.mjs, 7개 항목) — 모든 valueType이 xs: 규격 이름, 기본 v3.1·옵션 v3.0 네임스페이스, BaSyx SDK(`../BaSyx/Jin-AASX/.venv` 또는 `BASYX_PY`)로 로봇 AASX·JSON·XML·데이터 허브 XML 엄격 파싱(보조 파일 수 포함), v3.0은 BaSyx 2.x가 거부함을 확인. BaSyx SDK가 없으면 파싱 시험은 건너뜁니다.
 
 ## 설비 고유 ID · 설비 현황판
 공장에 배치·사용되는 모든 설비와 로봇(사람 제외)에 고유 ID를 붙입니다 (`assignIds` in `js/sim.js`).

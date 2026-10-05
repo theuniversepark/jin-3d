@@ -30,6 +30,7 @@ import { DRONE_SIZING } from './drone.js';
 import { CCTVView, CCTV_CLASSES } from './cctvview.js';
 import { AI_MODELS } from './cctv.js';
 import { NR, STACK, LAT, UE_LOAD, maxRobots } from './net5g.js';
+import { setAasVersion, AAS_VERSIONS } from './aas.js';
 import { OrchView } from './orchview.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
@@ -419,9 +420,13 @@ document.getElementById('closeCompare').addEventListener('click', () => document
 const dataModal = document.getElementById('datahub'), dataBody = document.getElementById('dataBody');
 let dataTimer = null, dataNote = '';
 const kb = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+// AAS 메타모델 버전 선택 (로봇 정보 창 · 데이터 연동 창 공통, 브라우저에 기억) — 기본 3.1
+const aasVer = () => { try { return localStorage.getItem('jin3d.aasVersion') ?? '3.1'; } catch { return '3.1'; } };
+document.addEventListener('change', (e) => { if (e.target?.id === 'rbVer' || e.target?.id === 'dhVer') { try { localStorage.setItem('jin3d.aasVersion', e.target.value); } catch { /* 저장소 없음 */ } setAasVersion(e.target.value); } });
+setAasVersion(aasVer());
 const FORMATS = [
   ['json', 'JSON', 'AAS JSON 직렬화 (셸·서브모델·개념 설명, 자산별 최근 60개 기록 + 전체는 CSV 참조)'],
-  ['xml', 'XML', 'AAS XML 스키마 v3.0 (네임스페이스 admin-shell.io/aas/3/0), JSON과 같은 구성'],
+  ['xml', 'XML', 'AAS XML 스키마 (기본 v3.1 네임스페이스 admin-shell.io/aas/3/1 · 옵션 v3.0), JSON과 같은 구성'],
   ['rdf', 'RDF', 'AAS RDF 매핑 · Turtle(.ttl), JSON과 같은 구성'],
   ['csv', 'CSV', '시계열·이벤트 긴 형식 (타임스탬프·자산·항목·값·단위)'],
   ['aml', 'AutomationML', 'CAEX 3.0 공장 계층 + AAS id + 최신 값, CSV 시계열 참조'],
@@ -584,6 +589,7 @@ function renderData() {
         <details><summary>마지막 NetworkMessage — <code>${escH(hub.lastMsg?.topic ?? '')}</code></summary><pre class="dh-pre">${escH(preview)}</pre></details></section>
       <section class="span2"><h4>📦 패킷 덤프 (pcap · Wireshark)</h4>${pcapHtml()}</section>
       <section class="span2"><h4>💾 저장 (현재까지 수집한 데이터)</h4>
+        <div class="dh-ver">AAS 메타모델 버전 <select id="dhVer" title="XML·RDF 네임스페이스 — 3.1: BaSyx SDK 2.x 등 최신 도구 · 3.0: 구버전 도구">${Object.keys(AAS_VERSIONS).map((v) => `<option value="${v}" ${aasVer() === v ? 'selected' : ''}>v${v}${v === '3.1' ? ' (기본)' : ' (구버전 호환)'}</option>`).join('')}</select></div>
         <div class="dh-save">${FORMATS.map(([k, n, d]) => `<button data-fmt="${k}"><b>${n}</b><small>${d}</small></button>`).join('')}</div>
         <div class="dh-note">${escH(dataNote)}</div></section>
     </div>
@@ -622,6 +628,7 @@ dataBody.addEventListener('click', (e) => {
   if (hub.shared) { dataNote = '공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.'; return renderData(); }
   if (!hub.samples.length) { dataNote = '아직 수집된 데이터가 없습니다. 시뮬레이션을 잠시 돌린 뒤 저장하세요.'; return renderData(); }
   const fmt = b.dataset.fmt, aas = ['json', 'xml', 'rdf'].includes(fmt);
+  setAasVersion(document.getElementById('dhVer')?.value ?? aasVer());
   // AAS 저장: 진행 중인 로봇 카메라·CCTV 녹화 구간을 먼저 마감해 로컬(서버 data/)에 저장하고, 영상 파일 링크를 자산별 VideoRecordings 서브모델로 넣는다
   if (aas && robotRec.ffmpeg) { dataNote = '영상 구간 마감 · ffmpeg MP4 변환 중… (전체 + 카메라별)'; renderData(); }
   (aas ? Promise.all([robotRec.flush(), cctvRec.flush()]).then(() => Promise.all([robotRec.convertAll(), cctvRec.convertAll()])) : Promise.resolve()).then(() => {
@@ -747,7 +754,7 @@ function renderPcapBox() {
     ${assetPcapNote.key === t.key && assetPcapNote.text ? `<div class="pnote">${escH(assetPcapNote.text)}</div>` : ''}
     <div class="pnote">창을 닫아도 캡처는 계속됩니다(다시 열면 이어서 보임). 전체 캡처는 📡 데이터 연동 → 패킷 덤프.</div>`);
 }
-ui.onDetailRendered = renderPcapBox;
+ui.onDetailRendered = () => { renderPcapBox(); const v = document.getElementById("rbVer"); if (v) v.value = aasVer(); };   // 저장한 AAS 버전 선택 유지
 function pcapAssetAction(act) {
   const T = pcapAsset(); if (!T) return;
   const t = hub.assetTarget(T.a);
@@ -778,6 +785,7 @@ ui.onDetailAction = (act, st) => {
   if (act === 'robotSave' && view.telemetry && hub.shared) ui.robotSaved('공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.');
   else if (act === 'robotSave' && view.telemetry) {
     const fmt = document.getElementById('rbFmt').value, tele = view.telemetry;
+    setAasVersion(document.getElementById('rbVer')?.value ?? aasVer());
     ui.robotSaved(robotRec.ffmpeg ? '영상 녹화 구간 마감 · ffmpeg MP4 변환 중… (카메라별)' : '영상 녹화 구간 마감 · 저장 중…');
     // 이 로봇 카메라 영상: 진행 중 구간을 마감·로컬 저장 → ffmpeg로 MP4(카메라별) 변환 → 영상 파일 링크를 AAS(VideoRecordings)에, AASX에는 링크 파일(.url)도 함께
     robotRec.flush().then(() => robotRec.convertAll()).then(() => {

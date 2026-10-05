@@ -195,6 +195,10 @@ export class UI {
             <option value="xml">AAS XML</option>
             <option value="rdf">AAS RDF (Turtle)</option>
           </select>
+          <select id="rbVer" title="AAS 메타모델 버전 — XML·RDF 네임스페이스 (3.1: BaSyx SDK 2.x 등 최신 도구 · 3.0: 구버전 도구)">
+            <option value="3.1">AAS v3.1</option>
+            <option value="3.0">AAS v3.0</option>
+          </select>
           <button type="button" data-act="robotSave">저장</button>
         </div>
         <div class="rb-save-note" id="rbSaveNote"></div>

@@ -806,3 +806,7 @@ em.up { color: var(--good); } em.dn { color: var(--bad); }
 .ai-steps li { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline; }
 .ai-steps li span { color: var(--ink2); }
 .ai-steps li em { font-style: normal; color: #e2d6ff; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* AAS 메타모델 버전 선택 */
+.rb-save-row #rbVer { flex: 0 0 auto; }
+.dh-ver { font-size: 12px; color: var(--ink2); margin: 4px 0 6px; display: flex; align-items: center; gap: 6px; }
+.dh-ver select { background: rgba(255, 255, 255, 0.06); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 2px 6px; }

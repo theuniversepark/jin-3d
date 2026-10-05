@@ -3,7 +3,12 @@
 // 서브모델은 Nameplate · TechnicalData · OperationalData(실시간 값) · TimeSeries(IDTA 02008, 수집 데이터)로 구성한다.
 // 같은 모델을 JSON · XML · RDF(Turtle) · CSV · AutomationML(CAEX 3.0)로 직렬화한다.
 
-export const AAS_NS = 'https://admin-shell.io/aas/3/0';
+// 메타모델 버전: 기본 v3.1 (IDTA-01001-3-1 · Eclipse BaSyx SDK 2.x 등 최신 도구), 저장 옵션으로 v3.0 (구버전 도구 호환)
+// XML·RDF의 네임스페이스만 다르고 구성은 같다 (JSON은 네임스페이스가 없어 두 버전 공통)
+export const AAS_VERSIONS = { '3.1': 'https://admin-shell.io/aas/3/1', '3.0': 'https://admin-shell.io/aas/3/0' };
+export let AAS_VERSION = '3.1';
+export let AAS_NS = AAS_VERSIONS['3.1'];
+export function setAasVersion(v) { AAS_VERSION = AAS_VERSIONS[v] ? v : '3.1'; AAS_NS = AAS_VERSIONS[AAS_VERSION]; return AAS_VERSION; }
 const BASE = 'https://camtic.or.kr/aas/jin3d';
 export const SEM = {
   nameplate: 'https://admin-shell.io/zvei/nameplate/2/0/Nameplate',
@@ -16,7 +21,8 @@ export const SEM = {
 };
 export const aasId = (assetId) => `${BASE}/${assetId}`;
 export const smId = (assetId, sm) => `${BASE}/${assetId}/sm/${sm}`;
-const XSD = { double: 'xs:double', int: 'xs:int', string: 'xs:string', boolean: 'xs:boolean', dateTime: 'xs:dateTime' };
+// 값 형식 → AAS DataTypeDefXsd (규격 이름이 아닌 형식이 그대로 나가지 않게 — 예: bool → xs:boolean)
+const XSD = { double: 'xs:double', float: 'xs:float', int: 'xs:int', integer: 'xs:integer', long: 'xs:long', string: 'xs:string', boolean: 'xs:boolean', bool: 'xs:boolean', dateTime: 'xs:dateTime', anyURI: 'xs:anyURI' };
 
 const ext = (value) => ({ type: 'ExternalReference', keys: [{ type: 'GlobalReference', value }] });
 const modelRef = (type, value) => ({ type: 'ModelReference', keys: [{ type, value }] });
@@ -24,7 +30,7 @@ const prop = (idShort, valueType, value, semanticId, desc) => ({
   modelType: 'Property', idShort,
   ...(desc ? { description: [{ language: 'ko', text: desc }] } : {}),
   ...(semanticId ? { semanticId: ext(semanticId) } : {}),
-  valueType: XSD[valueType] ?? valueType,
+  valueType: XSD[valueType] ?? (String(valueType).startsWith('xs:') ? valueType : 'xs:string'),   // 모르는 형식은 문자열로
   // 값이 없으면 value를 생략한다 (숫자·날짜 형식에 빈 문자열은 값 형식 제약 위반)
   ...(value != null && (value !== '' || valueType === 'string') ? { value: String(value) } : {}),
 });
@@ -263,7 +269,9 @@ export function videoSubmodel(assetId, videos, title = '로봇 카메라 영상 
     modelType: 'Submodel', idShort: 'VideoRecordings', id: smId(assetId, 'VideoRecordings'), kind: 'Instance', semanticId: ext(SEM.videos),
     description: [{ language: 'ko', text: `${title} — 자동 녹화 영상 파일 링크 (WebM, 분할 영상의 칸 = 이 자산의 카메라)` }],
     submodelElements: [
-      prop('VideoCount', 'int', videos.length), prop('Format', 'string', videos.some((v) => v.mp4Url) ? 'video/mp4 (H.264, ffmpeg 카메라별) · 원본 video/webm' : 'video/webm (VP9/VP8)'),
+      prop('VideoCount', 'int', videos.length),
+      // AASX: 영상 링크 목록 파일도 File 요소로 가리킨다 (AAS 도구는 모델이 가리키는 보조 파일만 읽는다 — BaSyx SDK 등)
+      ...(videos.some((v) => v.linkPath) ? [{ modelType: 'File', idShort: 'VideoLinkList', contentType: 'application/json', value: `/aasx/${assetId}/files/videos/video_links.json` }] : []), prop('Format', 'string', videos.some((v) => v.mp4Url) ? 'video/mp4 (H.264, ffmpeg 카메라별) · 원본 video/webm' : 'video/webm (VP9/VP8)'),
       smc('Videos', videos.map((v, k) => smc(`Video${k + 1}_${safeId(v.camera)}`, [
         prop('Camera', 'string', v.label ?? v.camera), prop('CameraKey', 'string', v.camera), prop('Segment', 'string', v.segment),
         prop('StartTime', 'dateTime', v.start), prop('EndTime', 'dateTime', v.end), prop('FrameRate', 'double', v.fps),
