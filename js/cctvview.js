@@ -165,7 +165,7 @@ export class CCTVView {
     this.setCam(this.cams[k], c); this.render(this.cams[k], this.rt, new THREE.Vector4(col * TW, (this.rows - 1 - row) * TH, TW, TH));
   }
   update(rdt) {
-    if (!this.sim || this.lost || !this.group.visible) return;
+    if (!this.sim || this.lost || (!this.group.visible && !this.recording)) return;   // 전광판이 없는 레거시 공장도 자동 녹화 중이면 영상을 그린다
     this.t += rdt; this.layout();
     const n = this.slots.length; if (!n) return;
     // 이벤트·인시던트를 잡고 있는 카메라 칸은 매 프레임, 나머지는 프레임마다 PER_FRAME칸씩 차례로 갱신

@@ -122,7 +122,8 @@ app.whenReady().then(async () => {
   });
   try {
     process.env.JIN3D_DATA_DIR ??= path.join(app.getPath('userData'), 'data');   // VLA 에피소드 저장 위치
-    const { port } = await startServer({ port: 0, host: '127.0.0.1' });
+    // 고정 포트를 먼저 쓴다 — AAS에 넣은 영상 링크(http://127.0.0.1:47615/videos/…)가 앱을 다시 켜도 그대로 열리게. 이미 쓰이고 있으면 빈 포트
+    const { port } = await startServer({ port: 47615, host: '127.0.0.1' }).catch(() => startServer({ port: 0, host: '127.0.0.1' }));
     origin = `http://127.0.0.1:${port}`;
   } catch (e) {
     dialog.showErrorBox(APP_NAME, `내장 서버를 시작하지 못했습니다.\n${e.message}`);

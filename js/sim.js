@@ -25,7 +25,7 @@ export const MODES = {
   traditional: {
     key: 'traditional', label: '레거시 공장', short: '레거시',
     cycleMul: 1.22, cycleVar: 0.22, defectBase: 0.028, catchRate: 0.85, wearMul: 1.15,
-    repairTime: 160, pmTime: 0, pmEnabled: false, alarmDelay: 35,
+    repairTime: 160, pmTime: 0, pmEnabled: false, alarmDelay: 10, andon: true,   // 설비 알람 자동 호출(안돈): 고장 발견·호출 35초 → 10초 — KPI 영향·개선 제안 적용 (2시간 × 시드 3 고장 정지 −12% · WIP −7%)
     vehicles: 1, vehicleKind: 'forklift', vehicleSpeed: 1.7, batteryDrain: 0, vehicleCap: 24,
     techs: 2, techKind: 'human', techSpeed: 1.3,
     reorderPoint: 3, shipBatch: 24, dispatchDelay: 25, releaseInterval: 7.5,
@@ -1183,12 +1183,12 @@ export class Simulation {
     // 인시던트: 현장 감지 → 셀 자체 조치 → 상위 보고 → (판단 지연 후) 판단·명령 → 정비 출동
     const o = this.orch, who = m.techKind === 'humanoid' ? '정비 휴머노이드' : '정비원';
     const inc = o.open('equipment', `fail:${st.id}`, `${st.name} 설비 고장`, st.name, { where: { x: st.x, z: st.z } });
-    o.step(inc, 'field', 'detect', m.agentActive ? `IoT 알람 — 건강도 ${st.health.toFixed(0)}%, 진동·전류 이상, 가동 정지` : `설비 정지 — 작업자가 이상을 발견하기까지 약 ${m.alarmDelay}초`);
+    o.step(inc, 'field', 'detect', m.agentActive ? `IoT 알람 — 건강도 ${st.health.toFixed(0)}%, 진동·전류 이상, 가동 정지` : (m.andon ? `설비 정지 — 안돈 알람 자동 호출 (경광등·호출 버저, 반장 확인까지 약 ${m.alarmDelay}초)` : `설비 정지 — 작업자가 이상을 발견하기까지 약 ${m.alarmDelay}초`));
     o.step(inc, 'cell', 'self', m.agentActive ? '셀 자체 조치: 비상 정지 · 작업물 보류 · 자가 진단 → 재가동 불가' : '셀 자체 조치 없음 (수동 설비)');
     const pending = !!st.request;
     if (pending) { st.request.kind = 'repair'; this.erp?.maintenance(st, 'repair'); }
     else if (!m.agentActive) this.requestTech(st, 'repair', m.alarmDelay + 5);   // 레거시: 발견 지연 → 반장 판단 후 정비반 호출
-    o.later(m.agentActive ? 0.5 : m.alarmDelay, () => o.step(inc, 'cell', 'report', `${m.agentActive ? '상위 보고' : '작업자 → 반장 보고'}: 고장 · 예상 수리 ${Math.round(st.repairTotal)}초 · 하류 셀 자재대기 예상`));
+    o.later(m.agentActive ? 0.5 : m.alarmDelay, () => o.step(inc, 'cell', 'report', `${m.agentActive ? '상위 보고' : m.andon ? '안돈 → 반장 호출' : '작업자 → 반장 보고'}: 고장 · 예상 수리 ${Math.round(st.repairTotal)}초 · 하류 셀 자재대기 예상`));
     o.later(m.agentActive ? o.latency : m.alarmDelay + 5, () => {
       o.step(inc, 'orch', 'decide', `판단(${o.name}): 영향 분석 — 긴급수리 우선, 대기 중 투입 조정`);
       o.step(inc, 'orch', 'command', pending ? `명령: 진행 중이던 정비를 긴급수리로 전환` : `명령: ${who} 긴급수리 출동`);
@@ -1202,7 +1202,7 @@ export class Simulation {
       });
     } else {
       this.log('alert', `${st.name} 설비 정지`, {
-        obs: `작업자가 이상을 발견하기까지 약 ${m.alarmDelay}초 지연`,
+        obs: m.andon ? `안돈 알람 자동 호출 — 반장 확인까지 약 ${m.alarmDelay}초` : `작업자가 이상을 발견하기까지 약 ${m.alarmDelay}초 지연`,
         act: `정비반 호출 (사후보전, 예상 수리 ${Math.round(st.repairTotal)}초)`,
       });
     }

@@ -11,6 +11,7 @@ export const SEM = {
   timeseries: 'https://admin-shell.io/idta/TimeSeries/1/1',
   operational: 'https://camtic.or.kr/sm/jin3d/OperationalData/1/0',
   events: 'https://camtic.or.kr/sm/jin3d/Events/1/0',
+  videos: 'https://camtic.or.kr/sm/jin3d/VideoRecordings/1/0',
   cd: (name) => `https://camtic.or.kr/cd/jin3d/${name}`,
 };
 export const aasId = (assetId) => `${BASE}/${assetId}`;
@@ -253,6 +254,47 @@ const tsSubmodel = (assetId, smName, title, fields, recs, fileRef) => ({
     ], 'https://admin-shell.io/idta/TimeSeries/Segments/1/1'),
   ],
 });
+// ── 영상 기록 서브모델: 로봇 카메라·CCTV가 찍은 영상 파일 링크 (구간마다 카메라별) ─────────────────
+// videos: [{ segment, file, camera, label, rect, start, end, fps, url, localPath, linkPath }]
+//   File(Video) value = 영상 URL(맥 앱 서버) 또는 파일 이름 · File(LinkFile) value = AASX 안 링크 파일(.url) · 칸 좌표(분할 영상에서 이 카메라 위치)
+const safeId = (s) => String(s).replace(/[^A-Za-z0-9_]/g, '_');
+export function videoSubmodel(assetId, videos, title = '로봇 카메라 영상 기록') {
+  return {
+    modelType: 'Submodel', idShort: 'VideoRecordings', id: smId(assetId, 'VideoRecordings'), kind: 'Instance', semanticId: ext(SEM.videos),
+    description: [{ language: 'ko', text: `${title} — 자동 녹화 영상 파일 링크 (WebM, 분할 영상의 칸 = 이 자산의 카메라)` }],
+    submodelElements: [
+      prop('VideoCount', 'int', videos.length), prop('Format', 'string', 'video/webm (VP9/VP8)'),
+      smc('Videos', videos.map((v, k) => smc(`Video${k + 1}_${safeId(v.camera)}`, [
+        prop('Camera', 'string', v.label ?? v.camera), prop('CameraKey', 'string', v.camera), prop('Segment', 'string', v.segment),
+        prop('StartTime', 'dateTime', v.start), prop('EndTime', 'dateTime', v.end), prop('FrameRate', 'double', v.fps),
+        prop('CropRect', 'string', v.rect ? v.rect.join(',') : '', null, '분할 영상 안 이 카메라 칸 x,y,폭,높이 (px)'),
+        { modelType: 'File', idShort: 'Video', contentType: 'video/webm', value: v.url ?? v.file },
+        ...(v.localPath ? [prop('LocalPath', 'string', v.localPath, null, '로컬 저장 경로')] : []),
+        ...(v.linkPath ? [{ modelType: 'File', idShort: 'LinkFile', contentType: 'application/internet-shortcut', value: v.linkPath }] : []),
+        ...(v.index ? [prop('IndexFile', 'string', v.index, null, '카메라 배치 색인 (JSON)')] : []),
+      ]))),
+    ],
+  };
+}
+// AASX 안에 넣는 영상 링크 파일(.url · Windows/macOS 인터넷 바로가기) + 목록(video_links.json)
+export function videoLinkFiles(assetId, videos) {
+  const files = [];
+  videos.forEach((v, k) => {
+    const path = `/aasx/${assetId}/files/videos/${safeId(v.segment)}_${safeId(v.camera)}.url`;
+    v.linkPath = path;
+    files.push({ path, contentType: 'application/internet-shortcut', data: `[InternetShortcut]\r\nURL=${v.url ?? `file://${v.localPath ?? v.file}`}\r\n` });
+  });
+  if (videos.length) files.push({ path: `/aasx/${assetId}/files/videos/video_links.json`, contentType: 'application/json',
+    data: JSON.stringify(videos.map(({ blob, ...v }) => v), null, 1) });
+  return files;
+}
+export function addVideos(env, assetId, videos, title) {
+  if (!videos?.length) return env;
+  const sm = videoSubmodel(assetId, videos, title);
+  env.submodels.push(sm);
+  env.assetAdministrationShells.find((a) => a.id === aasId(assetId))?.submodels.push(modelRef('Submodel', sm.id));
+  return env;
+}
 export function buildRobotEnvironment({ asset, samples, detail, last, opts = {} }) {
   const env = buildEnvironment([asset], [], last);
   // 데이터 허브용 TimeSeries(최근 기록용 구조)를 로봇 전용 두 시계열로 바꾼다
@@ -262,6 +304,7 @@ export function buildRobotEnvironment({ asset, samples, detail, last, opts = {} 
   const sms = [tsSubmodel(asset.id, 'TimeSeries', '운영 기록 (데이터 허브 수집 주기)', asset.fields, op)];
   if (detail?.fields?.length) sms.push(tsSubmodel(asset.id, 'TelemetryTimeSeries', '정밀 기록 (로봇 선택 후 1초 간격: 관절·토크·온도·TCP·센서)', detail.fields, detail.rows, opts.fileRef));
   for (const sm of sms) { env.submodels.push(sm); env.assetAdministrationShells[0].submodels.push(modelRef('Submodel', sm.id)); }
+  addVideos(env, asset.id, opts.videos);   // 이 로봇 카메라가 찍은 영상 파일 링크
   const known = new Set(env.conceptDescriptions.map((c) => c.id));
   for (const f of detail?.fields ?? []) {
     if (known.has(SEM.cd(f.idShort))) continue;

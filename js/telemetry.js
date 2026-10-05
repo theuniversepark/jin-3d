@@ -206,7 +206,7 @@ export class RobotTelemetry {
   joints(R) {
     if (R.robot) return R.robot.joints();
     const ud = R.view?.g.userData;
-    if (R.kind === 'humanoid') return [ud.legL.rotation.x, ud.legR.rotation.x, ud.armL.rotation.x, ud.armR.rotation.x, ud.body.position.y];
+    if (R.kind === 'humanoid') return [ud.waist?.rotation.y ?? 0, ud.head?.rotation.y ?? 0, ud.legL.rotation.x, ud.legR.rotation.x, ud.armL.rotation.x, ud.armR.rotation.x, ud.body.position.y];
     if (R.kind === 'quadruped') return ud.legs.flatMap((l) => [l.hip.rotation.x, l.knee.rotation.x]);
     if (R.kind === 'robot' && ud.arm) return ud.arm.joints();
     return null;
@@ -223,7 +223,7 @@ export class RobotTelemetry {
       const g = [4, 38 * Math.abs(s2) * pl + 6, 24 * Math.abs(s23) * pl + 4, 10 * Math.abs(s234) * pl + 3, 4, 2];
       return g.map((x, i) => Math.min(100, x + Math.min(30, Math.abs(ddq[o + i]) * 2.2) + Math.min(20, Math.abs(dq[o + i]) * 3)));
     };
-    if (R.robot?.dual) return [Math.min(100, 30 + Math.min(25, Math.abs(ddq[0]) * 1.2) + (busy ? 8 : 0)), ...arm6(1), ...arm6(7)];
+    if (R.robot?.dual) { const n0 = R.robot.jointDefs.length - 12; return [...Array.from({ length: n0 }, (_, i) => Math.min(100, (i ? 8 : 30) + Math.min(25, Math.abs(ddq[i]) * 1.2) + (busy ? 8 : 0))), ...arm6(n0), ...arm6(n0 + 6)]; }   // 몸통(승강 · 허리 회전 · 머리 회전) + 양팔
     if (R.robot && R.robot.jointDefs.length === 6) return arm6(0);
     // 보행 로봇(휴머노이드·사족보행)은 보행 주기가 빨라 가속 항을 작게, 체중 지지분을 기본 부하로 둔다
     if (R.kind === 'humanoid' || R.kind === 'quadruped') {
@@ -396,6 +396,8 @@ export class RobotTelemetry {
 
 const ROBOT_LABEL = { articulated: '6축 다관절 로봇', cobot: '협동로봇', scara: 'SCARA', gantry: '갠트리', ammr: 'AMR 기반 양팔 로봇 (AMMR)', humanoid: '휴머노이드 로봇' };
 const HUMANOID_JOINTS = [
+  { name: '허리 회전 (360°)', unit: 'deg', min: -Math.PI, max: Math.PI },   // Atlas형: 허리 연속 회전 · 머리 좌우 180°
+  { name: '머리 회전 (±90°)', unit: 'deg', min: -Math.PI / 2, max: Math.PI / 2 },
   { name: '왼쪽 고관절', unit: 'deg', min: -0.8, max: 0.8 },
   { name: '오른쪽 고관절', unit: 'deg', min: -0.8, max: 0.8 },
   { name: '왼쪽 어깨', unit: 'deg', min: -1.5, max: 1.0 },

@@ -3,7 +3,7 @@
 // 오버레이: 카메라로 투영한 객체 인식 박스·신뢰도, 추론 지연, 작업 상태, 현장 이벤트·알람 배너와 하단 알람 띠.
 import * as THREE from 'three';
 import { FIELD_EVENTS, ST_LABEL, moverRadius } from './sim.js';
-import { makeAlarmFx, blinkAlarmFx, ALARM_COLOR } from './factory.js';
+import { makeAlarmFx, blinkAlarmFx, ALARM_COLOR, ROBOT_CAMS } from './factory.js';
 
 export const COLS = 4, ROWS = 2;
 const TW = 384, TH = 256, W = COLS * TW, H = ROWS * TH;   // 4×2 분할 (오른쪽 열: 순찰 드론 짐벌·하방 카메라)
@@ -94,7 +94,12 @@ export class RobotCamWall {
   activePool() {
     const sim = this.sim, view = this.view, groups = new Map();
     const add = (cat, f) => { if (!f) return; (groups.get(cat) ?? groups.set(cat, []).get(cat)).push(f); };
-    const feed = (ref, robot, kind, extra = {}) => { const c = this.cameraFor(ref); return c ? { ref, robot, kind, label: c.label, pose: c.pose, ...extra } : null; };
+    // 휴머노이드·AMMR은 카메라 4대(머리 · 왼손 · 오른손 · 등)를 순환마다 바꿔 보여 준다 (로봇마다 엇갈리게)
+    const seq = ['head', 'handR', 'handL', 'back'], rn = Math.floor(this.t / 5);
+    const feed = (ref, robot, kind, extra = {}) => {
+      if ((kind === 'humanoid' || kind === 'ammr') && this.camsOf(ref).length) ref = { ...ref, cam: seq[(rn + Math.floor(hash(robot) * 4)) % 4] };
+      const c = this.cameraFor(ref); return c ? { ref, robot, kind, label: c.label, pose: c.pose, ...extra } : null;
+    };
     const busy = (m) => m.moving || (!m.idle && !m.chgNow && !m.charging);
     for (const m of [...sim.techs, ...sim.helpers]) if (m.kind === 'humanoid' && busy(m)) add('humanoid', feed({ type: 'mover', id: m.id }, m.id, m.kind, { mover: m }));
     for (const m of sim.quads) if (busy(m)) add('quadruped', feed({ type: 'mover', id: m.id }, m.id, m.kind, { mover: m }));
@@ -136,8 +141,8 @@ export class RobotCamWall {
     const r = sv?.parts.robots.find((x) => x.kind === 'ammr');
     if (r) {
       const idx = sv.parts.robots.indexOf(r);
-      out.push({ ref: { type: 'cell', stationId: sv.st.id, idx }, robot: `${sv.st.name} AMMR #${idx + 1}`, label: '머리 스테레오 카메라', kind: 'ammr', station: sv.st,
-        pose: () => { const p = r.head.getWorldPosition(new THREE.Vector3()); const d = r.root.getWorldDirection(new THREE.Vector3()); d.y = -0.75; return { pos: p, dir: d.normalize(), ahead: 3 }; } });
+      const ref = { type: 'cell', stationId: sv.st.id, idx }, c = this.cameraFor(ref);
+      if (c) out.push({ ref, robot: `${sv.st.name} AMMR #${idx + 1}`, label: c.label, kind: 'ammr', station: sv.st, pose: c.pose });
     }
     // 운반 AMR 전방 카메라 — 라인 위에서 움직이는 AMR을 20초마다 바꿔 가며
     if (sim.carriers.length) {
@@ -173,19 +178,53 @@ export class RobotCamWall {
       const sv = view?.stationViews.find((x) => x.st.id === ref.stationId), r = sv?.parts.robots?.[ref.idx];
       if (!r) return null;
       if (r.vla) { const up = new THREE.Vector3(); return { label: '손목 카메라 · VLA', pose: () => { const p = r.tip.getWorldPosition(new THREE.Vector3()); up.set(0, 1, 0).transformDirection(r.tip.parent.matrixWorld); return { pos: p.addScaledVector(up, -0.06), dir: up.clone(), ahead: 1.2 }; } }; }
-      if (r.kind === 'ammr' || r.kind === 'humanoid') return { label: '머리 스테레오 카메라', pose: () => { const p = r.head.getWorldPosition(new THREE.Vector3()); const d = r.root.getWorldDirection(new THREE.Vector3()); d.y = -0.75; return { pos: p, dir: d.normalize(), ahead: 3 }; } };
+      if ((r.kind === 'ammr' || r.kind === 'humanoid') && r.cams) return this.anchorCam(r.cams, ref.cam, r.kind === 'ammr' ? 'AMMR' : '휴머노이드');
       return { label: '셀 상부 카메라', pose: () => { const p = r.root.getWorldPosition(new THREE.Vector3()); const c = new THREE.Vector3(sv.st.x, 1.2, sv.st.z); return { pos: p.add(new THREE.Vector3(0, 2.6, 0)), dir: c.sub(p).normalize(), ahead: 3 }; } };
     }
     const m = [...sim.movers, ...(sim.drones ?? [])].find((x) => x.id === ref.id);
     if (!m) return null;
     if (m.kind === 'drone') return { label: '드론 짐벌 카메라', pose: () => { const fx = Math.sin(m.heading), fz = Math.cos(m.heading), look = m.mode === 'mission' || m.hover > 0; return { pos: new THREE.Vector3(m.x + fx * 0.3, m.y - 0.15, m.z + fz * 0.3), dir: new THREE.Vector3(fx, look ? -2.2 : -0.55, fz).normalize(), ahead: 8 }; } };
-    if (m.kind === 'humanoid') return front(m, '헤드 카메라', 1.85, 0.22, 6, 0.28);
+    if (m.kind === 'humanoid') {   // 3D 모델의 카메라 앵커(머리 · 양손 · 등) — 허리·머리 회전과 팔 동작을 따라간다
+      const mv = [...(this.view?.techViews ?? []), ...(this.view?.helperViews ?? [])].find((x) => x.v === m);
+      if (mv?.g.userData.cams) return this.anchorCam(mv.g.userData.cams, ref.cam, '휴머노이드');
+      return front(m, '헤드 카메라', 1.85, 0.22, 6, 0.28);
+    }
     if (m.kind === 'quadruped') return front(m, '전방 카메라', 0.62, 0.68, 6, 0.15);
     if (m.kind === 'carrier') return front(m, '전방 카메라', 0.42, 0.82, 5, 0.12);
     if (m.kind === 'agv') return front(m, '전방 카메라', 0.45, 0.85, 5, 0.12);
     if (m.kind === 'forklift') return front(m, m.auto ? '포크 카메라 (자율)' : '후방 카메라', 1.2, 1.4, 4, 0.35);
     if (m.kind === 'robot') return front(m, '정비 로봇 카메라', 1.1, 0.4, 4, 0.25);
     return null;   // 사람(작업자·정비원)은 카메라 없음
+  }
+
+  // 공장의 모든 로봇 카메라 (자동 녹화용): 셀 로봇(6축 손목 · AMMR·휴머노이드 4대) · 이동 로봇(AMR·AGV·지게차·사족보행·정비로봇 전방, 휴머노이드 4대) · 드론 짐벌
+  // assetKey: 데이터 허브 AAS 자산과 맞추는 키 (셀 로봇 = <셀ID>_R<번호>, 이동 로봇·드론 = m:<ID>)
+  allCameras() {
+    const sim = this.sim, view = this.view, out = []; if (!sim || !view) return out;
+    for (const sv of view.stationViews) (sv.parts.robots ?? []).forEach((r, idx) => {
+      const ref = { type: 'cell', stationId: sv.st.id, idx }, uid = sv.st.robotUids?.[idx] ?? `${sv.st.id}-${idx + 1}`;
+      const keys = r.cams ? ROBOT_CAMS.map(([k]) => k) : [null];
+      for (const k of keys) { const c = this.cameraFor(k ? { ...ref, cam: k } : ref); if (c && (r.vla || r.cams || r.kind === 'ammr')) out.push({ ref: k ? { ...ref, cam: k } : ref, robot: uid, cam: k ?? 'wrist', label: c.label, assetKey: `${sv.st.id}_R${idx + 1}`, kind: r.kind }); }
+    });
+    for (const m of [...sim.movers, ...(sim.drones ?? [])]) {
+      const ref = { type: 'mover', id: m.id };
+      const hum = m.kind === 'humanoid' && this.camsOf(ref).length;
+      for (const k of hum ? ROBOT_CAMS.map(([x]) => x) : [null]) { const c = this.cameraFor(k ? { ...ref, cam: k } : ref); if (c) out.push({ ref: k ? { ...ref, cam: k } : ref, robot: m.uid ?? m.id, name: m.id, cam: k ?? 'front', label: c.label, assetKey: `m:${m.id}`, kind: m.kind }); }
+    }
+    return out;
+  }
+  // 카메라 앵커(+z = 보는 방향) → 시점. cam: head · handL · handR · back (없으면 머리)
+  anchorCam(cams, cam, who) {
+    const key = cams[cam] ? cam : 'head', a = cams[key], label = ROBOT_CAMS.find(([k]) => k === key)[1];
+    const ahead = key === 'head' ? 3 : key === 'back' ? 4 : 1.2;
+    return { label, cam: key, who, pose: () => { a.updateWorldMatrix(true, false); const pos = a.getWorldPosition(new THREE.Vector3()); const dir = new THREE.Vector3(0, 0, 1).transformDirection(a.matrixWorld); return { pos: pos.addScaledVector(dir, 0.03), dir, ahead }; } };
+  }
+  // 로봇에 달린 카메라 목록 (휴머노이드·AMMR = 머리 · 왼손 · 오른손 · 등)
+  camsOf(ref) {
+    if (!ref || !this.view) return [];
+    if (ref.type === 'cell') { const r = this.view.stationViews.find((x) => x.st.id === ref.stationId)?.parts.robots?.[ref.idx]; return r?.cams ? ROBOT_CAMS.filter(([k]) => r.cams[k]) : []; }
+    const mv = [...(this.view.techViews ?? []), ...(this.view.helperViews ?? [])].find((x) => x.v.id === ref.id);
+    return mv?.g.userData.cams ? ROBOT_CAMS : [];
   }
 
   // 선택한 로봇 카메라 영상을 2D 캔버스에 그린다 (렌더 타깃 → 픽셀 읽기, 약 10fps로 호출)

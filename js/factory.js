@@ -24,6 +24,19 @@ function mesh(geo, mat, shadow = true) {
 const box = (w, h, d, mat, shadow) => mesh(new THREE.BoxGeometry(w, h, d), mat, shadow);
 const cyl = (rt, rb, h, mat, seg = 20) => mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
 const put = (o, x, y, z, parent) => { o.position.set(x, y, z); parent?.add(o); return o; };
+// 로봇 카메라 모듈 (휴머노이드·AMMR: 머리 · 왼손 · 오른손 · 등 4대): 하우징·렌즈를 달고 앵커(+z = 보는 방향)를 돌려준다
+// 앵커는 관절(머리·손목·몸통)에 붙어 함께 움직인다 — 로봇 영상(robotcam.js)과 VLA 에피소드 카메라 프레임이 이 시점을 쓴다
+export const ROBOT_CAMS = [['head', '머리 스테레오 카메라'], ['handL', '왼손 카메라'], ['handR', '오른손 카메라'], ['back', '등 카메라']];
+const CAM_BODY = new THREE.MeshStandardMaterial({ color: 0x1b1f25, roughness: 0.4, metalness: 0.55 });
+const CAM_LENS = new THREE.MeshStandardMaterial({ color: 0x0a0d10, emissive: 0x37e8ff, emissiveIntensity: 1.8, roughness: 0.2 });
+function camModule(parent, x, y, z, pitch = 0, yaw = 0, size = 0.05, housing = true) {
+  const a = put(new THREE.Object3D(), x, y, z, parent); a.rotation.set(pitch, yaw, 0, 'YXZ');
+  if (housing) {
+    put(box(size, size * 0.72, size * 0.8, CAM_BODY, false), 0, 0, -size * 0.25, a);
+    const lens = put(cyl(size * 0.28, size * 0.3, size * 0.22, CAM_LENS, 14), 0, 0, size * 0.2, a); lens.rotation.x = Math.PI / 2; lens.castShadow = false;
+  }
+  return a;
+}
 
 const MAT = {
   floor: std(0x55595f, { roughness: 0.92 }),
@@ -340,8 +353,11 @@ function makeHumanoidBlender(accent) {
   const body = A.find('Body');
   const bin = put(box(0.42, 0.24, 0.32, std(0x2f6fd6)), 0, 1.0, 0.38, body);   // 부품 빈 (운반 중)
   bin.visible = false;
-  g.userData = { body, armL: A.find('Shoulder_L'), armR: A.find('Shoulder_R'), legL: A.find('Hip_L'), legR: A.find('Hip_R'),
-    elbowL: A.find('Elbow_L'), elbowR: A.find('Elbow_R'), kneeL: A.find('Knee_L'), kneeR: A.find('Knee_R'), visor: A.mats.VISOR, bin, acc: A.mats.ACC, blender: true };
+  const waist = A.find('Waist'), head = A.find('Head'), elbowL = A.find('Elbow_L'), elbowR = A.find('Elbow_R');
+  // 카메라 4대: 머리(얼굴판 스테레오) · 양손(손바닥 위, 손가락 쪽을 봄) · 등(백팩 위, 뒤를 봄)
+  const cams = { head: camModule(head, 0, 0.02, 0.14, 0.32, 0, 0.05, false), handL: camModule(elbowL, 0, -0.3, 0.05, Math.PI / 2, 0, 0.04), handR: camModule(elbowR, 0, -0.3, 0.05, Math.PI / 2, 0, 0.04), back: camModule(waist, 0, 0.5, -0.22, 0.2, Math.PI, 0.055) };
+  g.userData = { body, waist, head, cams, armL: A.find('Shoulder_L'), armR: A.find('Shoulder_R'), legL: A.find('Hip_L'), legR: A.find('Hip_R'),
+    elbowL, elbowR, kneeL: A.find('Knee_L'), kneeR: A.find('Knee_R'), visor: A.mats.VISOR, bin, acc: A.mats.ACC, blender: true };
   return g;
 }
 function makeCarrierAMR() {
@@ -499,15 +515,16 @@ function makeHumanoid(accent = 0xff8a2a) {
     legs.push(hip);
   }
   put(box(0.34, 0.16, 0.2, joint), 0, 0.98, 0, body);                       // 골반
-  put(mesh(new THREE.CapsuleGeometry(0.19, 0.32, 4, 10), shell), 0, 1.32, 0, body);
-  put(box(0.2, 0.12, 0.03, acc, false), 0, 1.38, 0.2, body);                 // 가슴 상태등
-  put(cyl(0.05, 0.06, 0.08, joint), 0, 1.68, 0, body);
-  const head = put(new THREE.Group(), 0, 1.84, 0, body);
+  const waist = put(new THREE.Group(), 0, 0, 0, body);                       // 허리 위 상체 (Atlas: 360° 회전)
+  put(mesh(new THREE.CapsuleGeometry(0.19, 0.32, 4, 10), shell), 0, 1.32, 0, waist);
+  put(box(0.2, 0.12, 0.03, acc, false), 0, 1.38, 0.2, waist);                 // 가슴 상태등
+  put(cyl(0.05, 0.06, 0.08, joint), 0, 1.68, 0, waist);
+  const head = put(new THREE.Group(), 0, 1.84, 0, waist);
   put(mesh(new THREE.SphereGeometry(0.15, 16, 12), shell), 0, 0, 0, head);
   const visor = emis(0x37e8ff, 2.2);
   put(box(0.22, 0.06, 0.06, visor, false), 0, 0.01, 0.12, head);
   const arm = (x) => {
-    const sh = put(new THREE.Group(), x, 1.52, 0, body);
+    const sh = put(new THREE.Group(), x, 1.52, 0, waist);
     put(mesh(new THREE.SphereGeometry(0.08, 10, 8), joint), 0, 0, 0, sh);
     put(mesh(new THREE.CapsuleGeometry(0.06, 0.48, 4, 8), shell), 0, -0.3, 0, sh);
     put(box(0.08, 0.1, 0.1, joint), 0, -0.62, 0, sh);
@@ -516,7 +533,8 @@ function makeHumanoid(accent = 0xff8a2a) {
   const armL = arm(-0.27), armR = arm(0.27);
   const bin = put(box(0.42, 0.24, 0.32, std(0x2f6fd6)), 0, 1.0, 0.38, body);   // 부품 빈 (운반 중)
   bin.visible = false;
-  g.userData = { body, armL, armR, legL: legs[0], legR: legs[1], visor, bin, acc };
+  const cams = { head: camModule(head, 0, 0.02, 0.14, 0.32, 0, 0.05, false), handL: camModule(armL, 0, -0.58, 0.06, Math.PI / 2, 0, 0.04), handR: camModule(armR, 0, -0.58, 0.06, Math.PI / 2, 0, 0.04), back: camModule(waist, 0, 1.42, -0.2, 0.2, Math.PI, 0.055) };
+  g.userData = { body, waist, head, cams, armL, armR, legL: legs[0], legR: legs[1], visor, bin, acc };
   return g;
 }
 
@@ -745,8 +763,10 @@ function makeRobot(kind, color, opts = {}) {
       return a;
     });
     const sideNames = ['왼팔', '오른팔'];
+    // 카메라 4대: 머리 스테레오(작업대를 내려다봄) · 양손 손목(그리퍼 방향) · 등(몸통 뒤 — 선반·통로 쪽)
+    const cams = { head: camModule(head, 0, 0.01, 0.11, 0.6, 0, 0.05, false), handL: camModule(arms[0].tip, 0.045, -0.02, 0, -Math.PI / 2, 0, 0.035), handR: camModule(arms[1].tip, 0.045, -0.02, 0, -Math.PI / 2, 0, 0.035), back: camModule(lift, 0, 0.8, -0.16, 0.25, Math.PI, 0.05) };
     return {
-      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, bin, payload: 10, dual: true, arms, lift,
+      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, bin, payload: 10, dual: true, arms, lift, cams,
       jointDefs: [{ name: '몸통 승강', unit: 'mm', min: 0, max: 0.12 },
         ...sideNames.flatMap((n) => ARM_JOINTS.map((j) => ({ ...j, name: `${n} ${j.name}` })))],
       joints: () => [lift.position.y - 0.35, ...arms[0].joints(), ...arms[1].joints()],
@@ -833,15 +853,20 @@ function makeRobot(kind, color, opts = {}) {
       return a;
     });
     const sideNames = ['왼팔', '오른팔'];
+    const backZ = blenderOn() ? -0.22 : -0.2, backY = blenderOn() ? 0.5 : 0.42;
+    const cams = { head: camModule(head, 0, 0.02, 0.14, 0.45, 0, 0.05, false), handL: camModule(arms[0].tip, 0.045, -0.02, 0, -Math.PI / 2, 0, 0.035), handR: camModule(arms[1].tip, 0.045, -0.02, 0, -Math.PI / 2, 0, 0.035), back: camModule(torso, 0, backY, backZ, 0.2, Math.PI, 0.055) };
     return {
-      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, payload: 15, dual: true, arms, torso, legs,
-      jointDefs: [{ name: '허리 회전', unit: 'rad', min: -0.6, max: 0.6 },
+      root, kind, tip: arms[0].tip, tip2: arms[1].tip, head, payload: 15, dual: true, arms, torso, legs, cams,
+      // Atlas형: 허리 360° 연속 회전 · 머리 좌우 180°(±90°)
+      jointDefs: [{ name: '허리 회전', unit: 'rad', min: -Math.PI, max: Math.PI }, { name: '머리 회전', unit: 'rad', min: -Math.PI / 2, max: Math.PI / 2 },
         ...sideNames.flatMap((n) => ARM_JOINTS.map((j) => ({ ...j, name: `${n} ${j.name}` })))],
-      joints: () => [torso.rotation.y, ...arms[0].joints(), ...arms[1].joints()],
+      joints: () => [Math.atan2(Math.sin(torso.rotation.y), Math.cos(torso.rotation.y)), head.rotation.y, ...arms[0].joints(), ...arms[1].joints()],
       cur: null,
       anim(busy, t) {
         const w = t * 1.4;
-        const target = [busy ? Math.sin(w * 0.45) * 0.28 : 0, busy ? Math.sin(w * 0.7) * 0.25 : 0];
+        // 작업 사이클마다 허리를 옆 부품 쪽으로 크게 돌려(약 100°) 머리 카메라로 부품을 확인하고 돌아온다 — 발은 그대로
+        const turn = busy ? Math.max(0, Math.sin(w * 0.22)) ** 6 * 1.75 : 0;
+        const target = [busy ? Math.sin(w * 0.45) * 0.28 + turn : 0, busy ? Math.sin(w * 0.7) * 0.25 : 0];
         arms.forEach((a, i) => {
           const ph = w + i * Math.PI * 0.5, sd = i ? -1 : 1;   // 두 팔이 엇갈려 집고 놓는다
           target.push(...(busy ? [sd * (0.25 + Math.sin(ph) * 0.22), 0.85 + Math.sin(ph * 1.3) * 0.15, 1.25 + Math.cos(ph) * 0.12, 0.7, Math.sin(ph * 0.9) * 0.3, Math.sin(ph * 0.6) * 1.4]
@@ -849,7 +874,7 @@ function makeRobot(kind, color, opts = {}) {
         });
         this.cur = this.cur ? this.cur.map((c, i) => c + (target[i] - c) * 0.12) : target;
         const c = this.cur;
-        torso.rotation.y = c[0]; head.rotation.y = c[1] - c[0] * 0.5;
+        torso.rotation.y = c[0]; head.rotation.y = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, c[1] - c[0] * 0.3));
         arms[0].pose(...c.slice(2, 8)); arms[1].pose(...c.slice(8, 14));
         // 작업 중에는 무게중심을 옮기며 다리를 살짝 굽혔다 편다
         const k = busy ? Math.sin(w * 0.9) * 0.05 : 0;
@@ -2507,12 +2532,28 @@ export class FactoryView {
     pv.px = v.x; pv.pz = v.z;
     g.position.set(v.x, 0, v.z);
     let target = v.heading;
-    const st = v.station;
-    if (!moved && st) target = Math.atan2(st.x - v.x, st.z - v.z);
+    const st = v.station, ud = g.userData;
+    // 서서 일할 때 바라볼 곳: 대응 중인 현장 이벤트 → 일하는 셀(정비·부품 보충) — Atlas 휴머노이드는 발은 두고 허리(360°)·머리(±90°)를 돌린다
+    let look = null;
+    if (!moved && v.kind === 'humanoid' && v.task) {
+      const ev = (this.sim.fieldEvents ?? []).find((e) => !e.cleared && v.job?.ev === e);
+      const near = ev ?? v.job?.st ?? this.sim.processing.reduce((b, s2) => (Math.hypot(s2.x - v.x, (s2.z ?? 0) - v.z) < Math.hypot(b.x - v.x, (b.z ?? 0) - v.z) ? s2 : b), this.sim.processing[0]);
+      if (near && Math.hypot(near.x - v.x, (near.z ?? 0) - v.z) < 4.5) look = Math.atan2(near.x - v.x, (near.z ?? 0) - v.z);
+    }
+    if (!moved && st && !ud.waist) target = Math.atan2(st.x - v.x, st.z - v.z);
     if (!moved && isTech && v.task && v.kind === 'human') target = Math.PI;
     pv.yaw = lerpAngle(pv.yaw, target, Math.min(1, rdt * 6));
     g.rotation.y = pv.yaw;
-    const ud = g.userData;
+    if (ud.waist) {
+      // 허리: 바라볼 곳과 발 방향의 차이만큼 (어느 방향이든, 360°) · 머리: 남은 각도와 둘러보기(±90° 안)
+      const want = look != null ? Math.atan2(Math.sin(look - pv.yaw), Math.cos(look - pv.yaw)) : 0;
+      pv.waistYaw = lerpAngle(pv.waistYaw ?? 0, want, Math.min(1, rdt * 3));
+      ud.waist.rotation.y = pv.waistYaw;
+      const rest = look != null ? Math.atan2(Math.sin(want - pv.waistYaw), Math.cos(want - pv.waistYaw)) : 0;
+      const scan = moved ? Math.sin(t * 0.9 + (v.id?.length ?? 0)) * 0.55 : v.task ? Math.sin(t * 0.6) * 0.3 : 0;   // 걸을 때 좌우를 살피고, 일할 때 작업 부위를 훑어본다
+      ud.head.rotation.y = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, rest + scan));
+      v.waistYaw = pv.waistYaw; v.headYaw = ud.head.rotation.y;   // 텔레메트리·에피소드용
+    }
     if (ud.body) {
       if (moved) {
         ud.body.position.y = Math.abs(Math.sin(t * 9)) * 0.06;

@@ -20,6 +20,8 @@ import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
 import { GateView } from './gateview.js';
 import { EpisodeRecorder, buildEpisodesZip, EP_HZ, SAMPLE } from './vla.js';
 import { impactHTML, impactClick } from './impactview.js';
+import { CCTVRecorder, CameraClip, saveSnapshot, REC as CCTV_REC } from './cctvrec.js';
+import { RobotVideoRecorder, downloadVideos } from './robotrec.js';
 import { buildAiosZip, HEADS as AIOS_HEADS, FEATURES as AIOS_FEATURES, SAMPLE_S as AIOS_SAMPLE_S, CHUNK as AIOS_CHUNK, TRAIN_MIN as AIOS_TRAIN_MIN } from './aios.js';
 import { zipStore } from './aasx.js';
 import { DRONE_SIZING } from './drone.js';
@@ -93,6 +95,8 @@ const view = new FactoryView(scene);
 const hub = new DataHub();
 const camWall = new RobotCamWall(scene, renderer);   // 로봇 비전 관제 디스플레이 (피지컬AI 단계)
 const cctvView = new CCTVView(scene, () => camWall.renderer, scene);   // CCTV 전광판 · CCTV 영상 창
+const cctvRec = new CCTVRecorder(cctvView, () => camWall.renderer), cctvClip = new CameraClip();
+const robotRec = new RobotVideoRecorder(camWall);   // 모든 로봇 카메라 영상 자동 녹화 (AAS 영상 링크)   // CCTV 자동 녹화(NVR, 전체 분할) · 개별 카메라 녹화
 const epRec = new EpisodeRecorder(view, camWall, hub);   // VLA 에피소드 기록기 (피지컬AI 단계)
 view.epRec = epRec;
 const orchView = new OrchView(document.getElementById('orchPanel'), document.getElementById('orchBadge'));   // 오케스트레이터 인시던트 흐름도
@@ -192,6 +196,8 @@ function start(key) {
   camWall.setup(sim, view);
   cctvView.setup(sim, view);
   epRec.attach(sim);
+  cctvRec.attach(sim, epRec.runId, (t) => hub.iso(t)); cctvClip.stop();
+  robotRec.attach(sim, epRec.runId, (t) => hub.iso(t));
   orchView.attach(sim);
   window.__cctvRefresh?.();
   window.__netRefresh?.();   // 라인·단계가 바뀌면 CCTV 배치 요약도 다시
@@ -568,9 +574,16 @@ dataBody.addEventListener('click', (e) => {
   const b = e.target.closest('button[data-fmt]'); if (!b) return;
   if (hub.shared) { dataNote = '공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.'; return renderData(); }
   if (!hub.samples.length) { dataNote = '아직 수집된 데이터가 없습니다. 시뮬레이션을 잠시 돌린 뒤 저장하세요.'; return renderData(); }
-  const out = hub.download(b.dataset.fmt);
-  dataNote = out ? `저장: ${out.name} (${kb(out.bytes)})${b.dataset.fmt === 'aml' ? ' — 시계열은 같은 이름의 CSV를 함께 저장해 두면 연결됩니다' : ''}` : '';
-  renderData();
+  const fmt = b.dataset.fmt, aas = ['json', 'xml', 'rdf'].includes(fmt);
+  // AAS 저장: 진행 중인 로봇 카메라·CCTV 녹화 구간을 먼저 마감해 로컬(서버 data/)에 저장하고, 영상 파일 링크를 자산별 VideoRecordings 서브모델로 넣는다
+  (aas ? Promise.all([robotRec.flush(), cctvRec.flush()]) : Promise.resolve()).then(() => {
+    const videosOf = (a) => { const k = hub.videoKey(a); return !k ? [] : k === 'cctv' ? cctvRec.videos() : robotRec.videosFor(k); };
+    const out = hub.download(fmt, aas ? videosOf : null);
+    let nv = 0; if (aas) nv = hub.assets.reduce((n, a) => n + videosOf(a).length, 0);
+    const dl = aas && !robotRec.server ? downloadVideos([...robotRec.segs.map((sg) => robotRec.entry(sg, sg.index[0] ?? {})), ...cctvRec.videos()]) : 0;   // 서버가 없으면 영상도 로컬 파일로
+    dataNote = out ? `저장: ${out.name} (${kb(out.bytes)})${aas ? ` · 영상 링크 ${nv}개 (로봇 카메라 ${robotRec.segs.length}구간 · CCTV ${cctvRec.segs.length}구간${robotRec.server ? ' — data/robotcam · data/cctv에 저장' : dl ? ` — 영상 ${dl}개 함께 저장` : ''})` : ''}${fmt === 'aml' ? ' — 시계열은 같은 이름의 CSV를 함께 저장해 두면 연결됩니다' : ''}` : '';
+    renderData();
+  });
 });
 
 // ── 공장 진화 컨셉 (레거시 → 자동화 → 피지컬AI 자율) ─────────────────
@@ -635,7 +648,7 @@ labelRenderer.domElement.addEventListener('pointerup', (e) => {
 function closePopups(keep = null) {
   const K = new Set([keep].flat().filter(Boolean));
   if (!K.has('detail') && !document.getElementById('detail').classList.contains('hidden')) { view.selected = null; view.selectRobot(null); ui.hideDetail(); }
-  if (!K.has('cctvPanel') && !cctvPanel.hidden) { cctvPanel.hidden = true; cctvSel = null; }
+  if (!K.has('cctvPanel') && !cctvPanel.hidden) { cctvClip.stop(); cctvPanel.hidden = true; cctvSel = null; }
   if (!K.has('gnbPanel') && !gnbPanel.hidden) { gnbPanel.hidden = true; gnbSel = null; view.selectGnb(null); }
   if (!K.has('orchPanel') && orchView.open) orchView.hide();
   if (!K.has('cctvCard') && !cctvCard.hidden) { cctvBtn.classList.remove('on'); view.setCCTVMap(false); cctvCard.hidden = true; }
@@ -716,11 +729,17 @@ ui.onDetailAction = (act, st) => {
   if (act === 'close') { view.selected = null; view.selectRobot(null); ui.hideDetail(); }
   if (act === 'robotSave' && view.telemetry && hub.shared) ui.robotSaved('공유 페이지에서는 브라우저 보안 정책으로 파일 내려받기가 막혀 있습니다. 맥 앱이나 npm start로 실행한 화면에서 저장하세요.');
   else if (act === 'robotSave' && view.telemetry) {
-    const fmt = document.getElementById('rbFmt').value;
-    try {
-      const out = hub.downloadRobot(view.telemetry, fmt);
-      ui.robotSaved(`저장: ${out.name} (${out.bytes > 1048576 ? (out.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(out.bytes / 1024)) + ' KB'})`);
-    } catch (e) { ui.robotSaved(`저장 실패: ${e.message}`); }
+    const fmt = document.getElementById('rbFmt').value, tele = view.telemetry;
+    ui.robotSaved('영상 녹화 구간 마감 · 저장 중…');
+    // 이 로봇 카메라 영상: 진행 중 구간을 마감·로컬 저장한 뒤 영상 파일 링크를 AAS(VideoRecordings)에, AASX에는 링크 파일(.url)도 함께
+    robotRec.flush().then(() => {
+      try {
+        const a = hub.robotAsset(tele), key = tele.ref.type === 'cell' ? a.id : `m:${tele.ref.id}`, videos = robotRec.videosFor(key);
+        const out = hub.downloadRobot(tele, fmt, videos);
+        const dl = !robotRec.server ? downloadVideos(videos) : 0;
+        ui.robotSaved(`저장: ${out.name} (${out.bytes > 1048576 ? (out.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(out.bytes / 1024)) + ' KB'}) · 영상 링크 ${videos.length}개${robotRec.server ? ` (영상 ${new Set(videos.map((v) => v.segment)).size}구간 data/robotcam에 저장)` : dl ? ` · 영상 ${dl}개 함께 저장` : ''}`);
+      } catch (e) { ui.robotSaved(`저장 실패: ${e.message}`); }
+    });
   }
 };
 
@@ -830,14 +849,19 @@ cctvBtn.addEventListener('click', () => { if (cctvBtn.classList.contains('on') &
 const cctvPanel = document.getElementById('cctvPanel'), cctvCv = document.getElementById('cctvCanvas');
 let cctvSel = null, cctvT = 0, cctvOnlyThis = false;
 function openCctv(id) { cctvSel = id; cctvPanel.hidden = false; cctvT = 1; renderCctvPanel(true); }
-document.getElementById('cctvClose').addEventListener('click', () => { cctvPanel.hidden = true; cctvSel = null; });
+window.__openCctv = openCctv;   // 개발 확인용
+document.getElementById('cctvClose').addEventListener('click', () => { cctvClip.stop(); cctvPanel.hidden = true; cctvSel = null; });
 cctvPanel.addEventListener('click', (e) => {
   const b = e.target.closest('[data-cctv]'); if (!b) return;
   const a = b.dataset.cctv, cams = sim.cctv.cams, i = cams.findIndex((c) => c.id === cctvSel);
-  if (a === 'prev' || a === 'next') { cctvSel = cams[(i + (a === 'next' ? 1 : cams.length - 1)) % cams.length].id; renderCctvPanel(true); }
+  if (a === 'prev' || a === 'next') { if (cctvClip.active) cctvClip.stop(); cctvSel = cams[(i + (a === 'next' ? 1 : cams.length - 1)) % cams.length].id; renderCctvPanel(true); }   // 카메라를 바꾸면 녹화 중이던 영상은 저장
   else if (a === 'left' || a === 'right') cctvView.pan(cctvSel, a === 'left' ? 0.6 : -0.6);
   else if (a === 'only') { cctvOnlyThis = !cctvOnlyThis; renderCctvPanel(true); }
-  else if (a === 'go') { openCctv(b.dataset.cam); }
+  else if (a === 'go') { if (cctvClip.active) cctvClip.stop(); openCctv(b.dataset.cam); }
+  // 영상 저장: 이 카메라 녹화(WebM, 다시 누르면 정지·저장) · 스냅샷(JPEG) · 자동 녹화(NVR) 최근 구간
+  else if (a === 'rec') { if (cctvClip.active) cctvClip.stop(); else cctvClip.start(cctvCv, cctvSel, cctvView.place(sim.cctv.cams.find((c) => c.id === cctvSel) ?? {})); renderCctvPanel(true); }
+  else if (a === 'snap') { saveSnapshot(cctvCv, cctvSel); }
+  else if (a === 'nvr') { if (!cctvRec.saveLatest()) sim.log('info', 'CCTV 자동 녹화', { obs: '아직 끝난 녹화 구간이 없습니다', act: `${CCTV_REC.segS / 60}분 구간이 끝나면 저장할 수 있습니다` }); }
   else if (a === 'csv') {
     const rows = [['번호', '시각', '구분', '카메라', '위치', '클래스', '모델', '신뢰도', '인시던트', '상태', '처리 시간(초)', '결과', '비고']];
     for (const r of sim.cctvAgent?.history ?? []) rows.push([r.no, hub.iso(r.t), { report: '감지·보고', verify: '교차 확인', record: '영상 확보' }[r.kind], r.cam, cctvView.place(sim.cctv.cams.find((c) => c.id === r.cam) ?? {}), r.cls, AI_MODELS[r.model]?.name ?? '', r.conf ?? '', r.inc ? `#${r.inc.id} ${r.inc.title}` : '', r.status === 'open' ? '진행 중' : '종료', r.dur != null ? r.dur.toFixed(1) : '', r.result ?? '', r.note ?? '']);
@@ -851,6 +875,13 @@ function renderCctvPanel(force) {
   const c = res.cam, ag = sim.cctvAgent, dark = modeKey === 'dark';
   document.getElementById('cctvTitle').textContent = `📹 ${c.id} · ${res.place}`;
   document.getElementById('cctvSub').textContent = `${c.region === 'inside' ? '천장 돔 카메라 (어안 360° · 디워핑 뷰)' : '실외 PTZ 돔 카메라'} · 설치 높이 ${c.y}m · 감시 반경 ${c.R}m · 위치 x ${c.x.toFixed(1)}, z ${c.z.toFixed(1)}`;
+  // 영상 저장 줄: 개별 녹화·스냅샷 + 자동 녹화(NVR) 상태
+  const R = cctvRec.stats(), shared = !!window.JIN3D_SHARED, mb = (b) => `${(b / 1048576).toFixed(1)}MB`;
+  setHTML(document.getElementById('cctvSave'), `<div class="cc-save">
+    <button type="button" data-cctv="rec" class="${cctvClip.active ? 'rec' : ''}" ${shared ? 'disabled' : ''} title="이 카메라 영상을 WebM 파일로 녹화 — 다시 누르면 정지하고 로컬 파일로 저장">${cctvClip.active ? `⏹ 녹화 정지·저장 (${Math.floor(cctvClip.secs)}초)` : '⏺ 이 카메라 녹화'}</button>
+    <button type="button" data-cctv="snap" ${shared ? 'disabled' : ''} title="지금 화면(AI 오버레이 포함)을 JPEG 파일로 저장">📸 스냅샷</button>
+    <button type="button" data-cctv="nvr" ${shared || !R.kept ? 'disabled' : ''} title="자동 녹화(전체 CCTV 분할 영상)의 가장 최근 구간과 카메라 배치 색인(JSON)을 로컬 파일로 저장">⬇ 전체 CCTV 최근 녹화</button>
+    <small>${shared ? '공유 페이지에서는 파일 저장이 막혀 있습니다 — 맥 앱·웹 버전에서 저장' : !R.on ? '이 브라우저는 영상 녹화를 지원하지 않습니다' : `<b class="cc-rec">● 자동 녹화</b> 전체 ${sim.cctv.cams.length}대 · ${CCTV_REC.fps}fps · 구간 #${R.seq} ${Math.floor(R.cur / 60)}:${String(Math.floor(R.cur % 60)).padStart(2, '0')} / ${CCTV_REC.segS / 60}분 · ${R.server ? `서버 저장 ${R.saved}구간 ${mb(R.bytes)} (data/cctv/)` : `브라우저 보관 ${R.kept}구간`}${cctvClip.last ? ` · 마지막 저장 ${cctvClip.last.name}` : ''}`}</small></div>`);
   const cnt = {}; for (const d of res.dets) cnt[d.cls] = (cnt[d.cls] ?? 0) + 1;
   setHTML(document.getElementById('cctvDet'), dark
     ? `<div class="cc-models">${Object.entries(AI_MODELS).map(([k, m]) => `<span class="cc-m${res.dets.some((d) => d.model === k) ? ' on' : ''}" style="--c:${m.color}" title="${escV(m.desc)}">${escV(m.name)}</span>`).join('')}</div>
@@ -977,6 +1008,8 @@ document.addEventListener('visibilitychange', () => {
 // ── 루프 ─────────────────────────────
 const clock = new THREE.Clock();
 let uiTimer = 0, screenTimer = 0, robotTimer = 0, camTimer = 0, vlaTimer = 0;
+const rbCam = { key: null, sel: 'head' };   // 로봇 정보 창 카메라 선택
+document.getElementById('detail').addEventListener('click', (e) => { const b = e.target.closest('[data-rbcam]'); if (b) { rbCam.sel = b.dataset.rbcam; camTimer = 1; } });
 const clockEl = document.getElementById('clock');
 function frame() {
   requestAnimationFrame(frame);   // 한 프레임에서 예외가 나도 루프는 계속
@@ -1009,7 +1042,12 @@ function frame() {
   if (view.telemetry && ui.robotMode && camTimer > 0.1) {
     camTimer = 0;
     const box = document.getElementById('rbCamBox'), cv = document.getElementById('rbCam');
-    const shown = modeKey === 'dark' && box && cv && camWall.renderRobotView(view.telemetry.ref, cv, (() => { const t = Math.floor(sim.time) + 8 * 3600; return [t / 3600 % 24, t / 60 % 60, t % 60].map((v) => String(Math.floor(v)).padStart(2, '0')).join(':'); })());
+    // 휴머노이드·AMMR: 카메라 4대(머리 · 왼손 · 오른손 · 등) 중 고른 시점
+    const ref0 = view.telemetry.ref, refKey = JSON.stringify(ref0);
+    if (rbCam.key !== refKey) { rbCam.key = refKey; rbCam.sel = 'head'; }
+    const camList = camWall.camsOf(ref0), tabs = document.getElementById('rbCamTabs');
+    if (tabs) { const h = camList.length ? camList.map(([k, l]) => `<button type="button" data-rbcam="${k}" class="${rbCam.sel === k ? 'on' : ''}">${l.replace(' 카메라', '').replace('스테레오', '')}</button>`).join('') : ''; if (tabs.dataset.h !== h) { tabs.innerHTML = h; tabs.dataset.h = h; } tabs.hidden = !camList.length; }
+    const shown = modeKey === 'dark' && box && cv && camWall.renderRobotView(camList.length ? { ...ref0, cam: rbCam.sel } : ref0, cv, (() => { const t = Math.floor(sim.time) + 8 * 3600; return [t / 3600 % 24, t / 60 % 60, t % 60].map((v) => String(Math.floor(v)).padStart(2, '0')).join(':'); })());
     if (box) box.hidden = !shown;
   }
   if (view.telemetry && ui.robotMode) placeRobotPanel();
@@ -1021,6 +1059,8 @@ function frame() {
     try {
       camWall.update(rdt);
       cctvView.update(rdt);
+      cctvRec.update(rdt);
+      robotRec.update(rdt);
       composer.render();
     } catch (e) { if (!frame.errAt || performance.now() - frame.errAt > 5000) { frame.errAt = performance.now(); console.error('[Jin-3D] 렌더 오류', e); } }
   }
@@ -1055,7 +1095,7 @@ designer = new LineDesigner({
 });
 llm.probe();
 // 에피소드 서버 저장이 가능한지 (맥 앱·npm start) — 정적 호스팅·공유 페이지는 브라우저 보관만
-if (!window.JIN3D_SHARED && !window.JIN3D_NO_SERVER) fetch('/api/status').then((r) => r.json()).then((j) => { epRec.server = !!j.episodes; }).catch(() => {});
+if (!window.JIN3D_SHARED && !window.JIN3D_NO_SERVER) fetch('/api/status').then((r) => r.json()).then((j) => { epRec.server = !!j.episodes; cctvRec.server = !!j.cctv; robotRec.server = !!j.robotcam; if (j.dataDir) { cctvRec.dir = `${j.dataDir}/cctv`; robotRec.dir = `${j.dataDir}/robotcam`; } }).catch(() => {});
 
 // ── 맥 앱(Jin-3D) 전용: API 키 설정 ─────────────────
 const bridge = window.jin3d;
@@ -1339,4 +1379,4 @@ function renderFacosView(force) {
 document.getElementById('closeFacos').addEventListener('click', () => { fcModal.classList.add('hidden'); fcView = null; });
 fcModal.addEventListener('click', (e) => { if (e.target === fcModal) { fcModal.classList.add('hidden'); fcView = null; } });
 
-window.__twin = { primKey, setRender, RENDER, openGnb: (id) => openGnb(id), cctvView, epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };
+window.__twin = { primKey, setRender, RENDER, openGnb: (id) => openGnb(id), cctvRec, robotRec, cctvView, epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };

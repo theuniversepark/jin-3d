@@ -14,6 +14,17 @@ const TRAIN_MIN = 200;                  // 새 에피소드가 이만큼 쌓이�
 const PHASES = ['approach', 'grasp', 'transport', 'insert', 'retract'];
 const PHASE_KO = { approach: '접근', grasp: '집기', transport: '운반', insert: '조립·체결', retract: '복귀', assemble: '양팔 조립' };
 const enc = new TextEncoder();
+// 휴머노이드·AMMR 카메라 4대 (factory.js ROBOT_CAMS와 같은 키): 에피소드 프레임마다 네 시점을 함께 저장한다
+export const EP_CAMS = ['head', 'handL', 'handR', 'back'];
+const CAM_KO = { head: '머리 스테레오', handL: '왼손', handR: '오른손', back: '등' };
+// 이동 휴머노이드(정비·물류) 관절: Atlas형 — 허리 360° · 머리 ±90° · 어깨·팔꿈치·고관절·무릎 + 이동 베이스 자세
+const MOBILE_JOINTS = [
+  { name: '허리 회전', unit: 'rad' }, { name: '머리 회전', unit: 'rad' },
+  { name: '왼어깨', unit: 'rad' }, { name: '왼팔꿈치', unit: 'rad' }, { name: '오른어깨', unit: 'rad' }, { name: '오른팔꿈치', unit: 'rad' },
+  { name: '왼고관절', unit: 'rad' }, { name: '왼무릎', unit: 'rad' }, { name: '오른고관절', unit: 'rad' }, { name: '오른무릎', unit: 'rad' },
+  { name: '베이스 x', unit: 'mm' }, { name: '베이스 z', unit: 'mm' }, { name: '베이스 방향', unit: 'rad' },
+];
+const MOBILE_MAX_S = 180, MOBILE_FRAME_S = 2;   // 이동 휴머노이드 에피소드: 최대 3분 · 카메라 프레임 2초마다(단계가 바뀔 때도)
 const two = (n, w = 6) => String(n).padStart(w, '0');
 
 // VLA 6축 로봇의 작업 단계 (factory.animVLA 키프레임과 같은 구간)
@@ -36,14 +47,35 @@ export class EpisodeRecorder {
     this.byRobot = new Map(); this.rec = new Map(); this.seq = 0; this.total = 0; this.uploaded = 0; this.bytes = 0; this.captureQ = [];
     this.runId = this.hub?.runId ?? `run-${Date.now()}`;
   }
-  // 기록 대상: VLA 6축 로봇과 AMMR (셀 로봇 ID가 있는 것)
+  // 기록 대상: VLA 6축 로봇 · AMMR · 셀 휴머노이드 (셀 로봇 ID가 있는 것) + 이동 휴머노이드(정비·물류 — 작업 하나 = 에피소드 하나)
   robots() {
     const out = [];
     for (const sv of this.view.stationViews) (sv.parts.robots ?? []).forEach((r, i) => {
       const uid = sv.st.robotUids?.[i];
       if (uid && (r.vla || ((r.kind === 'ammr' || r.kind === 'humanoid') && sv.st.vla))) out.push({ uid, r, i, sv, st: sv.st });
     });
+    for (const mv of [...(this.view.techViews ?? []), ...(this.view.helperViews ?? [])]) {
+      const m = mv.v; if (m.kind !== 'humanoid' || !mv.g.userData.cams) continue;
+      const role = this.sim.techs.includes(m) ? '정비 휴머노이드' : '물류 휴머노이드';
+      out.push({ uid: m.uid ?? m.id, mobile: true, m, mv, r: { kind: 'humanoid', jointDefs: MOBILE_JOINTS }, st: { id: 'mobile', name: `${role} (${m.id})` } });
+    }
     return out;
+  }
+  // 이동 휴머노이드 관절·베이스 자세 (3D 모델에서 읽는다)
+  mobileState(R) {
+    const u = R.mv.g.userData, m = R.m, a = (o) => Math.round((o?.rotation.x ?? 0) * 1e4) / 1e4;
+    return [Math.round((u.waist?.rotation.y ?? 0) * 1e4) / 1e4, Math.round((u.head?.rotation.y ?? 0) * 1e4) / 1e4, a(u.armL), a(u.elbowL), a(u.armR), a(u.elbowR), a(u.legL), a(u.kneeL), a(u.legR), a(u.kneeR),
+      Math.round(m.x * 1000), Math.round(m.z * 1000), Math.round(Math.atan2(Math.sin(m.heading), Math.cos(m.heading)) * 1e4) / 1e4];
+  }
+  // 카메라 프레임 요청: 카메라가 여럿이면(휴머노이드·AMMR) 네 시점을 같은 시각으로 함께
+  queueFrames(rec, step, ref, cams) {
+    if (cams) rec.multiCam = true;
+    if (this.captureQ.length > 48) { this.skipped = (this.skipped ?? 0) + 1; return; }   // 빠른 배속 등으로 캡처가 밀리면 이번 프레임은 건너뛴다 (없는 영상 파일을 가리키지 않게)
+    const n = two(rec.nFrame = (rec.nFrame ?? -1) + 1, 3);
+    if (!cams) { const fname = `frame_${n}.jpg`; step.frame = fname; this.captureQ.push({ rec, fname, ref, t: step.t }); return; }
+    step.frames = {};
+    for (const cam of EP_CAMS) { const fname = `${cam}/frame_${n}.jpg`; step.frames[cam] = fname; this.captureQ.push({ rec, fname, cam, ref: { ...ref, cam }, t: step.t }); }
+    step.frame = step.frames.head;
   }
   list(uid) { return this.byRobot.get(uid) ?? []; }
 
@@ -51,6 +83,7 @@ export class EpisodeRecorder {
     if (!this.on || !this.sim) return;
     const sim = this.sim, t = sim.time;
     for (const R of this.robots()) {
+      if (R.mobile) { this.updateMobile(R, t); continue; }
       const { uid, r, i, st } = R;
       let rec = this.rec.get(uid);
       const working = st.state === 'BUSY' && st.item && !st.item.scrap;
@@ -77,18 +110,45 @@ export class EpisodeRecorder {
         const grip = r.vla ? (r.vla.held.visible ? 1 : 0) : st.ammr?.[i]?.carry ? 1 : 0;
         const step = { i: rec.steps.length, t: Math.round((t - rec.t0) * 1000) / 1000, ts: this.hub.iso(t), state: q, tcp_mm: tcp, gripper: grip, phase, frame: null };
         if (phase !== rec.lastPhase || rec.steps.length - (rec.lastFrameStep ?? -99) >= EP_HZ) {   // 단계가 바뀌거나 1초마다 카메라 프레임
-          const fname = `frame_${two(rec.frames.length, 3)}.jpg`; step.frame = fname; rec.lastPhase = phase; rec.lastFrameStep = rec.steps.length;
-          this.captureQ.push({ rec, fname, ref: { type: 'cell', stationId: st.id, idx: i }, t: step.t });
+          rec.lastPhase = phase; rec.lastFrameStep = rec.steps.length;
+          this.queueFrames(rec, step, { type: 'cell', stationId: st.id, idx: i }, r.cams ? EP_CAMS : null);
         }
         rec.steps.push(step);
       }
       if (ended || broken) this.finish(rec, broken ? `중단: ${st.state}` : null);
     }
-    // 카메라 캡처는 한 프레임에 2장까지 (화면 끊김 방지)
-    for (let k = 0; k < 2 && this.captureQ.length; k++) {
+    // 카메라 캡처는 한 프레임에 4장까지 (화면 끊김 방지 — 휴머노이드·AMMR 네 시점이 한 프레임에)
+    for (let k = 0; k < 4 && this.captureQ.length; k++) {
       const c = this.captureQ.shift(), pr = this.camWall.captureFrame(c.ref, 160, 120);
-      c.rec.frames.push({ file: c.fname, t: c.t, data: pr });
+      c.rec.frames.push({ file: c.fname, cam: c.cam ?? null, t: c.t, data: pr });
     }
+  }
+  // 이동 휴머노이드: 작업(정비·청소·소화 대기·부품 보충) 하나를 에피소드 하나로 — 이동(navigate)·작업(manipulate) 단계, 카메라 4대
+  updateMobile(R, t) {
+    const { uid, m } = R, task = m.task && !/충전|대기 자리/.test(m.task) ? m.task : null;
+    let rec = this.rec.get(uid);
+    if (!rec && task && task !== (this.lastTask ??= new Map()).get(uid)) {
+      this.lastTask.set(uid, task);
+      const k = (this.cycles ??= new Map()).get(uid) ?? 0; this.cycles.set(uid, k + 1);
+      if (k % 2) return;   // 작업 2번에 1번
+      rec = { id: `ep_${two(++this.seq)}`, uid, robot: R.r, idx: 0, st: R.st, kind: 'humanoid', item: null, product: null, task, mobile: true,
+        t0: t, iso0: this.hub.iso(t), steps: [], frames: [], lastSample: -1, lastPhase: null, lastFrameT: -99,
+        instruction: `${task} — 머리·양손·등 카메라로 주변과 손 작업을 확인하며 수행하라 (허리 360° · 머리 ±90° 회전 사용)`, model: this.sim.vla?.versionOf(uid) ?? 'v1.0' };
+      this.rec.set(uid, rec);
+    }
+    if (!rec) { if (!task) this.lastTask?.delete(uid); return; }
+    const ended = m.idle || (m.task && m.task !== rec.task && !/차례 대기/.test(m.task)), over = t - rec.t0 > MOBILE_MAX_S;   // 도구 보관대 차례 대기는 같은 작업
+    if (t - rec.lastSample >= 1 / EP_HZ - 1e-6 || ended || over) {
+      rec.lastSample = t;
+      const u = R.mv.g.userData, g = R.mv.g, b = g.getWorldPosition(g.position.clone()), w = u.cams.handR.getWorldPosition(g.position.clone());
+      const c = Math.cos(-m.heading), sn = Math.sin(-m.heading), dx = w.x - b.x, dz = w.z - b.z;
+      const phase = m.moving ? 'navigate' : 'manipulate';
+      const step = { i: rec.steps.length, t: Math.round((t - rec.t0) * 1000) / 1000, ts: this.hub.iso(t), state: this.mobileState(R),
+        tcp_mm: [Math.round((dx * sn + dz * c) * 1000), Math.round(-(dx * c - dz * sn) * 1000), Math.round(w.y * 1000)], gripper: m.tool || m.carry ? 1 : 0, phase, frame: null };
+      if (phase !== rec.lastPhase || t - rec.lastFrameT >= MOBILE_FRAME_S) { rec.lastPhase = phase; rec.lastFrameT = t; this.queueFrames(rec, step, { type: 'mover', id: m.id }, EP_CAMS); }
+      rec.steps.push(step);
+    }
+    if (ended || over) this.finish(rec, over ? '시간 제한 (3분)' : null);
   }
 
   async finish(rec, abort) {
@@ -96,13 +156,14 @@ export class EpisodeRecorder {
     const st = rec.st;
     // 행동 = 다음 스텝의 관절 목표 (마지막 스텝은 자기 자신)
     rec.steps.forEach((s, k) => { s.action = (rec.steps[k + 1] ?? s).state; });
-    const defect = st.item && st.item.id === rec.item ? !!st.item.defect : false;
+    const defect = !rec.mobile && st.item && st.item.id === rec.item ? !!st.item.defect : false;
     const ep = {
       id: rec.id, robot: rec.uid, cell: st.id, cell_name: st.name, robot_kind: rec.kind, product: rec.product, item_id: rec.item,
       instruction: rec.instruction, model_version: rec.model, start: rec.iso0, end: this.hub.iso(this.sim.time),
       duration_s: Math.round((this.sim.time - rec.t0) * 100) / 100, length: rec.steps.length, fps: EP_HZ,
       success: !abort && !defect && rec.steps.length >= 3, termination: abort ?? (defect ? '품질 불량' : '정상 완료'),
       steps: rec.steps, frames: rec.frames, jointNames: (rec.robot.jointDefs ?? []).map((j) => j.name), jointUnits: (rec.robot.jointDefs ?? []).map((j) => (j.unit === 'mm' ? 'mm' : 'rad')),
+      cameras: rec.multiCam ? EP_CAMS : ['wrist'], task: rec.task ?? null, mobile: !!rec.mobile,
     };
     if (ep.length < 3) return;
     const arr = this.byRobot.get(rec.uid) ?? []; arr.push(ep); if (arr.length > KEEP) arr.shift(); this.byRobot.set(rec.uid, arr);
@@ -127,27 +188,31 @@ export async function buildEpisodesZip(uid, eps, runId) {
   const e0 = eps[0];
   const info = {
     dataset: `jin3d_${uid}`, format: 'Jin-3D VLA episode v1 (LeRobot 유사 구조: 메타 · 스텝 JSONL · 카메라 JPEG)', generator: 'Jin-3D 디지털트윈 (시뮬레이션 데이터)',
-    run_id: runId, robot: { id: uid, kind: e0?.robot_kind, cell: e0?.cell, cell_name: e0?.cell_name, joints: e0?.jointNames, units: e0?.jointUnits },
+    run_id: runId, robot: { id: uid, kind: e0?.robot_kind, cell: e0?.cell, cell_name: e0?.cell_name, joints: e0?.jointNames, units: e0?.jointUnits, cameras: e0?.cameras ?? ['wrist'],
+      ...(e0?.robot_kind === 'humanoid' ? { dof_note: 'Atlas형 — 허리 360° 연속 회전 · 머리 좌우 ±90°' } : {}) },
     fps: EP_HZ, episodes: eps.length, total_steps: eps.reduce((a, e) => a + e.length, 0),
     features: {
       'observation.state': { dtype: 'float32', shape: [e0?.jointNames?.length ?? 0], names: e0?.jointNames, units: e0?.jointUnits },
       'observation.tcp_mm': { dtype: 'int32', shape: [3], names: ['x', 'y', 'z'], frame: '로봇 베이스 기준 (x 전방, y 왼쪽, z 위)' },
       'observation.gripper': { dtype: 'int8', shape: [1], desc: '1 = 부품 파지' },
-      'observation.image': { dtype: 'jpeg', shape: [120, 160, 3], desc: '로봇 카메라 프레임 (작업 단계가 바뀔 때 · 1초마다)' },
+      ...(e0?.cameras?.length > 1
+        ? Object.fromEntries(EP_CAMS.map((c) => [`observation.images.${c}`, { dtype: 'jpeg', shape: [120, 160, 3], desc: `${CAM_KO[c]} 카메라 프레임 (네 카메라 같은 시각 · 작업 단계가 바뀔 때 · ${e0.mobile ? MOBILE_FRAME_S : 1}초마다)` }]))
+        : { 'observation.image': { dtype: 'jpeg', shape: [120, 160, 3], desc: '로봇 카메라 프레임 (작업 단계가 바뀔 때 · 1초마다)' } }),
       action: { dtype: 'float32', shape: [e0?.jointNames?.length ?? 0], desc: '다음 스텝 관절 목표 (절대값)' },
-      phase: { dtype: 'string', values: [...PHASES, 'assemble'] },
+      phase: { dtype: 'string', values: [...PHASES, 'assemble', 'navigate', 'manipulate'] },
       'episode.instruction': { dtype: 'string', desc: '자연어 작업 지시' },
       'episode.success': { dtype: 'bool', desc: '품질 결과 라벨 (불량·중단이면 false)' },
     },
     time: '모든 시각은 디지털트윈 기준 시계(UTC, ISO 8601). t는 에피소드 시작 기준 초',
   };
   files.push({ path: 'meta/info.json', data: JSON.stringify(info, null, 2) });
-  files.push({ path: 'meta/episodes.jsonl', data: eps.map((e) => JSON.stringify({ episode: e.id, instruction: e.instruction, success: e.success, termination: e.termination, product: e.product, item_id: e.item_id, model_version: e.model_version, start: e.start, end: e.end, duration_s: e.duration_s, length: e.length, frames: e.frames.length })).join('\n') + '\n' });
+  files.push({ path: 'meta/episodes.jsonl', data: eps.map((e) => JSON.stringify({ episode: e.id, instruction: e.instruction, success: e.success, termination: e.termination, product: e.product, item_id: e.item_id, model_version: e.model_version, start: e.start, end: e.end, duration_s: e.duration_s, length: e.length, frames: e.frames.length, cameras: e.cameras ?? ['wrist'], task: e.task ?? undefined })).join('\n') + '\n' });
   for (const e of eps) {
-    files.push({ path: `data/${e.id}.jsonl`, data: e.steps.map((s) => JSON.stringify({ step: s.i, t: s.t, timestamp: s.ts, 'observation.state': s.state, 'observation.tcp_mm': s.tcp_mm, 'observation.gripper': s.gripper, action: s.action, phase: s.phase, 'observation.image': s.frame ? `videos/${e.id}/${s.frame}` : null })).join('\n') + '\n' });
+    const img = (s) => (s.frames ? Object.fromEntries(EP_CAMS.map((c) => [`observation.images.${c}`, s.frames[c] ? `videos/${e.id}/${s.frames[c]}` : null])) : { 'observation.image': s.frame ? `videos/${e.id}/${s.frame}` : null });
+    files.push({ path: `data/${e.id}.jsonl`, data: e.steps.map((s) => JSON.stringify({ step: s.i, t: s.t, timestamp: s.ts, 'observation.state': s.state, 'observation.tcp_mm': s.tcp_mm, 'observation.gripper': s.gripper, action: s.action, phase: s.phase, ...img(s) })).join('\n') + '\n' });
     for (const f of e.frames) { const d = await f.data; if (d) files.push({ path: `videos/${e.id}/${f.file}`, data: d }); }
   }
-  files.push({ path: 'README.txt', data: `Jin-3D VLA 에피소드 데이터 — 로봇 ${uid}\n에피소드 ${eps.length}개 · ${EP_HZ}Hz · 카메라 프레임 JPEG 160x120 (단계 전환·1초마다)\n스키마: meta/info.json · 요약: meta/episodes.jsonl · 스텝: data/*.jsonl · 영상: videos/*/frame_*.jpg\n시뮬레이션으로 생성된 데이터입니다.\n` });
+  files.push({ path: 'README.txt', data: `Jin-3D VLA 에피소드 데이터 — 로봇 ${uid}\n에피소드 ${eps.length}개 · ${EP_HZ}Hz · 카메라 프레임 JPEG 160x120 (단계 전환·1초마다)\n${e0?.cameras?.length > 1 ? `카메라 4대: ${EP_CAMS.map((c) => `${c}(${CAM_KO[c]})`).join(' · ')} — 같은 시각의 네 시점을 videos/<에피소드>/<카메라>/frame_*.jpg로\n` : ''}스키마: meta/info.json · 요약: meta/episodes.jsonl · 스텝: data/*.jsonl · 영상: videos/*/${e0?.cameras?.length > 1 ? '<카메라>/' : ''}frame_*.jpg\n시뮬레이션으로 생성된 데이터입니다.\n` });
   return zipStore(files);
 }
 

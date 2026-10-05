@@ -51,6 +51,56 @@ function listEpisodes(res) {
   return send(res, 200, { dir: base, robots });
 }
 
+// CCTV 자동 녹화(NVR) 구간 저장소 — POST /api/cctv?id=run-..._cctv_0001&ext=webm|json → data/cctv/<id>.<ext>
+// 보관 기간: 구간 파일이 576개(5분 구간 약 48시간)를 넘으면 오래된 것부터 지운다
+const CCTV_KEEP = 576;
+async function saveCctv(req, res, url) {
+  const id = url.searchParams.get('id') ?? '', ext = url.searchParams.get('ext') ?? 'webm';
+  if (!SAFE.test(id) || !['webm', 'json'].includes(ext)) return send(res, 400, { error: 'id·ext 형식 오류' });
+  try {
+    const buf = await readRaw(req, 96 * 1024 * 1024);
+    const dir = path.join(DATA_DIR(), 'cctv');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${id}.${ext}`), buf);
+    const vids = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')).map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.t - b.t);
+    for (const v of vids.slice(0, Math.max(0, vids.length - CCTV_KEEP))) { fs.rmSync(path.join(dir, v.f), { force: true }); fs.rmSync(path.join(dir, v.f.replace(/\.webm$/, '.json')), { force: true }); }
+    return send(res, 200, { ok: true, bytes: buf.length });
+  } catch (e) { return send(res, 400, { error: e.message }); }
+}
+// 로봇 카메라 자동 녹화 구간 — POST /api/robotcam?id=..._robotcam_0001&ext=webm|json → data/robotcam/<id>.<ext>
+async function saveRobotcam(req, res, url) {
+  const id = url.searchParams.get('id') ?? '', ext = url.searchParams.get('ext') ?? 'webm';
+  if (!SAFE.test(id) || !['webm', 'json'].includes(ext)) return send(res, 400, { error: 'id·ext 형식 오류' });
+  try {
+    const buf = await readRaw(req, 96 * 1024 * 1024), dir = path.join(DATA_DIR(), 'robotcam');
+    fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, `${id}.${ext}`), buf);
+    const vids = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')).map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.t - b.t);
+    for (const v of vids.slice(0, Math.max(0, vids.length - CCTV_KEEP))) { fs.rmSync(path.join(dir, v.f), { force: true }); fs.rmSync(path.join(dir, v.f.replace(/\.webm$/, '.json')), { force: true }); }
+    return send(res, 200, { ok: true, bytes: buf.length });
+  } catch (e) { return send(res, 400, { error: e.message }); }
+}
+function listDir(res, sub) {
+  const dir = path.join(DATA_DIR(), sub);
+  let files = []; try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')); } catch { /* 아직 없음 */ }
+  return send(res, 200, { dir, count: files.length, bytes: files.reduce((a, f) => a + fs.statSync(path.join(dir, f)).size, 0), keep: CCTV_KEEP });
+}
+// GET /videos/(cctv|robotcam)/<파일>.webm|json → 저장한 영상 파일 (AAS 영상 링크가 가리키는 주소)
+function serveVideo(res, url) {
+  const m = url.pathname.match(/^\/videos\/(cctv|robotcam)\/([A-Za-z0-9_.-]{1,80})\.(webm|json)$/);
+  if (!m || !SAFE.test(m[2])) return send(res, 404, { error: 'not found' });
+  const f = path.join(DATA_DIR(), m[1], `${m[2]}.${m[3]}`);
+  if (!fs.existsSync(f)) return send(res, 404, { error: 'not found' });
+  res.writeHead(200, { 'Content-Type': m[3] === 'webm' ? 'video/webm' : 'application/json', 'Content-Length': fs.statSync(f).size, 'Cache-Control': 'no-store' });
+  fs.createReadStream(f).pipe(res);
+}
+// GET /api/cctv → 저장된 녹화 구간 수·용량
+function listCctv(res) {
+  const dir = path.join(DATA_DIR(), 'cctv');
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')); } catch { /* 아직 없음 */ }
+  return send(res, 200, { dir, count: files.length, bytes: files.reduce((a, f) => a + fs.statSync(path.join(dir, f)).size, 0), keep: CCTV_KEEP });
+}
+
 // AIOS 운영 데이터 묶음 저장소 — POST /api/aios?id=run-..._aios_0001 (본문: 운영 데이터셋 zip) → data/aios/<id>.zip
 async function saveAios(req, res, url) {
   const id = url.searchParams.get('id') ?? '';
@@ -141,7 +191,12 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
   await startMqtt();
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
-    if (url.pathname === '/api/status') return send(res, 200, { llm: hasApiKey(), model: MODEL, episodes: true, aios: true });
+    if (url.pathname === '/api/status') return send(res, 200, { llm: hasApiKey(), model: MODEL, episodes: true, aios: true, cctv: true, robotcam: true, dataDir: DATA_DIR() });
+    if (url.pathname === '/api/cctv' && req.method === 'POST') return saveCctv(req, res, url);
+    if (url.pathname === '/api/cctv') return listCctv(res);
+    if (url.pathname === '/api/robotcam' && req.method === 'POST') return saveRobotcam(req, res, url);
+    if (url.pathname === '/api/robotcam') return listDir(res, 'robotcam');
+    if (url.pathname.startsWith('/videos/')) return serveVideo(res, url);
     if (url.pathname === '/api/episodes' && req.method === 'POST') return saveEpisode(req, res, url);
     if (url.pathname === '/api/episodes') return listEpisodes(res);
     if (url.pathname === '/api/aios' && req.method === 'POST') return saveAios(req, res, url);

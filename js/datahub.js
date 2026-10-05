@@ -4,7 +4,7 @@
 import { COMMANDS, CMD_STATE } from './commands.js';
 import { ST_LABEL } from './sim.js';
 import { ROBOT_KINDS, STATION_TYPES, ZONE_MIXES, isZone } from './line.js';
-import { buildEnvironment, buildRobotEnvironment, detailCSV, toXML, toTurtle, toCSV, toAutomationML, aasId, smId, SEM, AAS_RECENT } from './aas.js';
+import { buildEnvironment, buildRobotEnvironment, detailCSV, toXML, toTurtle, toCSV, toAutomationML, aasId, smId, SEM, AAS_RECENT, addVideos, videoLinkFiles } from './aas.js';
 import { buildAASX } from './aasx.js';
 
 const DEG = 180 / Math.PI;
@@ -327,9 +327,12 @@ export class DataHub {
 
   // ── 저장 ─────────────────
   fileBase() { return `jin3d_${this.runId}`; }
-  build(format) {
+  // AAS 자산 → 영상 기록 키 (로봇 카메라 녹화 색인과 같은 키)
+  videoKey(a) { return a.mover ? `m:${a.mover.id}` : a.kind === 'CellRobot' ? a.id : a.kind === 'Factory' ? 'cctv' : null; }
+  // videosOf(asset) → 그 자산의 영상 파일 링크 목록 (main.js가 녹화기에서 넘겨준다)
+  build(format, videosOf = null) {
     const base = this.fileBase();
-    const env = () => buildEnvironment(this.assets, this.samples, this.last, { recent: AAS_RECENT, csvName: `${base}.csv` });
+    const env = () => { const e = buildEnvironment(this.assets, this.samples, this.last, { recent: AAS_RECENT, csvName: `${base}.csv` }); if (videosOf) for (const a of this.assets) addVideos(e, a.id, videosOf(a), a.kind === 'Factory' ? 'CCTV 영상 기록' : '로봇 카메라 영상 기록'); return e; };
     switch (format) {
       case 'json': return { name: `${base}.aas.json`, type: 'application/json', data: JSON.stringify({ ...env(), $meta: this.meta() }, null, 1) };
       case 'xml': return { name: `${base}.aas.xml`, type: 'application/xml', data: toXML(env()) };
@@ -343,8 +346,8 @@ export class DataHub {
     return { generator: 'Jin-3D', runId: this.runId, referenceClock: { epochUtc: this.iso(0), description: '시뮬레이션 시각 0초 = 기준 시각. 모든 타임스탬프는 이 기준 시계 기반 ISO 8601 UTC' },
       samplingIntervalS: this.interval, samples: this.samples.length, events: this.events.length, mode: this.sim.mode.label, line: this.sim.line.name };
   }
-  download(format) {
-    const out = this.build(format); if (!out) return null;
+  download(format, videosOf = null) {
+    const out = this.build(format, videosOf); if (!out) return null;
     const blob = new Blob([out.data], { type: out.type });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = out.name;
@@ -365,27 +368,29 @@ export class DataHub {
     const a = this.robotAsset(tele);
     return { op: this.samples.filter((s) => s.v[a.id]).length, detail: tele.log().rows.length, assetId: a.id, interval: this.interval };
   }
-  exportRobot(tele, format) {
+  // videos: 이 로봇 카메라가 찍은 영상 파일 링크 — AAS VideoRecordings 서브모델, AASX에는 영상 링크 파일(.url)·목록(JSON)도 함께
+  exportRobot(tele, format, videos = []) {
     const a = this.robotAsset(tele), L = tele.log();
     const detail = L.fields ? { fields: L.fields, rows: L.rows.map((r) => ({ t: this.iso(r.simT), simT: r.simT, v: r.v })) } : null;
     const base = `jin3d_${a.id}_${this.runId}`;
     const csvPath = `/aasx/${a.id}/files/${a.id}_telemetry.csv`;
-    const env = buildRobotEnvironment({ asset: a, samples: this.samples, detail, last: this.last, opts: { fileRef: format === 'aasx' && detail ? csvPath : null } });
+    const vids = videos.map((v) => ({ ...v })), links = format === 'aasx' ? videoLinkFiles(a.id, vids) : [];
+    const env = buildRobotEnvironment({ asset: a, samples: this.samples, detail, last: this.last, opts: { fileRef: format === 'aasx' && detail ? csvPath : null, videos: vids } });
     const out = format === 'aasx'
-      ? { name: `${base}.aasx`, type: 'application/asset-administration-shell-package', data: buildAASX(a.id, toXML(env), detail ? [{ path: csvPath, data: detailCSV(a.id, detail), contentType: 'text/csv' }] : []) }
+      ? { name: `${base}.aasx`, type: 'application/asset-administration-shell-package', data: buildAASX(a.id, toXML(env), [...(detail ? [{ path: csvPath, data: detailCSV(a.id, detail), contentType: 'text/csv' }] : []), ...links]) }
       : format === 'json' ? { name: `${base}.aas.json`, type: 'application/json', data: JSON.stringify(env, null, 1) }
       : format === 'xml' ? { name: `${base}.aas.xml`, type: 'application/xml', data: toXML(env) }
       : { name: `${base}.aas.ttl`, type: 'text/turtle', data: toTurtle(env) };
     return out;
   }
-  downloadRobot(tele, format) {
-    const out = this.exportRobot(tele, format);
+  downloadRobot(tele, format, videos = []) {
+    const out = this.exportRobot(tele, format, videos);
     const blob = new Blob([out.data], { type: out.type });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = out.name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    return { name: out.name, bytes: blob.size };
+    return { name: out.name, bytes: blob.size, videos: videos.length };
   }
 
   stats() {

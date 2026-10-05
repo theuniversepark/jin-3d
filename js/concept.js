@@ -29,7 +29,7 @@ const ROWS = [
   ['셀 간 물류', ['고정 컨베이어 · 지게차', `AMR ${ZONE_AMR.count}대 · AGV ${MODES.smart.vehicles}대`, `AMR ${ZONE_AMR.count}대 · AGV ${MODES.dark.vehicles}대 · 휴머노이드 부품 보충 ${MODES.dark.helpers}대`]],
   ['입고·창고', ['입고 트럭 · 유인 지게차 · 수기 발주', 'WMS 재주문점 발주 · 물류 확장동 통과형 선반 · 유인 지게차', 'WMS 발주 · 입고 자율 지게차(전용 통로) · 선반 → AGV·휴머노이드 자율 출고']],
   ['이동 로봇 에너지', ['— (사람·유인 장비)', 'AGV 충전 패드 · AMR 정차 무선 충전', '전 로봇 배터리 관리 — 기회 충전 · 휴머노이드 팩 교체 · 드론·사족 도킹']],
-  ['설비 정비', [`사후보전 — 고장 후 인지 (약 ${MODES.traditional.alarmDelay}초 지연)`, '예지정비 — IoT 임계치 · 정비원', `휴머노이드 정비 ${MODES.dark.techs}대 + 사족보행 순찰 ${MODES.dark.quadrupeds}대 선제 감지`]],
+  ['설비 정비', [`사후보전 — ${MODES.traditional.andon ? '안돈 알람 자동 호출' : '고장 후 인지'} (약 ${MODES.traditional.alarmDelay}초 지연)`, '예지정비 — IoT 임계치 · 정비원', `휴머노이드 정비 ${MODES.dark.techs}대 + 사족보행 순찰 ${MODES.dark.quadrupeds}대 선제 감지`]],
   ['품질', ['육안 검사', '비전·토크 전수 판정 · SPC 보정', '전수 판정 + 자율 재보정']],
   ['의사결정', ['작업반장 경험 · Push 투입', 'MES 규칙 기반 자동 제어 · Pull 투입', 'AI 에이전트 자율 운영 (Agent 감독 계층)']],
   ['공장 운영 SW', ['없음 — 수기·경험', 'MES (규칙 기반 자동 제어)', 'FACOS — 운영자 지시·AIOS·오케스트레이터·자율 에이전트·명령 센터·셀·게이트·VLA·현장 감지·DataHub']],

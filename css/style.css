@@ -762,3 +762,14 @@ em.up { color: var(--good); } em.dn { color: var(--bad); }
 .oi-p.p3 { background: #f5b82e; color: #1a1200; }
 .oi-p.p4 { background: rgba(106, 168, 255, 0.35); color: #dbe9ff; }
 .oi-p.p5 { background: rgba(255, 255, 255, 0.12); color: var(--ink2); }
+/* 로봇 정보 창 카메라 선택 (휴머노이드·AMMR 4대) */
+.rb-camtabs { display: flex; gap: 4px; margin-bottom: 4px; }
+.rb-camtabs button { flex: 1; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); border-radius: 7px; padding: 3px 0; font-size: 11px; color: var(--ink2); }
+.rb-camtabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* CCTV 영상 저장 (개별 녹화 · 스냅샷 · 자동 녹화 NVR) */
+.cc-save { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+.cc-save button { border: 1px solid var(--line); background: rgba(255, 255, 255, 0.06); border-radius: 8px; padding: 4px 10px; font-size: 12px; }
+.cc-save button.rec { background: rgba(255, 70, 70, 0.25); border-color: #ff5a5a; color: #ffd0d0; }
+.cc-save button:disabled { opacity: 0.45; cursor: default; }
+.cc-save small { color: var(--ink2); flex-basis: 100%; }
+.cc-rec { color: #ff6b6b; }
