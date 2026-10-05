@@ -51,6 +51,7 @@ export const MODES = {
     helpers: 2, quadrupeds: 2, partsCap: 40, partsReorder: 14, scanPm: 12,
     drones: 3,   // 순찰 드론 — 시설 크기(순찰 주기)·인시던트 출동률로 산정 (drone.js DRONE_SIZING)
     reorderPoint: 14, shipBatch: 12, dispatchDelay: 0, releaseInterval: 8.3,
+    releaseMargin: 0.94,   // 투입 간격 = 병목 사이클 × 0.94 — KPI 영향·개선 제안(투입 간격 단축) 적용: 2시간 × 시드 3 UPH 473 → 475 · WIP 그대로
     lightingKW: 6, hvacKW: 7, agentActive: true,   // 고효율 LED 구역 조명
   },
 };
