@@ -9,7 +9,7 @@ import { Private5G } from './net5g.js';
 import { OdooBridge } from './odoo.js';
 import { VLAPipeline } from './vla.js';
 import { AIOSPipeline } from './aios.js';
-import { Orchestrator } from './orchestrator.js';
+import { Orchestrator, PRIORITY, prioOf } from './orchestrator.js';
 import { AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
 export function mulberry32(a) {
@@ -38,6 +38,7 @@ export const MODES = {
     vehicles: 3, vehicleKind: 'agv', vehicleSpeed: 2.3, batteryDrain: 0.22, vehicleCap: 16, chargeAt: 30,
     techs: 1, techKind: 'human', techSpeed: 1.5,
     reorderPoint: 12, shipBatch: 12, dispatchDelay: 0, releaseInterval: 9,
+    amrStage: 2,   // AMR 선행 배차 2대 — KPI 영향·개선 제안 트윈 검증(UPH 362 → 423 · kWh/개 −10%)으로 적용
     lightingKW: 16, hvacKW: 18, agentActive: true,
   },
   dark: {
@@ -56,10 +57,10 @@ export const MODES = {
 
 // 현장 이벤트 (피지컬AI 단계: 로봇 카메라 영상의 AI 추론으로 감지 → 자율 대응)
 export const FIELD_EVENTS = {
-  leak:      { label: '바닥 누유', cls: '누유', severity: 'alarm', response: 'clean', task: '누유 흡착·세척', radius: 1.3 },
-  debris:    { label: '바닥 이물질', cls: '이물질', severity: 'warn', response: 'clean', task: '이물질 수거', radius: 1.0 },
-  intrusion: { label: '안전구역 무단 진입', cls: '사람', severity: 'alarm', response: 'safety', task: '', radius: 2.2 },
-  smoke:     { label: '연기 의심', cls: '연기', severity: 'alarm', response: 'inspect', task: '열화상 정밀 점검', radius: 1.8 },
+  leak:      { label: '바닥 누유', cls: '누유', severity: 'alarm', response: 'clean', task: '누유 흡착·세척', radius: 1.3, prio: 2 },
+  debris:    { label: '바닥 이물질', cls: '이물질', severity: 'warn', response: 'clean', task: '이물질 수거', radius: 1.0, prio: 2 },
+  intrusion: { label: '안전구역 무단 진입', cls: '사람', severity: 'alarm', response: 'safety', task: '', radius: 2.2, prio: 1 },
+  smoke:     { label: '연기 의심', cls: '연기', severity: 'alarm', response: 'inspect', task: '열화상 정밀 점검', radius: 1.8, prio: 1 },
 };
 
 // 정비실 도구 세트 — 정비원·정비 휴머노이드가 상황에 맞는 도구를 정비실에서 챙겨 출동하고, 처리 후 반납한다
@@ -1234,8 +1235,12 @@ export class Simulation {
   }
 
   assignTechs() {
-    for (const req of this.requests) {
+    // 우선순위 순: 긴급수리(P3) → 재보정·예지정비(P5). 화재·인명(P1) 대응 중에는 예지정비·재보정을 보류해 정비 인력을 안전 대응에 남긴다
+    const KP = { repair: 3, cal: 5, pm: 5 }, p1 = this.orch.urgentOpen(1).length > 0;
+    const order = [...this.requests].sort((a, b) => KP[a.kind] - KP[b.kind] || a.readyAt - b.readyAt);
+    for (const req of order) {
       if (req.tech || this.time < req.readyAt) continue;
+      if (p1 && KP[req.kind] >= 5) { if (!req.deferred) { req.deferred = true; this.stats.deferred = (this.stats.deferred ?? 0) + 1; this.log('info', `${req.st.name} ${req.kind === 'pm' ? '예지정비' : '재보정'} 보류`, { obs: 'P1 화재·인명 안전 대응 중', act: '안전 확보 뒤 배정 (정비 인력 안전 대응 대기)' }); } continue; }
       const st = req.st;
       let best = null, bd = 1e9;
       for (const t of this.techs) {
@@ -1244,7 +1249,7 @@ export class Simulation {
         if (d < bd) { bd = d; best = t; }
       }
       if (!best) continue;
-      req.tech = best; this.erp?.maintStart(st, best);
+      req.tech = best; best.job = { prio: KP[req.kind], st, req }; this.erp?.maintStart(st, best);
       if (req.kind === 'repair') this.orch.step(this.orch.find(`fail:${st.id}`), 'exec', 'act', `${best.id} 배정 · 출동`);
       const kindLabel = { repair: '긴급수리', pm: '예지정비', cal: '재보정' }[req.kind];
       const T = toolSteps(this, best, req.kind, req.kind === 'repair' ? this.orch.find(`fail:${st.id}`) : null);
@@ -1253,6 +1258,7 @@ export class Simulation {
         { go: svcLoc(st) },
         { do: () => this.techArrive(req) },
         { until: () => !st.request },
+        { do: () => { if (best.job?.req === req) best.job = null; } },
         ...T.back,
         ...T.home(best.home),
       ]);
@@ -1364,13 +1370,14 @@ export class Simulation {
   dispatchDrones() {
     if (!this.drones.length) return;
     const open = this.orch.incidents.filter((i) => i.status === 'open' && i.where && MISSION_PRIO[i.type] && !i.droneDone)
-      .sort((a, b) => MISSION_PRIO[b.type] - MISSION_PRIO[a.type] || a.t0 - b.t0);
+      .sort((a, b) => prioOf(a) - prioOf(b) || MISSION_PRIO[b.type] - MISSION_PRIO[a.type] || a.t0 - b.t0);   // 화재·인명(P1) → 시설 안전(P2) → 생산
     const dist = (d, w) => Math.hypot(d.x - w.x, d.z - w.z);
     for (const inc of open) {
       if (this.drones.some((d) => d.mission === inc)) continue;
       inc.droneWaitFrom ??= this.time;
       let d = this.drones.filter((x) => x.available).sort((a, b) => dist(a, inc.where) - dist(b, inc.where))[0];
-      if (!d) d = this.drones.filter((x) => x.mode === 'mission' && x.mission && MISSION_PRIO[x.mission.type] < MISSION_PRIO[inc.type]).sort((a, b) => MISSION_PRIO[a.mission.type] - MISSION_PRIO[b.mission.type] || dist(a, inc.where) - dist(b, inc.where))[0];
+      const lower = (x) => prioOf(x.mission) > prioOf(inc) || (prioOf(x.mission) === prioOf(inc) && MISSION_PRIO[x.mission.type] < MISSION_PRIO[inc.type]);
+      if (!d) d = this.drones.filter((x) => x.mode === 'mission' && x.mission && lower(x)).sort((a, b) => prioOf(b.mission) - prioOf(a.mission) || MISSION_PRIO[a.mission.type] - MISSION_PRIO[b.mission.type] || dist(a, inc.where) - dist(b, inc.where))[0];
       if (d) { inc.droneWait = (inc.droneWait ?? 0) + (this.time - inc.droneWaitFrom); inc.droneWaitFrom = null; d.assign(inc); }
     }
   }
@@ -1440,28 +1447,28 @@ export class Simulation {
   detectFieldEvent(ev, by, conf) {
     if (ev.detected || ev.cleared) return;
     ev.detected = true; ev.detectedBy = by; ev.conf = conf; ev.tDetect = this.time;
-    const o = this.orch, inc = o.open('field', `ev:${ev.id}`, `현장 이벤트 · ${FIELD_EVENTS[ev.type].label}`, by, { where: { x: ev.x, z: ev.z } });
+    const o = this.orch, inc = o.open('field', `ev:${ev.id}`, `현장 이벤트 · ${FIELD_EVENTS[ev.type].label}`, by, { where: { x: ev.x, z: ev.z }, prio: FIELD_EVENTS[ev.type].prio ?? 2 });
     inc.ev = ev;
     ev.inc = inc;
     o.step(inc, 'field', 'detect', `${by} 카메라 AI 추론 — ${FIELD_EVENTS[ev.type].cls} 신뢰도 ${conf.toFixed(2)}`);
     o.step(inc, 'cell', 'self', ev.type === 'intrusion' ? '자체 조치: 주변 로봇 협동 감속 · 접근 금지 구역 표시' : '자체 조치: 감지 로봇 감속·우회 · 해당 구역 표시');
     o.later(0.5, () => o.step(inc, 'cell', 'report', `상위 보고: ${FIELD_EVENTS[ev.type].label} · 위치 x ${ev.x.toFixed(1)}, z ${ev.z.toFixed(1)}`));
-    const E = FIELD_EVENTS[ev.type], where = `x ${ev.x.toFixed(1)} · z ${ev.z.toFixed(1)}`;
+    const E = FIELD_EVENTS[ev.type], P = E.prio ?? 2, where = `x ${ev.x.toFixed(1)} · z ${ev.z.toFixed(1)}`;
     const near = this.processing.reduce((b, st) => (Math.hypot(st.x - ev.x, st.z - ev.z) < Math.hypot(b.x - ev.x, b.z - ev.z) ? st : b), this.processing[0]);
     const loc = { x: ev.x, z: ev.z + (ev.z >= 0 ? 1.0 : -1.0), aisle: ev.z >= 0 ? 'F' : 'B', name: E.label };
     let act = '';
     const dispatch = () => {
     if (E.response === 'clean') {
       // 정비실 휴머노이드(대기 중 우선)가 정비실에서 청소 도구를 챙겨 출동 — 없으면 다른 휴머노이드
-      const dist = (a) => Math.hypot(a.x - ev.x, a.z - ev.z);
-      const pool = this.techs.filter((k) => k.kind === 'humanoid' && !k.tool);
-      const h = pool.filter((k) => k.idle).sort((a, b) => dist(a) - dist(b))[0] ?? pool.sort((a, b) => dist(a) - dist(b))[0]
-        ?? [...this.helpers, ...this.techs].filter((k) => k.kind === 'humanoid').sort((a, b) => (b.idle - a.idle) || (dist(a) - dist(b)))[0];
+      // 우선순위: 대기 중 정비 휴머노이드 → 더 낮은 우선순위 일(예지정비·생산 작업)을 하던 휴머노이드를 돌린다 (더 급한 안전 대응 중인 로봇은 건드리지 않음)
+      const h = this.pickResponder(ev, P);
+      if (!h) { o.step(inc, 'orch', 'decide', `대응 자원 대기 — 휴머노이드가 모두 같거나 더 높은 우선순위 대응 중 (3초 뒤 재배정)`); o.later(3, () => { if (!ev.cleared) dispatch(); }); return; }
       if (h) {
-        const resume = h.idle ? [] : h.steps;   // 하던 일은 처리 후 이어서
+        const resume = this.preemptJob(h, inc, P);   // 하던 일은 처리 후 이어서 (현장 작업 중이었으면 그 셀로 돌아가 이어 한다)
+        h.job = { prio: P, ev, label: E.label };
         const kit = TOOL_KITS[ev.type] ? ev.type : 'debris', T = toolSteps(this, h, kit, inc), K = TOOL_KITS[kit];
         h.setTask(`${E.task} → ${near.name} 앞 (${K.label})`, [...T.take, { go: loc }, { do: () => o.step(inc, 'exec', 'act', `${h.id} 현장 도착 · ${K.label}로 ${E.task} 시작`) },
-          { wait: 8, done: () => { ev.cleared = true; ev.tClear = this.time; this.log('ok', `${E.label} 처리 완료`, { obs: `${h.id}가 ${K.label}(${K.items})로 ${E.task} 완료`, act: '구역 정상화 · 도구 반납' }); o.step(inc, 'exec', 'act', `${E.task} 완료 — 도구 정비실 반납`); o.close(inc, '구역 정상화 확인 · 인시던트 종료'); } },
+          { wait: 8, done: () => { ev.cleared = true; ev.tClear = this.time; this.endJob(h, ev); this.log('ok', `${E.label} 처리 완료`, { obs: `${h.id}가 ${K.label}(${K.items})로 ${E.task} 완료`, act: '구역 정상화 · 도구 반납' }); o.step(inc, 'exec', 'act', `${E.task} 완료 — 도구 정비실 반납`); o.close(inc, '구역 정상화 확인 · 인시던트 종료'); } },
           ...T.back, ...(resume.length ? [...T.exit, ...resume] : T.home(h.home))]);
         ev.responder = h.id; act = `${h.id} 출동 — 정비실에서 ${K.label}(${K.items}) 챙겨 ${E.task} (작업 중이던 일은 처리 후 재개)`;
       }
@@ -1477,17 +1484,19 @@ export class Simulation {
         ev.responder = q.id; act = `${q.id} 출동 — 열화상·가스 센서 정밀 점검`;
       }
       // 화재 초기 대응 대비: 대기 중인 정비 휴머노이드가 정비실에서 소화기를 챙겨 현장 옆에서 대기 (점검 끝나면 반납)
-      const fx = this.techs.filter((k) => k.kind === 'humanoid' && k.idle && !k.tool).sort((a, b) => Math.hypot(a.x - ev.x, a.z - ev.z) - Math.hypot(b.x - ev.x, b.z - ev.z))[0];
+      // 화재(P1)는 최우선: 대기 중인 휴머노이드가 없으면 예지정비·수리·부품 보충 중인 휴머노이드를 돌려 소화기를 챙긴다 (하던 일은 해소 후 이어서)
+      const fx = this.pickResponder(ev, P);
       if (fx) {
+        const was = fx.idle ? null : fx.task, resume = this.preemptJob(fx, inc, P); fx.job = { prio: P, ev, label: '소화 대기' };
         const T = toolSteps(this, fx, 'smoke', inc), side = { ...loc, x: loc.x + 1.4, name: `${E.label} 소화 대기` };
-        fx.setTask(`소화기 대기 → ${near.name} 부근 (소화기)`, [...T.take, { go: side }, { do: () => o.step(inc, 'exec', 'act', `${fx.id} 소화기 들고 현장 대기`) }, { until: () => ev.cleared }, ...T.back, ...T.home(fx.home)]);
-        act += ` · ${fx.id} 소화기 챙겨 현장 대기`;
+        fx.setTask(`소화기 대기 → ${near.name} 부근 (소화기)`, [...T.take, { go: side }, { do: () => o.step(inc, 'exec', 'act', `${fx.id} 소화기 들고 현장 대기`) }, { until: () => ev.cleared }, { do: () => this.endJob(fx, ev) }, ...T.back, ...(resume.length ? [...T.exit, ...resume] : T.home(fx.home))]);
+        act += ` · ${fx.id} 소화기 챙겨 현장 대기${was ? ` (P1 화재 우선 — "${was}" 중단 후 재개)` : ''}`;
       }
     } else {
       ev.until = this.time + 60;
       act = '주변 셀 안전 감속 25% 긴급 명령 · 접근 금지 구역 설정, 원격 관제 요원 호출';
     }
-    o.step(inc, 'orch', 'decide', `판단(${o.name}): ${E.response === 'clean' ? '작업 경로 안전 위협 — 즉시 제거' : E.response === 'inspect' ? '화재 초기 징후 가능성 — 근접 확인' : '무인 구역 사람 진입 — 안전 우선'}`);
+    o.step(inc, 'orch', 'decide', `우선순위 ${PRIORITY[P].label}${P === 1 ? ' — 최우선 처리 (예지정비·재보정 보류, 대응 자원 선점)' : ' — 생산·효율 작업보다 먼저'} · 판단(${o.name}): ${E.response === 'clean' ? '작업 경로 안전 위협 — 즉시 제거' : E.response === 'inspect' ? '화재 초기 징후 가능성 — 근접 확인' : '무인 구역 사람 진입 — 안전 우선'}`);
     o.step(inc, 'orch', 'command', `명령: ${act || '대응 자원 없음 — 원격 관제 호출'}`);
     // 긴급 명령을 셀 현장으로 보낸다: 사람 진입 → 주변 셀 안전 감속, 연기 의심 → 가장 가까운 셀 보호정지 (해소되면 재개 명령)
     ev.cmdCells = E.response === 'safety' ? this.processing.filter((st) => !st.standby && Math.hypot(st.x - ev.x, st.z - ev.z) < 9).map((st) => st.id) : E.response === 'inspect' ? [near.id] : [];
@@ -1495,13 +1504,43 @@ export class Simulation {
     for (const id of ev.cmdCells) this.cmd.issue(E.response === 'safety' ? 'SAFE_SPEED' : 'SAFE_STOP', id, null, { inc, why: E.label });
     this.log('alert', `오케스트레이터 명령 · ${E.label}`, { obs: `${by} 보고 수신`, dec: `${o.name} 판단`, act });
     };
-    o.later(o.latency, dispatch);
+    o.later(o.latencyFor(P), dispatch);   // 화재·인명(P1)은 판단 대기를 줄여 바로 명령
     this.log('alert', `AI 비전 감지 · ${E.label}`, {
       obs: `${by} 카메라 영상 추론 — ${E.cls} 신뢰도 ${conf.toFixed(2)} · ${near.name} 부근 (${where})`,
       dec: '셀·로봇 자체 조치 후 공장 오케스트레이터에 보고',
-      act: `오케스트레이터 판단 대기 (약 ${o.latency}초)`,
+      act: `${PRIORITY[P].label} · 오케스트레이터 판단 대기 (약 ${o.latencyFor(P).toFixed(1)}초)`,
     });
   }
+  // ── 문제 해결 우선순위 (orchestrator.js PRIORITY) ─────────────────
+  // 이동 로봇이 하는 일의 우선순위: 대기 99 · 안전 대응 1~2 · 긴급수리 3 · 부품 보충 4 · 예지정비·재보정 5
+  jobPrio(m) { return m.idle ? 99 : m.job?.prio ?? 4; }
+  // 현장 이벤트 대응 휴머노이드: 대기 중인 정비 휴머노이드(가까운 순) → 우선순위가 더 낮은 일을 하던 휴머노이드(덜 급한 일 · 가까운 순)
+  pickResponder(ev, P) {
+    const dist = (a) => Math.hypot(a.x - ev.x, a.z - ev.z);
+    const ok = (k) => k.kind === 'humanoid' && this.jobPrio(k) > P && !(k.tool === 'smoke' && k.job?.prio <= P) && k.battery > 15;
+    const techs = this.techs.filter(ok), helpers = this.helpers.filter(ok);
+    const order = (a, b) => (b.idle - a.idle) || (this.jobPrio(b) - this.jobPrio(a)) || (dist(a) - dist(b));
+    return techs.filter((k) => k.idle).sort(order)[0] ?? [...techs, ...helpers].sort(order)[0] ?? null;
+  }
+  // 하던 일을 멈추고 이어 할 단계 — 셀 현장에서 수리·정비 중이었으면 작업을 잠시 멈추고(진행률 유지), 돌아와서 이어 한다
+  preemptJob(m, inc, P) {
+    if (m.idle) return [];
+    const prev = m.job, steps = m.steps;
+    m.prevJob = prev ?? { prio: 4 };
+    const st = prev?.st;
+    let rest = steps;
+    if (st && st.techOnSite && st.request === prev.req) {
+      st.techOnSite = false;
+      rest = [{ go: svcLoc(st) }, { do: () => { if (st.request === prev.req) { st.techOnSite = true; this.orch.step(this.orch.find(`fail:${st.id}`), 'exec', 'act', `${m.id} 안전 대응 후 복귀 · 수리 재개`); } } }, ...steps];
+    }
+    this.stats.preempts = (this.stats.preempts ?? 0) + 1;
+    if (prev?.prio) (this.preemptLog ??= []).push({ t: this.time, who: m.id, from: prev.prio, to: P });
+    this.orch.step(inc, 'orch', 'command', `${PRIORITY[P].short} 우선 — ${m.id} "${m.task ?? '작업'}"(${PRIORITY[prev?.prio ?? 4].short}) 중단 → 안전 대응 후 재개`);
+    if (st) { const fi = this.orch.find(`fail:${st.id}`); this.orch.step(fi, 'orch', 'decide', `${m.id} 상위 우선순위(${PRIORITY[P].label}) 대응으로 잠시 이탈 — 대응 후 복귀`); }
+    return rest;
+  }
+  endJob(m, ev) { if (m.job?.ev === ev) { m.job = m.prevJob ?? null; m.prevJob = null; } }
+
   // 현장 이벤트로 멈추거나 감속한 셀에 재개 명령을 보내고, 셀 완료 보고를 받은 뒤 인시던트를 닫는다
   resumeCells(ev, inc, closeText) {
     const code = ev.type === 'intrusion' ? 'SAFE_SPEED_OFF' : 'RESUME';   // 감속은 감속 해제, 보호정지는 운전 재개

@@ -754,3 +754,11 @@ em.up { color: var(--good); } em.dn { color: var(--bad); }
 .imp-log { margin: 0; padding-left: 18px; font-size: 12px; color: var(--ink2); line-height: 1.6; }
 @media (max-width: 720px) { .imp-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .imp-t.ev td:nth-child(2), .imp-t.ev th:nth-child(2), .imp-t.ev td:nth-child(3), .imp-t.ev th:nth-child(3) { text-align: left; }
+
+/* 문제 해결 우선순위 배지 (P1 화재·인명 → P5 효율·품질) */
+.oi-p { font-style: normal; font-size: 10px; font-weight: 800; border-radius: 5px; padding: 0 5px; margin-right: 5px; vertical-align: 1px; }
+.oi-p.p1 { background: #ff5a5a; color: #fff; }
+.oi-p.p2 { background: #ff9152; color: #1a0d00; }
+.oi-p.p3 { background: #f5b82e; color: #1a1200; }
+.oi-p.p4 { background: rgba(106, 168, 255, 0.35); color: #dbe9ff; }
+.oi-p.p5 { background: rgba(255, 255, 255, 0.12); color: var(--ink2); }

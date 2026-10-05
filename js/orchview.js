@@ -1,7 +1,7 @@
 // 오케스트레이터 인시던트 흐름 도표 — 인시던트 목록 + 스윔레인 흐름도(현장 감지 · 셀 컨트롤러 · 공장 오케스트레이터 · 실행 자원).
 // 단계(감지 → 셀 자체 조치 → 상위 보고 → 판단 → 명령 → 조치 → 완료 확인)를 시각과 함께 실시간으로 그린다.
 // 명령 콘솔 탭에서는 상위 계층이 셀 현장으로 긴급·제어 명령을 보내고, 셀별 명령 상태와 명령 이력(전송 → ACK → 완료)을 본다.
-import { LANES, STAGES, INCIDENT_TYPES } from './orchestrator.js';
+import { LANES, STAGES, INCIDENT_TYPES, PRIORITY, prioOf } from './orchestrator.js';
 import { COMMANDS, CMD_STATE } from './commands.js';
 import { ST_LABEL } from './sim.js';
 
@@ -90,7 +90,8 @@ export class OrchView {
     if (this.built !== `${this.tab}:${this.sim.mode.key}`) this.build();
     if (this.tab === 'cmd') return this.renderCmd();
     const o = this.sim.orch;
-    const list = o.incidents.filter((i) => this.showCell || !i.cellResolved);
+    // 진행 중 인시던트는 문제 해결 우선순위 순(화재·인명 → 시설 안전 → 생산 정지 → 생산 차질 → 효율·품질), 끝난 것은 최근 순
+    const list = o.incidents.filter((i) => this.showCell || !i.cellResolved).sort((a, b) => ((a.status === 'open') ? 0 : 1) - ((b.status === 'open') ? 0 : 1) || (a.status === 'open' && b.status === 'open' ? prioOf(a) - prioOf(b) : 0) || b.t0 - a.t0);
     if (!this.sel || !o.incidents.some((i) => i.id === this.sel)) this.sel = (list.find((i) => i.status === 'open') ?? list[0])?.id ?? null;
     const inc = o.incidents.find((i) => i.id === this.sel);
     const now = this.sim.time;
@@ -98,7 +99,7 @@ export class OrchView {
       const T = INCIDENT_TYPES[i.type], dur = (i.tEnd ?? now) - i.t0;
       const st = i.status === 'open' ? ['진행 중', 'open'] : i.cellResolved ? ['셀 자체 해결', 'cell'] : ['해결', 'done'];
       return `<button type="button" class="oi ${i.id === this.sel ? 'sel' : ''} st-${st[1]}" data-inc="${i.id}">
-        <span class="oi-ic">${T.icon}</span><span class="oi-t">${esc(i.title)}</span>
+        <span class="oi-ic">${T.icon}</span><span class="oi-t"><em class="oi-p p${prioOf(i)}" title="${esc(PRIORITY[prioOf(i)].desc)}">P${prioOf(i)}</em>${esc(i.title)}</span>
         <span class="oi-m">${clock(i.t0)} · ${Math.round(dur)}초</span><span class="oi-s">${st[0]}</span></button>`;
     }).join('') || '<div class="oi-empty">아직 인시던트가 없습니다. ⚡ 설비 고장 주입, ⛔ 자재 공급 차질, ⚠ 현장 이벤트(피지컬AI)로 발생시키거나 명령 콘솔에서 명령을 보내 보세요.</div>';
     this.put(this.el.querySelector('[data-body]'), `<div class="orch-list">${items}</div><div class="orch-flow">${inc ? this.flow(inc, now) : ''}</div>`, ['.orch-list', '.sw-wrap']);
@@ -180,7 +181,7 @@ export class OrchView {
     });
     svg += `</svg>`;
     const dur = (inc.tEnd ?? now) - inc.t0;
-    return `<div class="of-h"><span>${INCIDENT_TYPES[inc.type].icon} <b>${esc(inc.title)}</b> · 발생 ${clock(inc.t0)} · 출처 ${esc(inc.source)}</span>
+    return `<div class="of-h"><span>${INCIDENT_TYPES[inc.type].icon} <em class="oi-p p${prioOf(inc)}">${PRIORITY[prioOf(inc)].label}</em> <b>${esc(inc.title)}</b> · 발생 ${clock(inc.t0)} · 출처 ${esc(inc.source)}</span>
         <span class="of-st ${inc.status}">${inc.status === 'open' ? `진행 중 · ${Math.round(dur)}초 경과` : `${inc.cellResolved ? '셀 자체 해결' : '해결'} · 총 ${Math.round(dur)}초`}</span></div>
       <div class="ostp">${stepper}</div><div class="sw-wrap">${svg}</div>`;
   }

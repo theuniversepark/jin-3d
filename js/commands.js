@@ -110,7 +110,7 @@ export class CommandCenter {
     if (!C || !C.scopes.includes(target === 'all' ? 'all' : 'cell')) return null;
     const c = { id: ++this.seq, code, target, arg, by: by ?? o.name, why, t: s.time, state: 'sent', history: [] };
     this.list.unshift(c); if (this.list.length > 60) this.list.pop();
-    c.inc = inc ?? o.open('command', `cmd:${c.id}`, `${C.icon} ${this.label(c)} → ${this.targetName(target)}`, c.by);
+    c.inc = inc ?? o.open('command', `cmd:${c.id}`, `${C.icon} ${this.label(c)} → ${this.targetName(target)}`, c.by, { prio: C.group === 'emergency' ? 1 : 4 });   // 긴급 명령(비상정지·보호정지 등)은 P1
     o.step(c.inc, 'orch', 'command', `${C.group === 'emergency' ? '긴급 명령' : '제어 명령'} #${c.id}: ${this.label(c)} → ${this.targetName(target)}${why ? ` (${why})` : ''}`);
     this.mark(c, 'sent');
     s.log(C.group === 'emergency' ? 'alert' : 'act', `${C.group === 'emergency' ? '긴급' : '제어'} 명령 #${c.id} · ${this.label(c)}`, { obs: `대상: ${this.targetName(target)}`, dec: why ?? `${c.by} 지시`, act: `${this.link.via} 전송` });

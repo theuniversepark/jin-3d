@@ -7,7 +7,7 @@ import { BELT_Y, LOC, chgLoc, FG_CAP, RAW_CAP, ST_LABEL, TOOL_KITS, SINK_PICK } 
 import { YARD } from './shipping.js';
 import { INBOUND, WH, WH_RACK } from './receiving.js';
 import { DRONE_PAD, dronePad } from './drone.js';
-import { STAGES, INCIDENT_TYPES } from './orchestrator.js';
+import { STAGES, INCIDENT_TYPES, prioOf } from './orchestrator.js';
 import { NR } from './net5g.js';
 import { blenderOn, cloneAsset, RENDER } from './blender.js';
 import { equipmentList, STATUS_CLASS } from './assets.js';
@@ -3080,7 +3080,7 @@ export class FactoryView {
     g.fillText(fit('AI 판단 ▸ ' + agentLine, 900), 26, 432);
     // ── 오른쪽: 이벤트 알람 · 처리 과정 · 결과 (x 960~1996)
     const X = 960, W = 1036, inc = sim.orch?.incidents ?? [];
-    const open = inc.filter((i) => i.status === 'open'), done = inc.filter((i) => i.status !== 'open' && sim.time - (i.tEnd ?? 0) < 600);
+    const open = inc.filter((i) => i.status === 'open').sort((a, b) => prioOf(a) - prioOf(b) || a.t0 - b.t0), done = inc.filter((i) => i.status !== 'open' && sim.time - (i.tEnd ?? 0) < 600);
     g.fillStyle = 'rgba(55,232,255,0.25)'; g.fillRect(X - 16, 14, 2, 420);
     g.font = `800 28px ${F}`; g.fillStyle = open.length ? (blink ? '#ff5a5a' : '#ff9a3d') : '#3ddc84';
     g.fillText(open.length ? `🚨 이벤트 알람 ${open.length}건 처리 중` : '✅ 이벤트 없음 · 정상 운영', X, 42);
@@ -3100,7 +3100,7 @@ export class FactoryView {
       if (isOpen) { g.strokeStyle = accent; g.lineWidth = 2; g.strokeRect(X + 1, y + 1, W - 2, CH - 2); }
       // 1줄: 종류 · 제목 · 경과/소요
       g.font = `800 23px ${F}`; g.fillStyle = '#ffffff';
-      g.fillText(fit(`${T.icon} #${it.id} ${it.title}`, W - 300), X + 20, y + 29);
+      g.fillText(fit(`${T.icon} [P${prioOf(it)}] #${it.id} ${it.title}`, W - 300), X + 20, y + 29);   // 문제 해결 우선순위
       g.textAlign = 'right'; g.font = `700 20px ${F}`; g.fillStyle = accent;
       g.fillText(isOpen ? `진행 중 · 경과 ${mmss(sim.time - it.t0)}` : `완료 · 소요 ${mmss((it.tEnd ?? sim.time) - it.t0)}`, X + W - 14, y + 29); g.textAlign = 'left';
       // 2줄: 처리 단계 진행 표시 (감지 → … → 완료 확인)
