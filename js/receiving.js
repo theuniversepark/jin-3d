@@ -103,7 +103,8 @@ export function planReceiver(sim, f) {
   const type = t.pallets[k];
   t.reserved = (t.reserved ?? 0) + 1;
   const legacy = sim.mode.key === 'traditional';
-  const dock = { x: INBOUND.wallX + 1.7, z: INBOUND.dockZ, aisle: 'B', name: '입고 도크' };
+  // 도크 앞(벽에서 2.7m)에서 트럭 쪽을 보고 서서 포크를 적재함 높이로 올린 뒤 들어가 팔레트를 들고, 포크를 올린 채 반듯이 후진해 나온 뒤 돈다
+  const dock = { x: INBOUND.wallX + 2.7, z: INBOUND.dockZ, aisle: 'B', name: '입고 도크' };
   const inside = { x: INBOUND.wallX + 0.6, z: INBOUND.dockZ, aisle: 'B', name: `${t.id} 적재함` };
   const put = type === 'raw' ? sim.loc.WH_IN : sim.loc.WH_PARTS_IN;   // 선반 서쪽 면의 원자재(남쪽)·부품(북쪽) 칸
   const name = type === 'raw' ? '원자재' : '부품';
@@ -111,7 +112,7 @@ export function planReceiver(sim, f) {
     { go: dock, via: [] },
     { go: inside, via: [] },
     { wait: legacy ? 7 : 4, done: () => { t.pallets.splice(t.pallets.lastIndexOf(type), 1); t.reserved = Math.max(0, t.reserved - 1); t.load = t.pallets.length; f.load = { type, n: type === 'raw' ? WH.rawPallet : WH.partsPallet }; } },
-    { go: dock, via: [] },
+    { go: dock, via: [], rev: true },
     { go: put, via: [{ x: put.x, z: Math.min(put.z - 3, INBOUND.dockZ + 2) }] },   // 지게차 통로를 따라 남쪽으로 곧게 내려가 선반 서쪽 면에 넣는다
     { wait: legacy ? 6 : 4, done: () => {
       if (type === 'raw') { sim.whRaw += WH.rawPallet; sim.inbound.stats.raw += WH.rawPallet; }

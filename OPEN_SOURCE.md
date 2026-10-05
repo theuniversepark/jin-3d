@@ -24,7 +24,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 
 | 이름 | 라이선스 | 출처 | 쓰인 곳 |
 |---|---|---|---|
-| Blender 5.2 | GPL-2.0-or-later (프로그램) — 만든 결과물(모델·렌더)은 만든 사람의 것 | https://www.blender.org | `blender/build_assets.py`로 AMR·AGV·지게차·드론·휴머노이드·사족보행·6축 팔·AMMR·화물트럭·갠트리·e-axle·도어트림·조립·체결 부품 모델링과 기본 도형 라이브러리(`tools/collect-primitives.cjs`로 모은 치수 279종) → `assets/blender/*.glb`·미리보기 렌더 (Blender 프로그램은 앱에 포함하지 않음) |
+| Blender 5.2 | GPL-2.0-or-later (프로그램) — 만든 결과물(모델·렌더)은 만든 사람의 것 | https://www.blender.org | `blender/build_assets.py`로 AMR·AGV·지게차·드론·휴머노이드·사족보행·6축 팔·AMMR·화물트럭·갠트리·e-axle·도어트림·조립·체결 부품·정비실 비품 모델링과 기본 도형 라이브러리(`tools/collect-primitives.cjs`로 모은 치수 279종) → `assets/blender/*.glb`·미리보기 렌더 (Blender 프로그램은 앱에 포함하지 않음) |
 | aas-core3.0 (Python) | MIT | https://github.com/aas-core-works/aas-core3.0-python | 내보낸 AAS JSON·XML 표준 적합성 검증 |
 | Node.js · npm | MIT 등 | https://nodejs.org | 서버 실행, 시뮬레이션 자동 시험(`npm test`) |
 | Python 3 | PSF | https://python.org | 개발 보조 스크립트, AAS 검증 |

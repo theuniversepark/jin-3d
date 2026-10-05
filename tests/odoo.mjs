@@ -18,13 +18,14 @@ const st = s.processing.find((x) => x.id === 'DT_ASSY'); s.injectFault(st);
 for (let t = 0; t < 400; t += 0.1) { s.step(0.1); ag.update(0.1); }
 const E = s.erp; E.closeWindow();
 const S = E.stats(), Q = E.quant, P = E.db.picking;
+// 진행 중 구매오더 = 아직 트럭에 안 실린 발주 + 트럭이 실어 왔지만 입고 확정 전(마지막 팔레트를 지게차가 옮기는 중이면 출차 후에도 확정 대기)
 // 진행 중(전표 미확정) 수량: 입고 트럭에서 이미 선반에 넣었지만 아직 입고 확정 전 / 구분 적재장에서 꺼냈지만 출고 확정 전(지게차·출발 전 트럭)
 const pendIn = (k) => P.filter((p) => p.type === 'incoming' && p.state !== 'done').flatMap((p) => p.lines).reduce((a, l) => a + (l.product === k ? l.done : 0), 0);
 const pendOut = (k) => P.filter((p) => p.type === 'outgoing' && p.state !== 'done').flatMap((p) => p.lines).reduce((a, l) => a + (l.product === k ? l.done : 0), 0)
   + (s.forklifts ?? []).reduce((a, f) => a + (f.load?.type === 'fg' && (f.load.product ?? 'doortrim') === k ? f.load.n : 0), 0);
 const expRaw = s.whRaw - pendIn('raw'), expParts = s.whParts - pendIn('parts'), expDT = s.fgBy.doortrim + pendOut('doortrim'), expEA = s.fgBy.eaxle + pendOut('eaxle');
 console.log('== 시뮬레이션 Odoo (피지컬AI 2시간)');
-check('구매오더 = WMS 발주 · 입고 확정 + 진행 중 = 구매오더 수', S.po > 0 && S.receipts + S.poOpen === S.po && S.receipts >= s.inbound.stats.trucks - 1 && S.poOpen === s.inbound.orders.length + s.inbound.trucks.filter((t) => t.state !== 'gone').length + (S.receipts - s.inbound.stats.trucks < 0 ? 1 : 0), `구매오더 ${S.po}건 · 입고 확정 ${S.receipts} · 진행 중 ${S.poOpen} · ${(S.amount / 1e6).toFixed(1)}백만원`);
+check('구매오더 = WMS 발주 · 입고 확정 + 진행 중 = 구매오더 수', S.po > 0 && S.receipts + S.poOpen === S.po && S.receipts >= s.inbound.stats.trucks - 1 && S.poOpen === s.inbound.orders.length + [...E.byTruck.values()].filter((r) => !r.po.received).length, `구매오더 ${S.po}건 · 입고 확정 ${S.receipts} · 진행 중 ${S.poOpen} · ${(S.amount / 1e6).toFixed(1)}백만원`);
 check('입고 수량 = 입고 트럭이 내린 수량 (원자재·부품)', P.filter((p) => p.type === 'incoming').flatMap((p) => p.lines).reduce((a, l) => a + (l.product === 'raw' ? l.done : 0), 0) === s.inbound.stats.raw && P.filter((p) => p.type === 'incoming').flatMap((p) => p.lines).reduce((a, l) => a + (l.product === 'parts' ? l.done : 0), 0) === s.inbound.stats.parts, `원자재 ${s.inbound.stats.raw} · 부품 ${s.inbound.stats.parts}`);
 check('물류 선반 재고 = 시뮬레이션 창고 재고 − 입고 확정 전 수량', Q.rackRaw.raw === expRaw && Q.rackParts.parts === expParts, `원자재 ${Q.rackRaw.raw} (창고 ${s.whRaw} − 확정 전 ${pendIn('raw')}) · 부품 ${Q.rackParts.parts}`);
 check('구분 적재장 재고 = 시뮬레이션 적재 + 출고 확정 전(지게차·출발 전 트럭)', Q.output.doortrim === expDT && Q.output.eaxle === expEA, `도어트림 ${Q.output.doortrim} (적재 ${s.fgBy.doortrim} + ${pendOut('doortrim')}) · e-axle ${Q.output.eaxle}`);

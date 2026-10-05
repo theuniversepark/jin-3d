@@ -32,7 +32,7 @@ function bounds(J) {
 const SPEC = {   // 3D 모델 치수(폭 x · 높이 y · 길이 z, m)와 같은지 ±0.25m
   amr: { size: [0.97, 0.95, 1.47], mats: ['LED'], nodes: ['Lift', 'Jig', 'Lidar'] },
   agv: { size: [1.12, 0.5, 1.52], mats: ['LED'], nodes: ['Deck', 'Lidar'] },
-  forklift: { size: [1.4, 2.33, 3.1], mats: ['Lamp'], nodes: ['Guard', 'Mast_Top', 'Fork_0.3'] },
+  forklift: { size: [1.4, 2.33, 3.1], mats: ['Lamp'], nodes: ['Guard', 'Mast_Top', 'Fork_0.3', 'ForkCarriage'] },
   drone: { size: [1.0, 0.36, 1.0], mats: ['NAV_R', 'NAV_G', 'STROBE'], nodes: ['Rotor_0', 'Rotor_1', 'Rotor_2', 'Rotor_3', 'Gimbal'] },
   quadruped: { size: [0.54, 1.08, 1.08], mats: ['THERMAL'], nodes: ['Body', 'Cam', 'Hip_0', 'Hip_1', 'Hip_2', 'Hip_3', 'Knee_0', 'Knee_1', 'Knee_2', 'Knee_3'] },
   doortrim: { size: [0.8, 0.6, 0.15], mats: ['TrimPlastic', 'Leather', 'Chrome'], nodes: ['Trim_Panel', 'Trim_Armrest', 'Trim_Speaker', 'Trim_Handle'] },
@@ -64,11 +64,16 @@ check('미리보기 렌더 (Blender Eevee) preview.png', fs.existsSync(new URL('
 { const J = glb('parts').json, names = ['P_Gear', 'P_Shaft', 'P_Bearing', 'P_Seal', 'P_CupHolder', 'P_Armrest', 'P_Grille', 'P_Switch', 'P_Screw', 'P_Bolt', 'P_Nut', 'P_Washer', 'P_Clip'];
   const miss = names.filter((n) => !J.nodes.some((x) => x.name === n));
   check('parts.glb: 조립 부품(기어·샤프트·베어링·오일씰·컵홀더·암레스트·스피커 그릴·스위치) · 체결 부품(나사·볼트·너트·와셔·클립) 13종', G6(J) && !miss.length, miss.join(', ') || `메시 ${J.meshes.length}`); }
+{ const J = glb('maint').json, names = ['M_ToolChest', 'M_Locker', 'M_Workbench', 'M_Shelf', 'M_Cleaning', 'M_Compressor', 'M_Extinguisher', 'M_Ladder'];
+  const miss = names.filter((n) => !J.nodes.some((x) => x.name === n));
+  check('maint.glb: 정비실 비품 8종(공구 카트·캐비닛·작업대·소모품 선반·청소도구·컴프레서·소화기·사다리)', G6(J) && !miss.length, miss.join(', ') || `메시 ${J.meshes.length}`); }
+{ const J = glb('forklift').json, fc = J.nodes.findIndex((n) => n.name === 'ForkCarriage'), kids = (J.nodes[fc]?.children ?? []).map((i) => J.nodes[i].name);
+  check('지게차 포크 승강: ForkCarriage 아래 포크 2개 · 캐리지 · 짐받이 (코드가 마스트를 따라 올림)', fc >= 0 && ['Fork_0.3', 'Fork_-0.3', 'Carriage', 'Backrest_Top'].every((n) => kids.includes(n)), kids.slice(0, 5).join(', ')); }
 { const J = glb('arm6').json, segs = ['Seg_Base', 'Seg_Turret', 'Seg_Shoulder', 'Seg_Elbow', 'Seg_Wrist', 'Seg_Wrist2', 'Seg_Flange'], at = (n) => J.nodes.find((x) => x.name === n);
   // 6축 팔 마디: 관절 회전 중심이 원점(이동·회전 없음)이어야 코드가 makeArm 관절 그룹에 그대로 붙인다
   const bad = segs.filter((n) => !at(n) || at(n).rotation || (at(n).translation ?? [0, 0, 0]).some((v) => Math.abs(v) > 1e-4));
   check('arm6.glb: 6축 팔 마디 7개(베이스·J1~J6) · 관절 중심 원점 · Blender 생성', G6(J) && !bad.length && J.materials.some((m) => m.name === 'ArmAcc'), bad.join(', ')); }
-for (const k of ['humanoid', 'quadruped', 'truck', 'eaxle', 'parts', 'doortrim']) check(`미리보기 렌더 preview_${k}.png`, fs.existsSync(new URL(`preview_${k}.png`, DIR)) && fs.statSync(new URL(`preview_${k}.png`, DIR)).size > 30000);
+for (const k of ['humanoid', 'quadruped', 'truck', 'eaxle', 'parts', 'doortrim', 'maint']) check(`미리보기 렌더 preview_${k}.png`, fs.existsSync(new URL(`preview_${k}.png`, DIR)) && fs.statSync(new URL(`preview_${k}.png`, DIR)).size > 30000);
 { const J = glb('humanoid').json, at = (n) => J.nodes.find((x) => x.name === n), hasRot = ['Body', 'Waist', 'Head', 'Shoulder_L', 'Elbow_L', 'Hip_L', 'Knee_L'].filter((n) => at(n).rotation);
   // 관절 빈 객체는 회전 없이 놓여야 코드의 rotation.x가 3D 모델과 같은 방향으로 움직인다. 어깨·고관절 높이 = 3D 모델(1.52m · 0.92m)
   const y = (n) => { let v = 0; for (const [i, x] of J.nodes.entries()) if (x.name === n) { v = x.translation?.[1] ?? 0; let p = i; for (;;) { const q = J.nodes.findIndex((z) => z.children?.includes(p)); if (q < 0) break; v += J.nodes[q].translation?.[1] ?? 0; p = q; } } return v; };

@@ -1,6 +1,6 @@
 # Jin-3D Blender 자산 생성 스크립트 — Blender(5.x)에서 실제로 모델링·재질 적용 후 glTF(.glb)로 내보낸다.
 # 실행: blender -b --python blender/build_assets.py   (또는 npm run blender:assets)
-# 결과: assets/blender/{amr,agv,forklift,drone,humanoid,quadruped,arm6,ammr,truck,gantry,eaxle,parts,doortrim,primitives}.glb  +  assets/blender/preview.png (Blender Eevee 렌더 미리보기)
+# 결과: assets/blender/{amr,agv,forklift,drone,humanoid,quadruped,arm6,ammr,truck,gantry,eaxle,parts,doortrim,maint,primitives}.glb  +  assets/blender/preview.png (Blender Eevee 렌더 미리보기)
 #
 # 좌표: Blender는 Z가 위, glTF로 내보내면 +Y가 위가 된다 (Blender X → three X, Blender Z → three Y, Blender −Y → three +Z).
 #       three.js 모델의 "앞"(로컬 +z)은 Blender −Y 방향으로 만든다. 단위 1 = 1m (Jin-3D와 같은 크기·같은 원점: 바닥 중심)
@@ -168,13 +168,14 @@ def build_forklift():
     box('Mast_Top', (1.0, 0.08, 0.08), (0, -0.75, 2.36), D, bevel=0.015, parent=R)
     box('Mast_Mid', (0.9, 0.06, 0.06), (0, -0.75, 1.45), D, bevel=0.01, parent=R)
     cyl('LiftCyl', 0.05, 1.7, (0, -0.7, 1.15), St, parent=R, verts=24, bevel=0.005)
-    # 캐리지 · 짐받이(로드 백레스트) · 포크
-    box('Carriage', (0.98, 0.07, 0.42), (0, -0.83, 0.42), D, bevel=0.015, parent=R)
-    box('Backrest_Top', (0.98, 0.04, 0.04), (0, -0.86, 1.25), D, parent=R)
-    for k in range(6): box(f'Backrest_{k}', (0.03, 0.03, 0.62), (-0.45 + k * 0.18, -0.86, 0.94), D, parent=R)
+    # 캐리지 · 짐받이(로드 백레스트) · 포크 — 빈 객체 ForkCarriage 아래 (코드가 마스트를 따라 올리고 내린다)
+    FC = empty('ForkCarriage', (0, 0, 0), R)
+    box('Carriage', (0.98, 0.07, 0.42), (0, -0.83, 0.42), D, bevel=0.015, parent=FC)
+    box('Backrest_Top', (0.98, 0.04, 0.04), (0, -0.86, 1.25), D, parent=FC)
+    for k in range(6): box(f'Backrest_{k}', (0.03, 0.03, 0.62), (-0.45 + k * 0.18, -0.86, 0.94), D, parent=FC)
     for x in (-0.3, 0.3):
-        box(f'Fork_{x}', (0.12, 1.1, 0.05), (x, -1.32, 0.15), St, bevel=0.01, parent=R)
-        box(f'ForkHeel_{x}', (0.12, 0.05, 0.42), (x, -0.85, 0.34), St, bevel=0.01, parent=R)
+        box(f'Fork_{x}', (0.12, 1.1, 0.05), (x, -1.32, 0.15), St, bevel=0.01, parent=FC)
+        box(f'ForkHeel_{x}', (0.12, 0.05, 0.42), (x, -0.85, 0.34), St, bevel=0.01, parent=FC)
         box(f'Chain_{x}', (0.03, 0.03, 2.0), (x * 0.5, -0.72, 1.2), MATS['Hub'], parent=R)
     # 오버헤드 가드: 원형 기둥(앞쪽은 기울임) · 지붕 판 · 격자
     box('Guard', (1.18, 1.3, 0.05), (0, 0.4, 2.1), D, bevel=0.02, parent=R)
@@ -729,6 +730,9 @@ def build_parts():
     for k, x in xs.items(): bpy.data.objects[k].location = (x - 0.33, 0, 0)
 
 def build_parts_preview(): build_parts()
+def build_maint_preview():
+    build_maint()
+    for k, x in {'M_Locker': -3.2, 'M_ToolChest': -2.3, 'M_Workbench': -0.9, 'M_Shelf': 0.9, 'M_Compressor': 2.2, 'M_Cleaning': 3.6, 'M_Extinguisher': 4.6, 'M_Ladder': 5.2}.items(): bpy.data.objects[k].location = (x - 0.9, 0, 0)
 
 # ── 도어트림 (차량 앞문 내장 패널, 길이 0.8 × 높이 0.6 × 두께 약 0.12m) — 세워 둔 모양: 면 = 앞(−Y, three.js +z), 바닥 중심 원점
 # 기재 패널 · 윗부분 소프트 벨트라인 · 가운데 직물 인서트 · 암레스트와 손잡이 홈 · 윈도 스위치 · 인사이드 핸들 · 스피커 그릴 · 맵 포켓
@@ -759,6 +763,127 @@ def build_doortrim():
     box('Trim_PocketLip', (0.36, 0.012, 0.012), (0.12, -0.072, 0.15), chrome, parent=R)
     for x in (-0.3, 0.0, 0.3): cyl(f'Trim_Clip_{x}', 0.012, 0.03, (x, 0.035, 0.3), mat('Nylon', srgb('#e9e6df'), 0.0, 0.5), axis='Y', parent=R, verts=12)
     export(R, 'doortrim')
+
+# ── 정비실 비품 (각 빈 객체 M_*: 바닥 중심 원점, 앞면 = −Y(three.js +z)) — 정비 도구 · 유틸리티 · 청소도구
+def build_maint():
+    red = mat('ChestRed', srgb('#c0392b'), 0.3, 0.35)
+    gray = mat('LockerGray', srgb('#5d6b7a'), 0.3, 0.45)
+    steel = mat('ShelfSteel', srgb('#9aa3ad'), 0.7, 0.35)
+    dark = MATS['ShellDark']; chrome = mat('Chrome', srgb('#e4e8ec'), 1.0, 0.12)
+    wood = mat('BenchWood', srgb('#b9864f'), 0.0, 0.6)
+    peg = mat('Pegboard', srgb('#cfc6b4'), 0.0, 0.8)
+    yel = MATS['Yellow']; rub = MATS['Rubber']
+    blue = mat('ToolBlue', srgb('#2a6fdb'), 0.2, 0.4); orange = mat('HoseOrange', srgb('#ff7a1a'), 0.1, 0.5)
+    white = mat('KitWhite', srgb('#d9d5cc'), 0.0, 0.85); cross = mat('CrossRed', srgb('#e03030'), 0.0, 0.5)
+    card = mat('Cardboard', srgb('#b98d58'), 0.0, 0.8); green = mat('CanGreen', srgb('#2e9e6a'), 0.3, 0.4)
+    R = empty('Maint')
+    def M(n): return empty(n, (0, 0, 0), R)
+    # 서랍식 공구 카트 (하부 6단 + 상부 공구함)
+    t = M('M_ToolChest')
+    box('TC_Base', (0.72, 0.46, 0.86), (0, 0, 0.53), red, bevel=0.02, parent=t)
+    for k in range(6):
+        z = 0.2 + k * 0.13
+        box(f'TC_Line_{k}', (0.66, 0.004, 0.004), (0, -0.232, z - 0.06), dark, parent=t)
+        box(f'TC_Handle_{k}', (0.5, 0.02, 0.014), (0, -0.245, z), chrome, bevel=0.004, parent=t)
+    box('TC_Top', (0.7, 0.42, 0.4), (0, 0.01, 1.17), red, bevel=0.02, parent=t)
+    for k in range(3): box(f'TC_TopHandle_{k}', (0.45, 0.02, 0.012), (0, -0.205, 1.05 + k * 0.1), chrome, parent=t)
+    box('TC_Lid', (0.72, 0.44, 0.03), (0, 0.01, 1.385), dark, bevel=0.008, parent=t)
+    for x in (-0.3, 0.3):
+        for y in (-0.18, 0.18): cyl(f'TC_Caster_{x}_{y}', 0.045, 0.035, (x, y, 0.05), rub, axis='X', parent=t, verts=16)
+    box('TC_PushBar', (0.03, 0.03, 0.3), (0.38, 0, 0.85), chrome, parent=t)
+    # 2도어 캐비닛 + 구급함
+    l = M('M_Locker')
+    box('LK_Body', (0.9, 0.5, 1.9), (0, 0, 0.95), gray, bevel=0.015, parent=l)
+    box('LK_Split', (0.006, 0.005, 1.8), (0, -0.252, 0.95), dark, parent=l)
+    for x in (-0.06, 0.06): box(f'LK_Handle_{x}', (0.02, 0.025, 0.18), (x, -0.262, 1.0), chrome, parent=l)
+    for k in range(4):
+        for x in (-0.25, 0.25): box(f'LK_Vent_{k}_{x}', (0.18, 0.004, 0.012), (x, -0.252, 1.65 + k * 0.03), dark, parent=l)
+    box('LK_Label', (0.22, 0.004, 0.08), (-0.22, -0.252, 1.3), yel, parent=l)
+    box('FA_Box', (0.32, 0.12, 0.26), (0, -0.02, 2.03), white, bevel=0.015, parent=l)
+    box('FA_CrossV', (0.04, 0.005, 0.14), (0, -0.082, 2.03), cross, parent=l); box('FA_CrossH', (0.14, 0.005, 0.04), (0, -0.082, 2.03), cross, parent=l)
+    # 작업대 + 공구 타공판 + 바이스 + 공구
+    w = M('M_Workbench')
+    box('WB_Top', (1.8, 0.75, 0.05), (0, 0, 0.9), wood, bevel=0.006, parent=w)
+    for x in (-0.86, 0.86):
+        for y in (-0.33, 0.33): box(f'WB_Leg_{x}_{y}', (0.05, 0.05, 0.875), (x, y, 0.44), steel, parent=w)
+    box('WB_Shelf', (1.72, 0.68, 0.03), (0, 0, 0.18), steel, parent=w)
+    box('WB_Drawers', (0.5, 0.65, 0.42), (0.6, 0, 0.64), steel, bevel=0.01, parent=w)
+    for k in range(3): box(f'WB_DHandle_{k}', (0.2, 0.02, 0.012), (0.6, -0.335, 0.5 + k * 0.13), chrome, parent=w)
+    box('WB_Peg', (1.8, 0.02, 1.0), (0, 0.37, 1.45), peg, parent=w)
+    for x in (-0.85, 0.85): box(f'WB_PegPost_{x}', (0.04, 0.04, 1.1), (x, 0.39, 1.45), steel, parent=w)
+    for k in range(6): box(f'Wrench_{k}', (0.022, 0.008, 0.16 + k * 0.025), (-0.75 + k * 0.06, 0.355, 1.6), chrome, bevel=0.004, parent=w)
+    for k in range(5):
+        cyl(f'Driver_Shaft_{k}', 0.004, 0.12, (-0.25 + k * 0.05, 0.355, 1.6), chrome, parent=w, verts=8)
+        cyl(f'Driver_Grip_{k}', 0.012, 0.09, (-0.25 + k * 0.05, 0.355, 1.71), [blue, red, yel, blue, red][k], parent=w, verts=12)
+    box('Hammer_Head', (0.12, 0.03, 0.03), (0.2, 0.35, 1.72), dark, parent=w); cyl('Hammer_Handle', 0.012, 0.28, (0.2, 0.35, 1.57), wood, parent=w, verts=10)
+    for k in range(2): box(f'Pliers_{k}', (0.03, 0.01, 0.2), (0.35 + k * 0.06, 0.355, 1.6), [red, blue][k], bevel=0.004, parent=w)
+    box('Saw', (0.35, 0.006, 0.09), (0.65, 0.355, 1.75), chrome, parent=w); box('SawGrip', (0.1, 0.02, 0.1), (0.85, 0.355, 1.75), dark, parent=w)
+    for k in range(4): cyl(f'TapeRoll_{k}', 0.04, 0.03, (-0.7 + k * 0.1, 0.35, 1.2), [yel, blue, red, dark][k], axis='Y', parent=w, verts=20)
+    box('Vise_Base', (0.14, 0.18, 0.06), (-0.72, -0.25, 0.955), blue, bevel=0.01, parent=w)
+    box('Vise_Jaw', (0.16, 0.05, 0.08), (-0.72, -0.33, 1.02), blue, bevel=0.008, parent=w)
+    cyl('Vise_Screw', 0.012, 0.18, (-0.72, -0.42, 1.0), chrome, axis='Y', parent=w, verts=10)
+    box('Drill_Body', (0.06, 0.18, 0.08), (-0.2, -0.05, 0.98), mat('DrillYellow', srgb('#f2b21b'), 0.1, 0.4), bevel=0.015, parent=w)
+    box('Drill_Grip', (0.05, 0.05, 0.12), (-0.2, 0.02, 0.89 + 0.06), dark, parent=w); box('Drill_Batt', (0.08, 0.09, 0.05), (-0.2, 0.02, 0.95), dark, parent=w)
+    cyl('Drill_Chuck', 0.015, 0.06, (-0.2, -0.17, 0.99), chrome, axis='Y', parent=w, verts=10)
+    box('Multimeter', (0.1, 0.05, 0.17), (0.15, 0.0, 1.0), yel, bevel=0.012, parent=w); box('MM_Screen', (0.07, 0.005, 0.05), (0.15, -0.026, 1.04), MATS['Glass'], parent=w)
+    box('Toolbox', (0.45, 0.22, 0.2), (0.6, 0.05, 1.03), red, bevel=0.015, parent=w); box('Toolbox_Handle', (0.25, 0.03, 0.03), (0.6, 0.05, 1.15), dark, parent=w)
+    # 소모품 선반 (오일·스프레이·부품 상자·걸레)
+    sh = M('M_Shelf')
+    for x in (-0.58, 0.58):
+        for y in (-0.23, 0.23): box(f'SH_Post_{x}_{y}', (0.035, 0.035, 1.9), (x, y, 0.95), steel, parent=sh)
+    for k, z in enumerate((0.15, 0.6, 1.05, 1.5, 1.88)): box(f'SH_Deck_{k}', (1.2, 0.5, 0.025), (0, 0, z), steel, parent=sh)
+    for k in range(4): cyl(f'OilCan_{k}', 0.07, 0.24, (-0.42 + k * 0.17, 0, 0.28), [green, blue, green, red][k], parent=sh, verts=20, bevel=0.01)
+    for k in range(7): cyl(f'Spray_{k}', 0.028, 0.2, (-0.48 + k * 0.1, -0.1, 0.71), [red, blue, yel, red, green, blue, dark][k], parent=sh, verts=14)
+    for k in range(3): box(f'PartBox_{k}', (0.32, 0.36, 0.22), (-0.38 + k * 0.38, 0, 1.175), card, bevel=0.01, parent=sh)
+    for k in range(3): box(f'PartBin_{k}', (0.3, 0.38, 0.16), (-0.38 + k * 0.38, 0, 1.6), [blue, yel, red][k], bevel=0.01, parent=sh)
+    for k in range(4): cyl(f'RagRoll_{k}', 0.07, 0.22, (-0.4 + k * 0.26, 0, 2.0), white, parent=sh, verts=20)
+    cyl('GreaseGun', 0.035, 0.32, (0.35, -0.1, 0.66), red, axis='X', parent=sh, verts=14)
+    # 청소 구역: 대걸레 버킷(탈수기) · 대걸레 · 빗자루 · 쓰레받기 · 젖은 바닥 표지 · 쓰레기통 · 흡착재 키트 드럼
+    c = M('M_Cleaning')
+    box('Bucket', (0.42, 0.32, 0.3), (-0.55, 0, 0.2), yel, bevel=0.03, parent=c)
+    box('Wringer', (0.2, 0.28, 0.14), (-0.42, 0, 0.42), dark, bevel=0.02, parent=c)
+    for x, y in ((-0.72, -0.12), (-0.72, 0.12), (-0.38, -0.12), (-0.38, 0.12)): cyl(f'BucketWheel_{x}_{y}', 0.03, 0.025, (x, y, 0.03), rub, axis='Y', parent=c, verts=12)
+    mh = cyl('Mop_Handle', 0.013, 1.35, (-0.62, 0, 0.9), MATS['Hub'], parent=c, verts=10); mh.rotation_euler = (0, -0.12, 0)
+    cyl('Mop_Head', 0.09, 0.14, (-0.56, 0, 0.32), white, parent=c, verts=16)
+    bh = cyl('Broom_Handle', 0.012, 1.25, (-0.05, 0.12, 0.72), mat('BroomGreen', srgb('#2e9e6a'), 0.1, 0.5), parent=c, verts=10); bh.rotation_euler = (0.18, 0, 0)
+    box('Broom_Head', (0.32, 0.06, 0.12), (-0.05, 0.02, 0.07), dark, bevel=0.01, parent=c)
+    box('Dustpan', (0.26, 0.24, 0.03), (0.22, -0.05, 0.02), blue, bevel=0.01, parent=c)
+    cyl('Dustpan_Handle', 0.012, 0.6, (0.22, 0.1, 0.32), blue, parent=c, verts=10)
+    for sd in (-1, 1):   # 젖은 바닥 주의 표지 (A형)
+        box(f'WetSign_{sd}', (0.3, 0.02, 0.62), (0.58, sd * 0.09, 0.3), yel, bevel=0.01, parent=c, rot=(sd * 0.28, 0, 0))
+    box('WetSign_Mark', (0.12, 0.005, 0.12), (0.58, -0.185, 0.4), dark, parent=c, rot=(-0.28, 0, 0))
+    cyl('Trash_Body', 0.22, 0.62, (0.0, 0.62, 0.31), mat('TrashGray', srgb('#4a5560'), 0.2, 0.5), parent=c, verts=32, bevel=0.01)
+    cyl('Trash_Lid', 0.235, 0.05, (0.0, 0.62, 0.645), dark, parent=c, verts=32, bevel=0.01)
+    cyl('Spill_Drum', 0.26, 0.82, (-0.62, 0.62, 0.41), yel, parent=c, verts=32, bevel=0.01)
+    cyl('Spill_Lid', 0.265, 0.04, (-0.62, 0.62, 0.84), dark, parent=c, verts=32)
+    box('Spill_Label', (0.2, 0.005, 0.18), (-0.62, 0.355, 0.5), white, parent=c)
+    # 에어 컴프레서 + 호스 릴
+    a = M('M_Compressor')
+    cyl('CP_Tank', 0.22, 0.95, (0, 0, 0.32), red, axis='X', parent=a, verts=32, bevel=0.04)
+    box('CP_Motor', (0.32, 0.26, 0.26), (-0.18, 0, 0.66), dark, bevel=0.03, parent=a)
+    cyl('CP_Pump', 0.09, 0.22, (0.15, 0, 0.66), MATS['Hub'], parent=a, verts=20)
+    cyl('CP_Gauge', 0.04, 0.02, (0.3, -0.23, 0.42), white, axis='Y', parent=a, verts=20)
+    for x in (-0.35, 0.35):
+        for y in (-0.16, 0.16): cyl(f'CP_Foot_{x}_{y}', 0.05, 0.08, (x, y, 0.06), rub, parent=a, verts=12)
+    bpy.ops.mesh.primitive_torus_add(major_radius=0.17, minor_radius=0.045, major_segments=32, minor_segments=10, location=(0.0, 0.25, 1.45), rotation=(math.pi / 2, 0, 0))
+    finish(setname(bpy.context.active_object, 'HoseReel'), orange, parent=a)
+    box('HoseReel_Mount', (0.3, 0.04, 0.3), (0.0, 0.3, 1.45), dark, parent=a)
+    box('HoseReel_Post', (0.06, 0.06, 1.6), (0.0, 0.34, 0.8), dark, parent=a)
+    # 소화기 (받침대)
+    e = M('M_Extinguisher')
+    box('EX_Stand', (0.3, 0.3, 0.05), (0, 0, 0.025), red, parent=e)
+    cyl('EX_Body', 0.085, 0.5, (0, 0, 0.3), red, parent=e, verts=24, bevel=0.03)
+    cyl('EX_Valve', 0.03, 0.08, (0, 0, 0.59), dark, parent=e, verts=12)
+    box('EX_Handle', (0.12, 0.02, 0.02), (0.03, 0, 0.63), dark, parent=e)
+    box('EX_Label', (0.1, 0.005, 0.16), (0, -0.087, 0.3), white, parent=e)
+    box('EX_Sign', (0.22, 0.02, 0.3), (0, 0.1, 1.4), red, parent=e); box('EX_SignPost', (0.03, 0.03, 1.3), (0, 0.12, 0.65), dark, parent=e)
+    # A형 사다리 (알루미늄)
+    d = M('M_Ladder')
+    for sd in (-1, 1):
+        for x in (-0.22, 0.22): box(f'LD_Rail_{sd}_{x}', (0.04, 0.03, 1.7), (x, sd * 0.25, 0.82), MATS['Hub'], parent=d, rot=(-sd * 0.3, 0, 0))
+    for k in range(4): box(f'LD_Step_{k}', (0.44, 0.1, 0.025), (0, -0.2 + k * 0.05, 0.35 + k * 0.37), MATS['Hub'], parent=d)
+    box('LD_Top', (0.5, 0.3, 0.04), (0, 0, 1.63), yel, parent=d)
+    export(R, 'maint')
 
 def preview_one(build, name, cam_loc, cam_rot, lens, res):
     reset(); MATS.clear(); common_mats(); build()
@@ -830,10 +955,10 @@ def build_primitives():
     print('primitives', len(keys))
 
 reset(); MATS.clear(); build_primitives()
-for fn in (build_amr, build_agv, build_forklift, build_drone, build_humanoid, build_quadruped, build_arm6, build_ammr, build_truck, build_gantry, build_eaxle, build_parts, build_doortrim):
+for fn in (build_amr, build_agv, build_forklift, build_drone, build_humanoid, build_quadruped, build_arm6, build_ammr, build_truck, build_gantry, build_eaxle, build_parts, build_doortrim, build_maint):
     reset(); MATS.clear(); common_mats(); fn()
 try:
-    preview(); preview_humanoid(); preview_one(build_quadruped, 'quadruped', (-1.9, -2.15, 1.45), (70, 0, -42), 40, (960, 720)); preview_one(build_eaxle, 'eaxle', (1.25, -1.45, 0.95), (68, 0, 40), 45, (960, 640)); preview_one(build_doortrim, 'doortrim', (0.35, -1.45, 0.62), (80, 0, 13), 45, (900, 600)); preview_one(build_parts_preview, 'parts', (0.0, -1.5, 0.55), (70, 0, 0), 34, (1400, 460)); preview_one(build_truck_fork, 'truck', (11.5, -9.5, 4.6), (72, 0, 52), 32, (1280, 720))
+    preview(); preview_humanoid(); preview_one(build_quadruped, 'quadruped', (-1.9, -2.15, 1.45), (70, 0, -42), 40, (960, 720)); preview_one(build_eaxle, 'eaxle', (1.25, -1.45, 0.95), (68, 0, 40), 45, (960, 640)); preview_one(build_maint_preview, 'maint', (0.0, -6.2, 2.4), (75, 0, 0), 32, (1400, 560)); preview_one(build_doortrim, 'doortrim', (0.35, -1.45, 0.62), (80, 0, 13), 45, (900, 600)); preview_one(build_parts_preview, 'parts', (0.0, -1.5, 0.55), (70, 0, 0), 34, (1400, 460)); preview_one(build_truck_fork, 'truck', (11.5, -9.5, 4.6), (72, 0, 52), 32, (1280, 720))
 except Exception as e:   # 렌더 장치가 없는 환경에서는 미리보기만 건너뛴다
     print('preview skipped:', e)
 print('Jin-3D Blender assets →', os.path.abspath(OUT), sorted(os.listdir(OUT)))

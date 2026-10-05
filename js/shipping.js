@@ -115,7 +115,8 @@ export function planForklift(sim, f) {
   if (n <= 0) return false;
   t.reserved = (t.reserved ?? 0) + n;
   const pick = product === 'eaxle' ? sim.loc.PICK_EA : sim.loc.PICK_DT;
-  const bx = t.bay, dock = { x: bx, z: YARD.wallZ + 1.6, aisle: 'B', name: `출하 도크 ${yard.bayNo(bx)}` };
+  // 도크 앞(벽에서 2.6m)에서 트럭 쪽을 보고 서서 포크를 적재함 높이로 올린 뒤 들어가고, 내려놓으면 포크를 넣은 채 반듯이 후진해 나온 뒤 돈다
+  const bx = t.bay, dock = { x: bx, z: YARD.wallZ + 2.6, aisle: 'B', name: `출하 도크 ${yard.bayNo(bx)}` };
   const inside = { x: bx, z: YARD.wallZ + 0.7, aisle: 'B', name: `${t.id} 적재함` };   // 도크 레벨러 끝에서 포크를 적재함에 넣어 내려놓는다
   const pName = product === 'eaxle' ? 'e-axle' : product === 'doortrim' ? '도어트림' : '완제품';
   f.setTask(`${pName} 출하 → ${t.id}`, [
@@ -132,9 +133,8 @@ export function planForklift(sim, f) {
       if (t.state === 'dock') yard.unload(t, k, product);
       else { sim.fgStock += k; if (product) sim.fgBy[product] += k; t.reserved = 0; }   // 그 사이 트럭이 떠났으면 되돌린다
     } },
-    { go: dock, via: [] },
-    // 복귀: 도크 앞 줄을 따라 곧장 대기 자리로 (통로까지 내려갔다 올라오지 않는다) — 대기 칸 동쪽 앞에서 서쪽으로 곧게 들어가 반듯이 주차
-    { go: { ...f.home, x: f.home.x + 1.6 }, via: [] },
+    { go: dock, via: [], rev: true },
+    // 복귀: 도크 앞 줄을 따라 곧장 옆의 대기 자리(두 출하 도크 사이)로 — 통로까지 내려갔다 올라오지 않고 지나쳤다 되돌아오지도 않는다 (서면 벽 쪽을 보고 주차)
     { go: f.home, via: [] },
   ]);
   sim.log(m.agentActive ? 'act' : 'warn', `출하 지게차 배차 → ${t.id}`, {

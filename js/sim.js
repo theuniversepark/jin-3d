@@ -1,6 +1,6 @@
 // 제조 라인 시뮬레이션 엔진 — 렌더링과 분리되어 있어 헤드리스(고속 비교) 실행이 가능하다.
 import { CommandCenter } from './commands.js';
-import { TruckYard, planForklift } from './shipping.js';
+import { TruckYard, planForklift, YARD } from './shipping.js';
 import { InboundYard, planReceiver, WH, INBOUND } from './receiving.js';
 import { PatrolDrone, MISSION_PRIO } from './drone.js';
 import { planCCTV, CCTVAgent } from './cctv.js';
@@ -61,6 +61,53 @@ export const FIELD_EVENTS = {
   smoke:     { label: '연기 의심', cls: '연기', severity: 'alarm', response: 'inspect', task: '열화상 정밀 점검' },
 };
 
+// 정비실 도구 세트 — 정비원·정비 휴머노이드가 상황에 맞는 도구를 정비실에서 챙겨 출동하고, 처리 후 반납한다
+// at: 정비실 안 보관 위치(정비실 기준 로컬 x, 앞쪽 픽업 z) — 공구 카트·작업대 / 청소 코너 / 소화기
+export const TOOL_KITS = {
+  repair: { label: '수리 공구 세트', items: '공구함 · 토크렌치 · 멀티미터', vis: 'toolbox', at: -1.15 },
+  pm:     { label: '예지정비 키트', items: '진동 분석기 · 그리스 건 · 교체 부품', vis: 'diag', at: 0.35 },
+  cal:    { label: '보정 키트', items: '다이얼 게이지 · 보정 지그', vis: 'diag', at: 0.35 },
+  leak:   { label: '누유 처리 키트', items: '흡착재 키트 · 대걸레 · 버킷', vis: 'mop', at: 4.35 },
+  debris: { label: '이물질 수거 도구', items: '빗자루 · 쓰레받기 · 수거함', vis: 'broom', at: 4.35 },
+  smoke:  { label: '소화기', items: '분말 소화기', vis: 'extinguisher', at: -1.3 },   // 왼쪽 끝 충전 스테이션과 떨어지게
+};
+const TECH_ROOM = { x: 12.8, z: 16.5 };   // 정비실 기준점 (factory.js 정비실 그룹과 같은 자리)
+export const toolSpot = (kit) => ({ x: TECH_ROOM.x + TOOL_KITS[kit].at, z: 15.15, aisle: 'F', name: `정비실 ${TOOL_KITS[kit].label} 보관대` });
+// 정비실 동선: 정비 휴머노이드 충전 스테이션은 정비실 양쪽 끝(서로 마주 봄), 도구 보관대는 안쪽 줄(z 15.15)
+// 정비실에 드나들 때는 가운데 통로(x 14.1)를 지나고, 보관대는 안쪽 줄을 따라 옆으로 간다 — 충전 스테이션 앞을 지나지 않는다
+const TECH_DOCKS = [{ x: 10.95, z: 14.0, heading: Math.PI / 2 }, { x: 17.25, z: 14.0, heading: -Math.PI / 2 }];
+const ROOM_MID_X = TECH_ROOM.x + 1.3, ROOM_IN_Z = 15.15, ROOM_FRONT_Z = 12.5, ROOM_LANE_Z = 14.0;
+const ROOM_IN_X = ROOM_MID_X - 0.5, ROOM_OUT_X = ROOM_MID_X + 0.5;   // 가운데 통로는 일방통행 두 줄 — 들어갈 때 서쪽 줄, 나올 때 동쪽 줄 (드나드는 동료와 정면으로 마주치지 않게)
+const inTechRoom = (m) => m.z > 13.0 && m.z < 16.9 && m.x > TECH_ROOM.x - 2.6 && m.x < TECH_ROOM.x + 5.2;
+const dockFront = (h) => ({ x: h.x + Math.sin(h.heading) * 1.1, z: h.z + Math.cos(h.heading) * 1.1 });
+// 정비실 안에서 from → to: (스테이션이면 그 앞으로 나와) 가운데 통로 → 목적지 쪽 줄 → 목적지 (스테이션이면 그 앞에 선 뒤 들어감)
+const roomWalk = (from, to) => {
+  const P = (x, z) => ({ go: { x, z, aisle: 'F', name: '정비실 안' }, via: [] });
+  const fromDock = TECH_DOCKS.find((d) => Math.hypot(from.x - d.x, from.z - d.z) < 0.5), toDock = to.heading != null && TECH_DOCKS.find((d) => Math.hypot(to.x - d.x, to.z - d.z) < 0.05);
+  const s0 = fromDock ? dockFront(fromDock) : from, zt = toDock ? toDock.z : to.z;
+  const lx = zt > s0.z ? ROOM_IN_X : ROOM_OUT_X;   // 안쪽(+z)으로 가면 들어가는 줄, 바깥쪽으로 가면 나오는 줄
+  return [...(fromDock ? [P(s0.x, s0.z)] : []), P(lx, s0.z), P(lx, zt), ...(toDock ? [P(dockFront(toDock).x, zt)] : []), { go: to, via: [] }];
+};
+// 도구 챙기기 → (현장 작업) → 반납 단계
+function toolSteps(sim, m, kit, inc) {
+  const spot = toolSpot(kit), door = { x: ROOM_IN_X, z: ROOM_FRONT_Z, aisle: 'F', name: '정비실 앞 (들어가는 줄)' }, K = TOOL_KITS[kit];
+  // 같은 보관대를 다른 사람이 쓰고 있거나 그리로 가는 중이면 들어가기 전 자리(충전 도크·정비실 앞)에서 기다린다 — 정비실 안쪽 줄에 서서 동료 길을 막지 않게
+  const near = (o, p, r) => Math.hypot(o.x - p.x, o.z - p.z) < r;
+  const free = () => !sim.movers.some((o) => o !== m && (o.kind === 'humanoid' || o.kind === 'human') && (near(o, spot, 1.2) || (o.steps[0]?.go && near(o.steps[0].go, spot, 0.1))));
+  const wait = { until: free, task: `${K.label} 보관대 차례 대기` };
+  const walkIn = inTechRoom(m) ? roomWalk(m, spot) : [{ go: door }, ...roomWalk(door, spot)];
+  const exit = [{ go: { x: ROOM_OUT_X, z: ROOM_IN_Z, aisle: 'F', name: '정비실 안' }, via: [] }, { go: { x: ROOM_OUT_X, z: ROOM_FRONT_Z, aisle: 'F', name: '정비실 앞 (나오는 줄)' }, via: [] }];   // 보관대 → 나오는 줄 → 정비실 앞
+  return {
+    take: [...(inTechRoom(m) ? [wait] : [walkIn[0], wait]), ...walkIn.slice(inTechRoom(m) ? 0 : 1), { wait: 2, done: () => { m.tool = kit; if (inc) sim.orch.step(inc, 'exec', 'act', `${m.id} 정비실에서 ${K.label} 챙김 (${K.items})`); } }, ...exit],
+    back: [{ go: door }, wait, ...roomWalk(door, spot), { wait: 1.5, done: () => { m.tool = null; } }],   // 차례 대기는 정비실 앞(들어가기 전)에서
+    exit,
+    home: (h) => (sim.techs.includes(m) ? roomWalk(spot, h) : [...exit, { go: h }]),   // 반납한 보관대에서 대기 자리(충전 도크)로 — 물류 휴머노이드는 자기 도크 진입 지점으로
+  };
+}
+
+// 구분 적재장 적재 로봇: 사이클 3.2초(접근 → 집기 → 들어 올림 → 이동 → 내려놓기 → 복귀), 집는 순간 = 시작 후 1.05초 (factory.js 적재 로봇 키프레임과 같다)
+export const SINK_PICK = { cycle: 3.2, grab: 1.05, enter: 1.3 };   // enter: 컨베이어 끝(입구)에서 가운데 정지 구간까지 AMR이 들어가는 시간
+
 export const ST_LABEL = {
   ESTOP: '비상정지', PSTOP: '보호정지', CSTOP: '사이클정지', CHECK: '자가진단',
   IDLE: '대기', BUSY: '가동', STARVED: '자재대기', BLOCKED: '배출대기',
@@ -94,6 +141,7 @@ export const LOC = {
   WH_IN: { x: -47.5, z: 0.9, aisle: 'F', name: '자재창고 입고' },        // 입고 지게차: 선반 서쪽 면 원자재 칸 (지게차 통로 안)
   WH_PARTS_IN: { x: -47.5, z: -4.1, aisle: 'F', name: '부품 입고' },    // 입고 지게차: 선반 서쪽 면 부품 칸
   WH_LANE: -41.2,   // 부품 보충 휴머노이드의 선반 앞 진출입 세로 줄 (AGV 상차 자리 x −43.2를 비켜)
+  WH_LANE_IN: -41.6, WH_LANE_OUT: -40.8,   // 일방통행 두 줄 — 선반으로 갈 때 서쪽 줄, 나올 때 동쪽 줄 (두 휴머노이드가 마주쳐 비켜서다 충전 도크 쪽으로 밀리지 않게)
   SRC: { x: -26, z: 4.2, aisle: 'F', name: '투입구' },
   SINK: { x: 29, z: 4.2, aisle: 'F', name: '완제품 적재장' },
   TECH: { x: 12, z: 13.5, aisle: 'F', name: '정비실' },
@@ -130,11 +178,13 @@ export function route(from, to, cur) {
 }
 
 // 이동체 크기(반지름, m) — 충돌 판정용
-const RADIUS = { agv: 0.8, forklift: 1.0, carrier: 0.8, robot: 0.6, quadruped: 0.55, humanoid: 0.35, human: 0.35, worker: 0.35 };
+const RADIUS = { dock: 0.5, agv: 0.8, forklift: 1.0, carrier: 0.8, robot: 0.6, quadruped: 0.55, humanoid: 0.35, human: 0.35, worker: 0.35 };
 export const moverRadius = (m) => RADIUS[m.kind] ?? 0.5;
 // 차체 폭(m) — 진로 안에 있는지(옆으로 비껴 지나갈 수 있는지) 판정용
-const WIDTH = { agv: 1.1, forklift: 1.2, carrier: 0.95, robot: 0.9, quadruped: 0.5, humanoid: 0.6, human: 0.6, worker: 0.6 };
+const WIDTH = { dock: 0.95, agv: 1.1, forklift: 1.2, carrier: 0.95, robot: 0.9, quadruped: 0.5, humanoid: 0.6, human: 0.6, worker: 0.6 };
 export const moverWidth = (m) => WIDTH[m.kind] ?? 0.8;
+// 지게차 포크: 차체 중심에서 앞으로 1.9m(포크 끝), 포크 폭 반 0.42m + 여유 — 차체·포크를 선분(뒤 0.8 ~ 앞 1.45m) + 반폭 0.55m로 본다
+export const FORK = { reach: 1.9, half: 0.55, back: 0.8, front: 1.45 };
 
 // 이동체(AGV·지게차·정비 인력/로봇·작업자) — 단계(step) 목록을 순서대로 실행
 export class Mover {
@@ -150,11 +200,21 @@ export class Mover {
   // · 앞 이동체가 할 일 없이 서 있고 내 목적지가 아니면: 옆으로 돌아간다
   // · 그 밖(같은 방향 대기열, 작업 중인 이동체)은 기다린다
   yieldTo(dir, dt) {
+    // 비켜선 자리에서 대기: 길을 비켜 준 상대가 지나갈 때까지(최대 2.5초, 상대가 2m 넘게 멀어지거나 멈추면 끝) 서 있는다 — 비켜섰다 곧바로 다시 막는 반복(라이브락) 방지
+    if (this.holdFor) {
+      this.holdT = (this.holdT ?? 0) + dt; const h = this.holdFor;
+      if (this.holdT < 2.5 && h.moving && Math.hypot(h.x - this.x, h.z - this.z) < 2.0 + moverRadius(h)) { this.blockedOn = null; return true; }
+      this.holdFor = null; this.holdT = 0;
+    }
     // 교통 관제 우선 통행권: 15초 넘게 막히거나 비켜서기를 30번 넘게 되풀이하면(교착·라이브락) 4초 동안 우선 통행 — 다른 이동체가 기다린다
-    if (this.passT > 0) { this.blockedOn = null; return false; }
+    if (this.passT > 0) {   // 우선 통행 중에도 지게차 차체·포크 자리에는 들어가지 않는다 (포크 간섭 방지)
+      const b = this.sense?.(this, dir);
+      if (b && (b.kind === 'forklift' || this.kind === 'forklift')) { this.blockedOn = b; return true; }
+      this.blockedOn = null; return false;
+    }
     if (this.blockT > 15 || this.detourPts > 30) {
       this.passT = 4; this.blockT = 0; this.detourPts = 0; this.passes = (this.passes ?? 0) + 1;
-      if (this.path?.length) this.path = this.path.slice(-1);   // 쌓인 우회점을 버리고 목적지로 곧장
+      if (this.path?.length) { const keep = this.path.filter((p) => !p.detour); this.path = keep.length ? keep : this.path.slice(-1); }   // 쌓인 우회점만 버리고 원래 길(통로·도크 앞)은 그대로 — 목적지로 대각선 직진하지 않는다
       return false;
     }
     const b = this.sense?.(this, dir);
@@ -164,12 +224,20 @@ export class Mover {
     const cross = dir.x * (b.z - this.z) - dir.z * (b.x - this.x);
     const sgn = cross > 0 ? 1 : -1;   // 상대가 있는 쪽의 반대편
     const sd = { x: -dir.z * sgn, z: dir.x * sgn };
-    const step = (pts) => { this.path.unshift(...pts); this.detourPts += pts.length; this.blockT = 0; return false; };
+    // 비켜서기·돌아가기 점이 충전 도크 위면 반대쪽으로, 양쪽 다 막히면 그 자리에서 기다린다 (도크 뒤로 밀려 들어가 갇히지 않게)
+    const step = (pts) => {
+      if (this.dockAt && pts.some((p) => this.dockAt(p, this))) {
+        const flip = pts.map((p) => { const vx = p.x - this.x, vz = p.z - this.z, a = vx * dir.x + vz * dir.z; return { ...p, x: this.x + 2 * a * dir.x - vx, z: this.z + 2 * a * dir.z - vz }; });
+        if (flip.some((p) => this.dockAt(p, this))) return true;
+        pts = flip;
+      }
+      this.path.unshift(...pts.map((p) => ({ ...p, detour: true }))); this.detourPts += pts.length; this.blockT = 0; return false;
+    };
     if (b.blockedOn === this) {
       const bd = b.wantDir ?? { x: Math.sin(b.heading), z: Math.cos(b.heading) };
       if (dir.x * bd.x + dir.z * bd.z < -0.7) {
         // 정면으로 마주침(좁은 진입로): 우선순위가 낮은 쪽이 옆으로 비켜선다
-        if (this.prio < b.prio && this.blockT > 0.3) return step([{ x: this.x + sd.x * off, z: this.z + sd.z * off }]);
+        if (this.prio < b.prio && this.blockT > 0.3) return step([{ x: this.x + sd.x * off, z: this.z + sd.z * off, hold: b }]);   // 비켜선 자리에서 상대가 지나갈 때까지 기다린다
         return true;
       }
       // 교차로에서 서로 막음: 우선순위가 낮은 쪽이 들어온 길로 조금 물러나(이미 지나온 빈 공간) 길을 터 준다
@@ -183,12 +251,19 @@ export class Mover {
       b.setTask('자리 비켜주기', [{ go: b.home }]);
       return true;
     }
-    if (b.idle && !atDest && this.blockT > 1.5) {
+    // 할 일 없이 섰거나, 제자리에서 일하는 중(점검·대기·작업 — 이동 단계가 아님)인 상대가 내 목적지가 아닌 길을 막으면 1.5초 뒤 옆으로 돌아간다
+    const parked = b.idle || (!b.moving && !b.steps[0]?.go);
+    // 내 목적지에서 다른 이동체가 일하고 있으면(같은 현장에 함께 출동 등) 그 바로 옆에서 멈춘 것으로 본다
+    if (parked && atDest && !b.idle && Math.hypot(this.x - end.x, this.z - end.z) < moverRadius(this) + moverRadius(b) + 0.9) { this.path = [{ x: this.x, z: this.z }]; this.blockedOn = null; this.blockT = 0; return false; }
+    if (parked && !atDest && this.blockT > 1.5) {
       const ahead = Math.hypot(b.x - this.x, b.z - this.z) + moverRadius(b) + moverRadius(this) + 0.3;
       return step([{ x: this.x + sd.x * off, z: this.z + sd.z * off }, { x: this.x + sd.x * off + dir.x * ahead, z: this.z + sd.z * off + dir.z * ahead }]);
     }
+    // 순환 대기(A→B→C→A, 4대까지): 고리 안에서 우선순위가 가장 낮은 이동체가 2초 뒤 옆으로 비켜서서 기다린다
+    { const ring = [this]; let c = b; while (c && ring.length < 5 && !ring.includes(c)) { ring.push(c); c = c.blockedOn; }
+      if (c === this && ring.length >= 3 && this.blockT > 2 && ring.every((r) => r === this || r.prio > this.prio)) return step([{ x: this.x + sd.x * off, z: this.z + sd.z * off, hold: b }]); }
     // 12초 넘게 풀리지 않으면 세 대 이상이 서로 기다리는 순환 대기로 보고, 우선순위가 낮은 쪽이 옆으로 비켜선다
-    if (this.blockT > 12 && this.prio < b.prio) return step([{ x: this.x + sd.x * off, z: this.z + sd.z * off }]);
+    if (this.blockT > 12 && this.prio < b.prio) return step([{ x: this.x + sd.x * off, z: this.z + sd.z * off, hold: b }]);
     return true;
   }
   get idle() { return this.steps.length === 0; }
@@ -198,17 +273,42 @@ export class Mover {
     if (this.passT > 0 && !this.instant) this.passT -= dt;
     const st = this.steps[0];
     if (!st || !st.go) this.wantDir = null;
-    if (!st) { this.task = null; return; }
+    if (!st) {
+      this.task = null;
+      // 할 일 없이 선 지게차는 통로 반대쪽(벽 쪽)을 보고 주차한다 — 포크가 통로·순찰로로 나오지 않게 (입고 지게차는 정해진 주차 방향)
+      // 충전소에서는 옆(+x)을 보고 선다 — 앞뒤(+z 충전 기둥 · −z 순찰로)로 포크가 나오지 않게
+      if (this.kind === 'forklift' && !this.receiver && this.loc?.aisle && AISLE[this.loc.aisle] != null) this.heading = this.loc.name === '충전소' ? Math.PI / 2 : this.loc.z > AISLE[this.loc.aisle] ? 0 : Math.PI;
+      return;
+    }
     if (st.go) {
-      if (!this.path) this.path = st.via ? [...st.via, st.go].map((p) => ({ x: p.x, z: p.z })) : route(this.loc, st.go, this);
+      if (!this.path) {
+        this.path = st.via ? [...st.via, st.go].map((p) => ({ x: p.x, z: p.z })) : route(this.loc, st.go, this);
+        // 직선 이동(via: [])이 충전 도크를 가로지르면(하던 일을 다른 자리에서 이어 갈 때 등) 정비실 앞으로 돌아가는 길로 다시 잡는다
+        if (st.via && !st.via.length && st.go.x > 9 && st.go.x < 19 && this.dockHit?.(this, st.go)) this.path = roomWalk(this, st.go).map((x) => ({ x: x.go.x, z: x.go.z }));
+        // 충전 도크가 있는 휴머노이드: 도크에서 나갈 때는 보는 방향(앞)으로 1.1m 걸어 나온 뒤, 돌아올 때는 도크 앞 1.1m 지점에 선 뒤 곧게 들어간다 — 도크 기둥·옆 도크를 지나가지 않는다
+        // crossX(물류 대기존 옆 세로 통로): 위쪽(B) 통로 쪽 일은 아래쪽(F) 통로까지 올라갔다 내려오지 않고 도크 앞에서 바로 세로 통로로 오간다
+        const H = this.home;
+        if (this.kind === 'humanoid' && H?.heading != null) {
+          const front = { x: H.x + Math.sin(H.heading) * 1.1, z: H.z + Math.cos(H.heading) * 1.1 };
+          const atHome = Math.hypot(this.x - H.x, this.z - H.z) < 0.5, toHome = Math.hypot(st.go.x - H.x, st.go.z - H.z) < 0.05;
+          const side = { x: H.crossX, z: front.z };
+          if (atHome && !toHome) {
+            if (H.crossX != null && !st.via && st.go.aisle === 'B') this.path = [{ ...front }, side, ...route({ ...side, aisle: 'B' }, st.go)];
+            else this.path.unshift({ ...front });
+          } else if (toHome && !atHome) {
+            if (H.crossX != null && !st.via && this.loc?.aisle === 'B') this.path = [...route(this.loc, { ...side, aisle: 'B', name: `${H.name} 옆 통로` }, this), { ...front }, { x: H.x, z: H.z }];
+            else this.path.splice(this.path.length - 1, 0, { ...front });
+          }
+        }
+      }
       let rem = this.speed * dt, checked = false;
       while (rem > 0 && this.path.length) {
         const p = this.path[0];
         const dx = p.x - this.x, dz = p.z - this.z, d = Math.hypot(dx, dz);
         if (d < 1e-4) { this.path.shift(); continue; }
         if (!checked) { checked = true; this.wantDir = { x: dx / d, z: dz / d }; if (this.yieldTo(this.wantDir, dt)) break; if (this.path[0] !== p) continue; }
-        this.heading = Math.atan2(dx, dz);
-        if (d <= rem) { this.x = p.x; this.z = p.z; rem -= d; this.dist += d; this.path.shift(); if (this.detourPts > 0) this.detourPts--; }
+        if (!st.rev) this.heading = Math.atan2(dx, dz);   // rev: 후진 — 차체 방향을 그대로 두고 뒤로 (지게차가 포크를 적재함에서 반듯이 빼낼 때)
+        if (d <= rem) { this.x = p.x; this.z = p.z; rem -= d; this.dist += d; this.path.shift(); if (this.detourPts > 0) this.detourPts--; if (this.kind === 'forklift') checked = false; if (p.hold) { this.holdFor = p.hold; this.holdT = 0; break; } }   // 지게차: 꺾기 전에 새 방향으로 다시 감지 (포크가 옆으로 휩쓸지 않게)
         else { this.x += (dx / d) * rem; this.z += (dz / d) * rem; this.dist += rem; rem = 0; }
         this.moving = true;
       }
@@ -308,7 +408,7 @@ export class Simulation {
       this.vehicles.push(v);
     }
     // 출하 지게차: 구분 적재장 → 뒷벽 출하 도크 → 트럭 야드 화물트럭 (레거시·자동화는 사람이 운전, 피지컬AI만 자율 지게차)
-    this.forklifts = [new Mover(m.key === 'dark' ? '자율 지게차' : '출하 지게차 (유인)', 'forklift', { x: 19.5, z: -16.5, aisle: 'B', name: '출하 지게차 대기' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
+    this.forklifts = [new Mover(m.key === 'dark' ? '자율 지게차' : '출하 지게차 (유인)', 'forklift', { x: YARD.waitX, z: YARD.wallZ + 2.4, aisle: 'B', name: '출하 지게차 대기 (출하 도크 사이)' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
     this.forklifts[0].shipper = true; this.forklifts[0].auto = m.key === 'dark';
     // 입고 지게차: 입고 도크(왼쪽 벽)에 접안한 공급사 트럭에서 팔레트를 내려 자재창고 랙에 넣는다 (피지컬AI만 자율)
     const rcv = new Mover(m.key === 'dark' ? '입고 자율 지게차' : '입고 지게차 (유인)', 'forklift', { ...INBOUND.park, aisle: 'B', name: '입고 지게차 대기 (뒷벽 쪽)' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1);
@@ -321,13 +421,13 @@ export class Simulation {
     this.drones = m.key === 'dark' ? Array.from({ length: nd }, (_, i) => new PatrolDrone(this, i, nd)) : [];
     this.techs = [];
     for (let i = 0; i < m.techs; i++) {
-      const home = { ...LOC.TECH, x: LOC.TECH.x + i * 1.6 };
+      const home = { ...LOC.TECH, ...TECH_DOCKS[i % TECH_DOCKS.length] };   // 정비실 양쪽 끝 충전 스테이션 (서로 마주 봄)   // 정비실 오른쪽 앞 대기 자리 — 도구 보관대로 드나드는 길(x 11~13.2, 17.2)과 떨어져 있다
       this.techs.push(new Mover(m.techKind === 'humanoid' ? `휴머노이드-정비${i + 1}` : `정비원-${i + 1}`, m.techKind, home, m.techSpeed));
     }
     // 무인공장: 부품 보충 휴머노이드 + 사족보행 순찰 로봇
     this.helpers = []; this.quads = []; this.partsReq = [];
     for (let i = 0; i < (m.helpers ?? 0); i++) {
-      const h = new Mover(`휴머노이드-물류${i + 1}`, 'humanoid', { x: -38.7, z: -2.6 + i * 3, aisle: 'F', name: '부품 보충 대기' }, 1.6);   // 물류존과 오른쪽 로봇 통로 사이 대기존 (x −40.4 ~ −37.0)
+      const h = new Mover(`휴머노이드-물류${i + 1}`, 'humanoid', { x: -39.55 + i * 1.7, z: 0.8, aisle: 'F', name: '부품 보충 대기', heading: 0, crossX: LEFT }, 1.6);   // 물류존과 오른쪽 로봇 통로 사이 대기존 (x −40.4 ~ −37.0)
       h.role = 'supply'; h.carry = false; h.pick = { ...LOC.WH_PARTS, z: LOC.WH_PARTS.z - i * 1.4 };   // 휴머노이드마다 피킹 자리 분리 (부품 칸을 따라 북쪽으로)
       this.helpers.push(h);
     }
@@ -359,6 +459,28 @@ export class Simulation {
     this.movers = [...this.carriers, ...this.vehicles, ...this.forklifts, ...this.techs, ...this.helpers, ...this.quads, ...this.workers];
     const prio = { carrier: 5, agv: 4, forklift: 4, humanoid: 3, human: 3, robot: 3, quadruped: 1, worker: 2 };
     this.movers.forEach((m, i) => { m.prio = (prio[m.kind] ?? 1) * 100 - i; m.sense = this.sense; });
+    // 휴머노이드 충전 도크(대기 자리 뒤 기둥·바닥 판)는 움직이지 않는 장애물 — 다른 이동체는 서 있는 로봇처럼 돌아가고, 도크 주인은 자기 도크를 무시한다
+    this.docks = this.movers.filter((m) => m.kind === 'humanoid' && m.home?.heading != null).map((m) => ({
+      id: `${m.id} 충전 도크`, kind: 'dock', owner: m, x: m.home.x - Math.sin(m.home.heading) * 0.2, z: m.home.z - Math.cos(m.home.heading) * 0.2,
+      idle: true, steps: [], moving: false, prio: 1e9, blockedOn: null, heading: m.home.heading,
+    }));
+    this.senseList = [...this.movers, ...this.docks];
+    // 직선 구간이 충전 도크(바닥 판·기둥 + 여유 0.3m)를 지나는지 — 자기 도크에 앞에서 들어가거나 나오는 경우는 제외
+    const dockHit = (m, to) => {
+      for (const d of this.docks) {
+        const H = d.owner.home, h = H.heading, c = Math.cos(h), sn = Math.sin(h);
+        const own = d.owner === m && (Math.hypot(to.x - H.x, to.z - H.z) < 1.3 || Math.hypot(m.x - H.x, m.z - H.z) < 1.3);
+        if (own) continue;
+        for (let k = 0; k <= 20; k++) { const px = m.x + (to.x - m.x) * k / 20, pz = m.z + (to.z - m.z) * k / 20, rx = px - H.x, rz = pz - H.z, lx = rx * c - rz * sn, lz = rx * sn + rz * c;
+          if (Math.abs(lx) < 0.78 && lz < 0.78 && lz > -0.82) return true; }
+      }
+      return false;
+    };
+    for (const m of this.movers) if (m.kind === 'humanoid' || m.kind === 'human') m.dockHit = dockHit;
+    // 점이 충전 도크(바닥 판·기둥 + 여유 0.45m) 위인지 — 자기 도크 제외
+    // 자기 도크는 앞쪽(서는 자리)만 허용 — 뒤(기둥 쪽)로 비켜서다 도크 뒤를 돌아 맴돌지 않게
+    const dockAt = (p, m) => this.docks.some((d) => { const H = d.owner.home, c = Math.cos(H.heading), sn = Math.sin(H.heading), rx = p.x - H.x, rz = p.z - H.z, lx = rx * c - rz * sn, lz = rx * sn + rz * c; return d.owner === m ? Math.abs(lx) < 0.93 && lz < 0.1 && lz > -1.6 : Math.abs(lx) < 0.93 && lz < 0.93 && lz > -1.6; });   // 도크 뒤 1.6m까지 금지 — 비켜서다 도크 뒤로 들어가 맴돌지 않게
+    for (const m of this.movers) m.dockAt = dockAt;
     this.assignIds();
     // 피지컬AI: VLA 셀(6축 협동·산업용 로봇, AMMR)과 VLA 학습·배포 파이프라인
     for (const st of this.processing) st.vlaCell = m.key === 'dark' && ['cobot', 'articulated', 'ammr', 'humanoid'].includes(st.def.robot?.kind);
@@ -390,17 +512,33 @@ export class Simulation {
   }
 
   // 진행 방향 앞(차폭 안)에 있는 가장 가까운 이동체 — 셀 안을 달리는 운반 AMR(state 'line')은 전용 경로라 제외
+  // 지게차는 원(반지름 1m)이 아니라 차체 + 앞으로 1.9m 나온 포크까지가 차지하는 자리 — 포크가 다른 로봇·사람과 겹치지 않게
+  //  · 지게차가 감지할 때: 포크 끝(+1.9m)보다 0.5m 앞까지 포크 폭(±0.5m) 안을 본다
+  //  · 다른 이동체가 감지할 때: 지게차 차체·포크 선분(뒤 0.8m ~ 앞 1.45m, 반폭 0.55m)에 내 앞길(반지름 + 0.5m)이 닿으면 멈춘다
   sense = (m, dir) => {
     let best = null, bd = Infinity;
     const rm = moverRadius(m);
-    for (const o of this.movers) {
+    const segDist = (ax, az, bx, bz, px, pz) => { const vx = bx - ax, vz = bz - az, L = vx * vx + vz * vz || 1; const t = Math.max(0, Math.min(1, ((px - ax) * vx + (pz - az) * vz) / L)); return Math.hypot(px - ax - vx * t, pz - az - vz * t); };
+    for (const o of this.senseList ?? this.movers) {
       if (o === m || o.state === 'line') continue;
+      if (o.owner === m) { const e = m.path?.[m.path.length - 1]; if (!e || Math.hypot(e.x - m.home.x, e.z - m.home.z) < 1.3) continue; }   // 자기 도크는 들어가고 나올 때만 무시 — 그 밖에는 자기 도크 기둥도 피한다
+      // 나란한 도크 앞 줄(도크 앞 1.1m)을 따라 옆 도크 앞을 지나는 것은 정해진 동선 — 옆 도크를 장애물로 보지 않는다
+      if (o.kind === 'dock' && m.home?.heading != null && o.heading === m.home.heading && Math.abs(Math.sin(o.heading) * (m.x - o.owner.home.x) + Math.cos(o.heading) * (m.z - o.owner.home.z) - 1.1) < 0.4 && Math.abs(dir.x * Math.sin(o.heading) + dir.z * Math.cos(o.heading)) < 0.3) continue;
       const rx = o.x - m.x, rz = o.z - m.z;
       const along = rx * dir.x + rz * dir.z;
-      if (along <= 0.15) continue;
       const R = rm + moverRadius(o);
       const lateral = Math.abs(rx * dir.z - rz * dir.x);
-      if (along < R + 0.5 && lateral < (moverWidth(m) + moverWidth(o)) / 2 + 0.1 && along < bd) { bd = along; best = o; }
+      let hit = along > 0.15 && along < R + 0.5 && lateral < (moverWidth(m) + moverWidth(o)) / 2 + 0.1;
+      if (!hit && m.kind === 'forklift' && along > 0.15) hit = along < FORK.reach + 0.5 + moverRadius(o) && lateral < FORK.half + moverRadius(o);
+      if (!hit && o.kind === 'forklift') {
+        const hx = Math.sin(o.heading), hz = Math.cos(o.heading);
+        const ax = o.x - hx * FORK.back, az = o.z - hz * FORK.back, bx = o.x + hx * FORK.front, bz = o.z + hz * FORK.front;
+        // 내 앞길 위 몇 점(지금 자리 → 앞으로 반지름 + 0.5m)에서 지게차 차체·포크 선분까지 거리
+        // 다가가는 쪽으로만 막는다 — 이미 포크 가까이 있으면 멀어지는 쪽(비켜서기·물러나기)은 언제나 허용
+        const d0 = segDist(ax, az, bx, bz, m.x, m.z);
+        for (let k = 1; k <= 3 && !hit; k++) { const f = (k / 3) * (rm + 0.5), d = segDist(ax, az, bx, bz, m.x + dir.x * f, m.z + dir.z * f); hit = d < FORK.half + rm * 0.9 && d < d0 - 1e-3; }
+      }
+      if (hit && Math.max(along, 0.16) < bd) { bd = Math.max(along, 0.16); best = o; }
     }
     return best;
   };
@@ -541,9 +679,11 @@ export class Simulation {
     const dock = { x: def.x, z: def.z ?? 0 };
     c.loc = { ...dock, aisle: 'F' };
     c.state = 'return'; c.slot = slot; c.path = null; c.detourPts = 0;
+    // 구분 적재장: AMR은 이미 가운데 정지 구간까지 들어가 적재 로봇이 박스를 집었다 — 그 자리(진행 방향 그대로)에서 바로 복귀 (입구로 되돌아갔다 다시 들어오지 않는다)
+    const inside = item.enterT != null;
+    if (inside) { const P = this.stations[this.stations.length - 1].ins[0]?.path, a = P?.[P.length - 2], b = P?.[P.length - 1]; c.x = dock.x; c.z = dock.z; if (a && b) c.heading = Math.atan2(b.x - a.x, b.z - a.z); }
     c.setTask('빈 AMR 복귀', [
-      { go: { ...dock, aisle: 'F', name: '하역 위치' }, via: [] },
-      { wait: 2 },
+      ...(inside ? [] : [{ go: { ...dock, aisle: 'F', name: '하역 위치' }, via: [] }, { wait: 2 }]),
       { go: park, via: amrReturnVia(dock, park) },
       { do: () => { c.state = 'park'; c.heading = Math.PI; } },
     ]);
@@ -711,6 +851,7 @@ export class Simulation {
 
   updateSink(dt) {
     const sink = this.stations[this.stations.length - 1];
+    if (this.cmd?.estopAll || this.cmd?.pstopAll) return;   // 비상·보호정지 중에는 적재 로봇 집기도 멈춘다 (시작한 집기는 재개 후 이어서)
     const c = sink.in;
     // 구분 적재장: 제품별 구역이 가득 차면 그 제품만 막힌다
     const head = c.items[0]?.item;
@@ -718,9 +859,28 @@ export class Simulation {
     // 하역 위치에 앞서 내린 AMR이 아직 있으면 기다린다 (AMR끼리 겹치지 않게)
     const occupied = this.carriers.some((k) => k.state === 'return' && Math.hypot(k.x - sink.x, k.z - sink.z) < 1.7);
     if (this.frontReady(c) && !occupied && head?.scrap) {
+      // 빈 AMR(불량품을 빼낸 AMR)도 가운데 정지 구간까지 들어간 뒤 그 자리에서 복귀한다 (입구로 되돌아갔다 다시 들어오지 않게)
+      if (this.zone) { head.enterT = (head.enterT ?? 0) + dt; if (head.enterT < SINK_PICK.enter) { sink.state = 'BUSY'; return; } }
       const { item } = c.items.shift();
       this.releaseCarrier(item, sink.def);
     } else if (this.frontReady(c) && !occupied) {
+      // 구분 적재장: 제품 쪽 적재 로봇이 AMR 위 박스를 집어 든 뒤에야 박스가 AMR에서 사라지고 AMR이 떠난다
+      // (로봇 한 사이클 SINK_PICK.cycle초 — 앞 박스를 다 놓을 때까지 다음 집기는 기다림 · 집는 순간 = 사이클 시작 후 SINK_PICK.grab초)
+      if (this.zone && head && !head.scrap) {
+        const P = head.product, S = this.stats;
+        if (head.pickT == null) {
+          // AMR이 입구(경로 끝)에서 가운데 정지 구간까지 들어간 뒤에야 적재 로봇이 집기를 시작한다
+          head.enterT = (head.enterT ?? 0) + dt;
+          if (head.enterT < SINK_PICK.enter) { sink.state = 'BUSY'; sink.lastIn = this.time; return; }
+          this.sinkFree ??= {};
+          if (this.time < (this.sinkFree[P] ?? 0)) { sink.state = 'BUSY'; return; }
+          head.pickT = 0; this.sinkFree[P] = this.time + SINK_PICK.cycle;
+          S.pickStartBy ??= {}; S.pickStartBy[P] = (S.pickStartBy[P] ?? 0) + 1;
+        }
+        head.pickT += dt;
+        if (head.pickT < SINK_PICK.grab) { sink.state = 'BUSY'; sink.lastIn = this.time; return; }
+        S.grabBy ??= {}; S.grabBy[P] = (S.grabBy[P] ?? 0) + 1;
+      }
       const { item } = c.items.shift();
       if (item.defect) this.stats.escaped++; else { this.stats.good++; if (item.product) this.stats.goodBy[item.product] = (this.stats.goodBy[item.product] ?? 0) + 1; }
       if (item.product) this.fgBy[item.product]++;
@@ -779,6 +939,7 @@ export class Simulation {
     }
     for (const h of [...this.helpers, ...this.techs.filter((t) => t.kind === 'humanoid')]) {
       h.chgNow = (h.idle || h.swapping) && !h.moving && Math.hypot(h.x - h.home.x, h.z - h.home.z) < 0.4;
+      if (h.chgNow && h.home.heading != null) h.heading = h.home.heading;   // 대기 = 충전 도크에 등을 대고 통로 쪽을 본다
       // 교체식 배터리: 할 일이 없을 때 30% 아래면 대기 구역으로 가서 팩을 교체한다
       if (h.idle && h.battery < B.humanoid.low && !h.swapping && !this.cmd?.evac) h.setTask('배터리 팩 교체', [{ go: h.home }, { do: () => { h.swapping = true; } }, { wait: B.humanoid.swap, done: () => { h.battery = 100; h.swapping = false; h.swaps = (h.swaps ?? 0) + 1; } }]);
       h.battery = clamp(h.battery + (h.chgNow ? B.humanoid.rate : -(h.moving ? B.humanoid.move : h.task ? B.humanoid.work : B.humanoid.idle)) * dt);
@@ -984,11 +1145,14 @@ export class Simulation {
       req.tech = best; this.erp?.maintStart(st, best);
       if (req.kind === 'repair') this.orch.step(this.orch.find(`fail:${st.id}`), 'exec', 'act', `${best.id} 배정 · 출동`);
       const kindLabel = { repair: '긴급수리', pm: '예지정비', cal: '재보정' }[req.kind];
-      best.setTask(`${kindLabel} → ${st.name}`, [
+      const T = toolSteps(this, best, req.kind, req.kind === 'repair' ? this.orch.find(`fail:${st.id}`) : null);
+      best.setTask(`${kindLabel} → ${st.name} (${TOOL_KITS[req.kind].label})`, [
+        ...T.take,
         { go: svcLoc(st) },
         { do: () => this.techArrive(req) },
         { until: () => !st.request },
-        { go: best.home },
+        ...T.back,
+        ...T.home(best.home),
       ]);
     }
   }
@@ -1036,10 +1200,10 @@ export class Simulation {
       const st = req.st; req.helper = h;
       h.setTask(`부품 보충 → ${st.name}`, [
         // 대기존에서 바로 옆 진출입 줄(AGV 상차 자리를 비킨 x −41.2)로 나가 부품 칸 앞으로 옆걸음, 나올 때도 같은 줄로
-        { go: h.pick, via: [{ x: LOC.WH_LANE, z: h.z }, { x: LOC.WH_LANE, z: h.pick.z }] },
+        { go: h.pick, via: [{ x: LOC.WH_LANE_IN, z: h.home.z + 1.1 }, { x: LOC.WH_LANE_IN, z: h.pick.z }] },   // 충전 도크 앞(+z 1.1m)으로 나와 서쪽(들어가는) 줄로
         { until: () => !this.partsTracked || this.whParts > 0, task: '부품 랙 재고 대기 (입고 트럭 대기)' },
         { wait: 4, done: () => { const n = this.partsTracked ? Math.min(this.mode.partsCap - (st.parts ?? 0), this.whParts) : this.mode.partsCap; this.whParts -= this.partsTracked ? n : 0; h.carry = n; if (this.partsTracked) this.erp?.consume('parts', n, st.name); } },
-        { go: { x: LOC.WH_LANE, z: h.pick.z, aisle: 'F', name: '물류존 진출' }, via: [] },
+        { go: { x: LOC.WH_LANE_OUT, z: h.pick.z, aisle: 'F', name: '물류존 진출' }, via: [] },   // 나오는 줄(동쪽)로 북쪽 통로까지
         { go: st.ammr ? this.rackServiceLoc(st) : localLoc(st.def, -1.0, SVC_Z, st.name) },   // AMMR 셀은 부품 선반 옆
         { wait: 5, done: () => {
           const n = typeof h.carry === 'number' ? h.carry : this.mode.partsCap; h.carry = false; st.parts = Math.min(this.mode.partsCap, (st.parts ?? 0) + n); st.partsReq = null;
@@ -1186,12 +1350,18 @@ export class Simulation {
     let act = '';
     const dispatch = () => {
     if (E.response === 'clean') {
-      const h = [...this.helpers, ...this.techs].filter((k) => k.kind === 'humanoid').sort((a, b) => (b.idle - a.idle) || (Math.hypot(a.x - ev.x, a.z - ev.z) - Math.hypot(b.x - ev.x, b.z - ev.z)))[0];
+      // 정비실 휴머노이드(대기 중 우선)가 정비실에서 청소 도구를 챙겨 출동 — 없으면 다른 휴머노이드
+      const dist = (a) => Math.hypot(a.x - ev.x, a.z - ev.z);
+      const pool = this.techs.filter((k) => k.kind === 'humanoid' && !k.tool);
+      const h = pool.filter((k) => k.idle).sort((a, b) => dist(a) - dist(b))[0] ?? pool.sort((a, b) => dist(a) - dist(b))[0]
+        ?? [...this.helpers, ...this.techs].filter((k) => k.kind === 'humanoid').sort((a, b) => (b.idle - a.idle) || (dist(a) - dist(b)))[0];
       if (h) {
         const resume = h.idle ? [] : h.steps;   // 하던 일은 처리 후 이어서
-        h.setTask(`${E.task} → ${near.name} 앞`, [{ go: loc }, { do: () => o.step(inc, 'exec', 'act', `${h.id} 현장 도착 · ${E.task} 시작`) },
-          { wait: 8, done: () => { ev.cleared = true; ev.tClear = this.time; this.log('ok', `${E.label} 처리 완료`, { obs: `${h.id}가 ${E.task} 완료`, act: '구역 정상화' }); o.step(inc, 'exec', 'act', `${E.task} 완료`); o.close(inc, '구역 정상화 확인 · 인시던트 종료'); } }, ...resume, ...(resume.length ? [] : [{ go: h.home }])]);
-        ev.responder = h.id; act = `${h.id} 출동 — ${E.task} (작업 중이던 일은 처리 후 재개)`;
+        const kit = TOOL_KITS[ev.type] ? ev.type : 'debris', T = toolSteps(this, h, kit, inc), K = TOOL_KITS[kit];
+        h.setTask(`${E.task} → ${near.name} 앞 (${K.label})`, [...T.take, { go: loc }, { do: () => o.step(inc, 'exec', 'act', `${h.id} 현장 도착 · ${K.label}로 ${E.task} 시작`) },
+          { wait: 8, done: () => { ev.cleared = true; ev.tClear = this.time; this.log('ok', `${E.label} 처리 완료`, { obs: `${h.id}가 ${K.label}(${K.items})로 ${E.task} 완료`, act: '구역 정상화 · 도구 반납' }); o.step(inc, 'exec', 'act', `${E.task} 완료 — 도구 정비실 반납`); o.close(inc, '구역 정상화 확인 · 인시던트 종료'); } },
+          ...T.back, ...(resume.length ? [...T.exit, ...resume] : T.home(h.home))]);
+        ev.responder = h.id; act = `${h.id} 출동 — 정비실에서 ${K.label}(${K.items}) 챙겨 ${E.task} (작업 중이던 일은 처리 후 재개)`;
       }
     } else if (E.response === 'inspect') {
       const q = this.quads.slice().sort((a, b) => Math.hypot(a.x - ev.x, a.z - ev.z) - Math.hypot(b.x - ev.x, b.z - ev.z))[0];
@@ -1203,6 +1373,13 @@ export class Simulation {
           this.resumeCells(ev, inc, '오탐 확인 · 알람 해제 · 인시던트 종료');
         } }]);
         ev.responder = q.id; act = `${q.id} 출동 — 열화상·가스 센서 정밀 점검`;
+      }
+      // 화재 초기 대응 대비: 대기 중인 정비 휴머노이드가 정비실에서 소화기를 챙겨 현장 옆에서 대기 (점검 끝나면 반납)
+      const fx = this.techs.filter((k) => k.kind === 'humanoid' && k.idle && !k.tool).sort((a, b) => Math.hypot(a.x - ev.x, a.z - ev.z) - Math.hypot(b.x - ev.x, b.z - ev.z))[0];
+      if (fx) {
+        const T = toolSteps(this, fx, 'smoke', inc), side = { ...loc, x: loc.x + 1.4, name: `${E.label} 소화 대기` };
+        fx.setTask(`소화기 대기 → ${near.name} 부근 (소화기)`, [...T.take, { go: side }, { do: () => o.step(inc, 'exec', 'act', `${fx.id} 소화기 들고 현장 대기`) }, { until: () => ev.cleared }, ...T.back, ...T.home(fx.home)]);
+        act += ` · ${fx.id} 소화기 챙겨 현장 대기`;
       }
     } else {
       ev.until = this.time + 60;

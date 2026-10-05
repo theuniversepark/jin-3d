@@ -17,7 +17,7 @@ const mk = (mode) => { const s = new Simulation(mode, 3, { line: zoneLine(), qui
   K.issue('RESET', 'all'); run(1); check('자가진단 중 → 잠시 후', K.availability('CYCLE_STOP', 'all').reason === '자가진단 중 — 잠시 후'); run(6);
   console.log('== 보호정지·감속');
   K.issue('SAFE_STOP', 'all'); run(1); const r = K.issue('RESUME', DT); run(1);
-  check('Zone 보호정지 중 셀 재개 거부', r.state === 'rejected' && s.processing.find((x) => x.id === DT).state === 'PSTOP', r.note);
+  check('Zone 보호정지 중 셀 재개 거부', r.state === 'rejected' && ['PSTOP', 'MAINT'].includes(s.processing.find((x) => x.id === DT).state), `${r.note} · 셀 ${s.processing.find((x) => x.id === DT).state}`);   // 정비·자율 보정 중인 셀은 정비 상태 유지
   K.issue('RESUME', 'all'); run(2); check('Zone 재개 → 전 셀 해제', s.processing.every((x) => x.state !== 'PSTOP'));
   K.issue('SAFE_SPEED', 'all'); run(1); check('Zone 감속 → 이동 속도 25%', K.lineSpeed === 0.25);
   K.issue('SPEED', 'all', 50); run(1); check('감속 + 속도 50% → 12.5%', Math.abs(K.lineSpeed - 0.125) < 1e-9);
