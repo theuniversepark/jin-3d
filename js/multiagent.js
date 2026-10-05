@@ -59,8 +59,21 @@ export class HybridAgent extends FactoryAgent {
     this.arch = 'hybrid';
     this.agents = Object.entries(DOMAIN).map(([key, d]) => ({ key, ...d, next: 0, proposed: 0, approved: 0 }));
     this.queue = [];
-    this.ma = { proposed: 0, approved: 0, deferred: 0, rejected: 0, stale: 0, conflicts: 0, latSum: 0, latN: 0, latMax: 0, reversals: 0, releaseChanges: 0 };
+    this.ma = { proposed: 0, approved: 0, deferred: 0, rejected: 0, stale: 0, conflicts: 0, latSum: 0, latN: 0, latMax: 0, reversals: 0, releaseChanges: 0, rule: { p1: 0, bott: 0, nearBott: 0, slots: 0, boostMaint: 0, releaseOsc: 0, stale: 0 } };
     this.lastRelease = { t: -1e9, dir: 0 };
+    sim.agentHub = this;   // 현장 보고(사족보행 순찰 등)를 도메인 에이전트 제안으로 받는다
+  }
+  // 현장 보고 → 해당 도메인 에이전트 제안 (메인 조정자가 판정). 이미 처리 중·같은 제안이 대기 중이면 받지 않는다
+  report(p) {
+    if (!this.m.agentActive || this.llm) return false;
+    const st = p.st;
+    if (st && (st.request || st.state === 'DOWN' || st.state === 'MAINT')) return true;
+    const key = `${p.kind}:${st?.id ?? ''}`;
+    if (this.queue.some((q) => q.key === key)) return true;
+    this.queue.push({ ...p, key, t0: this.sim.time });
+    const a = this.agents.find((x) => x.key === p.by); if (a) a.proposed++;
+    this.ma.proposed++; this.ma.reports = (this.ma.reports ?? 0) + 1;
+    return true;
   }
   get name() { return `${super.name} · 혼합형 다중 에이전트`; }
 
@@ -102,31 +115,31 @@ export class HybridAgent extends FactoryAgent {
     for (const p of order) {
       const st = p.st;
       // 이미 처리됐거나 상태가 바뀐 제안은 정리
-      if (st && (p.kind === 'pm' || p.kind === 'cal') && (st.request || st.state === 'DOWN' || st.state === 'MAINT')) { this.ma.stale++; continue; }
-      if (t - p.t0 > 60) { this.ma.stale++; continue; }   // 1분 넘은 제안은 버리고 다시 받는다
+      if (st && (p.kind === 'pm' || p.kind === 'cal') && (st.request || st.state === 'DOWN' || st.state === 'MAINT')) { this.ma.stale++; this.ma.rule.stale++; continue; }
+      if (t - p.t0 > 60) { this.ma.stale++; this.ma.rule.stale++; continue; }   // 1분 넘은 제안은 버리고 다시 받는다
       if (p.kind === 'pm') {
-        if (P1) { this.ma.deferred++; keep.push(p); continue; }                       // 안전(P1) 대응 중 보류
+        if (P1) { this.ma.deferred++; this.ma.rule.p1++; keep.push(p); continue; }                       // 안전(P1) 대응 중 보류
         const busyBott = st === bott && st.state === 'BUSY';
-        if (busyBott && !p.critical) { this.ma.deferred++; this.ma.conflicts++; keep.push(p); continue; }   // 병목 가동 중 — 대기 구간 또는 위급까지
-        if (st.state === 'BUSY' && !p.critical && st.health > m.pmThreshold - 4 && st !== bott && (st.def.cycle * m.cycleMul * (st.def.share ?? 1)) / bc > 0.85) { this.ma.deferred++; keep.push(p); continue; }   // 병목에 가까운 셀도 조금 더 기다림
-        if (pmSlots <= 0 && !p.critical) { this.ma.deferred++; keep.push(p); continue; }   // 정비 인력이 모두 바쁨
+        if (busyBott && !p.critical) { this.ma.deferred++; this.ma.conflicts++; this.ma.rule.bott++; keep.push(p); continue; }   // 병목 가동 중 — 대기 구간 또는 위급까지
+        if (st.state === 'BUSY' && !p.critical && st.health > m.pmThreshold - 4 && st !== bott && (st.def.cycle * m.cycleMul * (st.def.share ?? 1)) / bc > 0.85) { this.ma.deferred++; this.ma.rule.nearBott++; keep.push(p); continue; }   // 병목에 가까운 셀도 조금 더 기다림
+        if (pmSlots <= 0 && !p.critical) { this.ma.deferred++; this.ma.rule.slots++; keep.push(p); continue; }   // 정비 인력이 모두 바쁨
         if (s.requestTech(st, 'pm')) { pmSlots--; this.exec(p, `${st.name} 예지정비 지시`, { obs: p.why, dec: `메인 조정: ${st.state === 'BUSY' ? (st === bott ? '병목이지만 위급' : '병목 아님 — 가동 중 정비 영향 작음') : '설비 대기 구간 활용'}`, act: '정비 인력 배정' }, 'plan'); }
         else { this.ma.deferred++; keep.push(p); }
       } else if (p.kind === 'cal') {
-        if (P1 && m.key !== 'dark') { this.ma.deferred++; keep.push(p); continue; }
+        if (P1 && m.key !== 'dark') { this.ma.deferred++; this.ma.rule.p1++; keep.push(p); continue; }
         const ok = m.key === 'dark' ? s.selfCalibrate(st) : s.requestTech(st, 'cal');
         if (ok) this.exec(p, `${st.name} ${m.key === 'dark' ? '자율 보정' : '공정 재보정'}`, { obs: p.why, dec: '메인 조정: 품질 제안 승인', act: m.key === 'dark' ? '셀 자율 재보정 (10초)' : '정비원 재보정' }, 'plan');
         else { this.ma.deferred++; keep.push(p); }
       } else if (p.kind === 'release') {
         const dir = Math.sign(p.value - s.releaseInterval);
         // 진동 방지: 20초 안에 반대 방향으로 되돌리지 않음 (차이가 크면 예외)
-        if (this.lastRelease.dir && dir !== this.lastRelease.dir && t - this.lastRelease.t < 20 && Math.abs(p.value - s.releaseInterval) < 0.6) { this.ma.rejected++; this.ma.conflicts++; continue; }
+        if (this.lastRelease.dir && dir !== this.lastRelease.dir && t - this.lastRelease.t < 20 && Math.abs(p.value - s.releaseInterval) < 0.6) { this.ma.rejected++; this.ma.conflicts++; this.ma.rule.releaseOsc++; continue; }
         if (this.lastRelease.dir && dir !== this.lastRelease.dir) this.ma.reversals++;
         s.releaseInterval = p.value; this.lastRelease = { t, dir }; this.ma.releaseChanges++;
         this.exec(p, '투입 속도 동기화', { obs: p.why, dec: '메인 조정: 흐름 제안 승인', act: `투입 간격 ${p.value}초` }, 'act', this.ready('release', 30));
       } else if (p.kind === 'boost') {
         // 충돌: 정비가 필요한(건강도 낮거나 정비 제안 대기) 셀은 고속 운전 거절
-        if (st.health < m.pmThreshold + 5 || this.queue.some((q) => q.kind === 'pm' && q.st === st)) { this.ma.rejected++; this.ma.conflicts++; continue; }
+        if (st.health < m.pmThreshold + 5 || this.queue.some((q) => q.kind === 'pm' && q.st === st)) { this.ma.rejected++; this.ma.conflicts++; this.ma.rule.boostMaint++; continue; }
         if (this.boosted && this.boosted !== st) { this.boosted.speedMul = 1; this.ma.reversals++; }
         st.speedMul = m.boostMul ?? 0.9; this.boosted = st;
         this.exec(p, `병목 해소: ${st.name} 사이클 최적화`, { obs: p.why, dec: '메인 조정: 정비 충돌 없음', act: `사이클 ${Math.round((1 - (m.boostMul ?? 0.9)) * 100)}% 단축` }, 'act');
@@ -143,12 +156,12 @@ export class HybridAgent extends FactoryAgent {
     const lat = this.sim.time - p.t0;
     this.ma.approved++; this.ma.latSum += lat; this.ma.latN++; this.ma.latMax = Math.max(this.ma.latMax, lat);
     const a = this.agents.find((x) => x.key === p.by); if (a) a.approved++;
-    if (log) this.decide(level, title, { ...body, dec: `${body.dec ?? ''}${body.dec ? ' · ' : ''}${a?.label ?? ''} 제안 → ${lat.toFixed(0)}초 뒤 실행` });
+    if (log) this.decide(level, title, { ...body, dec: `${body.dec ?? ''}${body.dec ? ' · ' : ''}${p.source ? `${p.source} 순찰 보고 → ` : ''}${a?.label ?? ''} 제안 → ${lat.toFixed(0)}초 뒤 실행` });
     else this.decisions++;
   }
   status() {
     const M = this.ma;
-    return { ...M, avgLat: M.latN ? M.latSum / M.latN : 0, queue: this.queue.length, agents: this.agents.map((a) => ({ key: a.key, label: a.label, period: a.period, proposed: a.proposed, approved: a.approved })) };
+    return { ...M, avgLat: M.latN ? M.latSum / M.latN : 0, queue: this.queue.length, pending: this.queue.map((q) => ({ kind: q.kind, st: q.st?.name ?? null, by: q.by, age: this.sim.time - q.t0, source: q.source ?? null })), agents: this.agents.map((a) => ({ key: a.key, label: a.label, period: a.period, proposed: a.proposed, approved: a.approved })) };
   }
 }
 

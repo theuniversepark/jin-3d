@@ -777,3 +777,32 @@ em.up { color: var(--good); } em.dn { color: var(--bad); }
 .engine.arch-row { margin-top: 4px; }
 .arch-cmp { border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 3px 9px; font-size: 11px; color: var(--ink2); }
 .arch-cmp:hover { border-color: var(--accent); color: var(--ink); }
+/* 자율 에이전트 구성 (FACOS 🤖 팝업) */
+.ai-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.ai-bar small { color: var(--ink2); font-size: 11px; }
+.ai-btn { border: 1px solid #b89bff; background: rgba(184, 155, 255, 0.14); color: #e2d6ff; border-radius: 9px; padding: 5px 12px; font-weight: 700; font-size: 12px; }
+.ai-btn.on, .ai-btn:hover { background: rgba(184, 155, 255, 0.3); }
+.ai-info { border: 1px solid rgba(184, 155, 255, 0.35); border-radius: 12px; padding: 8px 12px 12px; margin-bottom: 12px; background: rgba(184, 155, 255, 0.05); }
+.ai-info h4 { margin: 12px 0 6px; }
+.ai-svg { width: 100%; height: auto; display: block; }
+.ai-svg .ai-box rect { fill: rgba(255, 255, 255, 0.04); stroke: rgba(255, 255, 255, 0.25); stroke-width: 1.2; }
+.ai-svg .ai-box.main rect { fill: rgba(184, 155, 255, 0.2); stroke: #b89bff; stroke-width: 2; }
+.ai-svg .ai-box.dom rect { fill: rgba(55, 160, 255, 0.14); stroke: #37a0ff; }
+.ai-svg .ai-box.reflex rect { fill: rgba(61, 220, 132, 0.12); stroke: #3ddc84; }
+.ai-svg .ai-box.orch rect { fill: rgba(255, 145, 82, 0.12); stroke: #ff9152; }
+.ai-svg .ai-box.field rect { fill: rgba(245, 211, 107, 0.1); stroke: #f5d36b; }
+.ai-svg .ai-box.queue rect, .ai-svg .ai-box.data rect, .ai-svg .ai-box.plant rect { stroke-dasharray: 4 3; }
+.ai-svg text { fill: var(--ink); text-anchor: middle; font-size: 12px; }
+.ai-svg text.t { font-weight: 700; font-size: 13px; }
+.ai-svg text.s { fill: var(--ink2); font-size: 10.5px; }
+.ai-svg .ai-arrow line { stroke: #9fb3c8; stroke-width: 1.5; }
+.ai-svg .ai-arrow.dash line { stroke-dasharray: 5 4; }
+.ai-svg .ai-arrow text.l { fill: #9fb3c8; font-size: 10.5px; text-anchor: start; }
+.ai-svg marker path { fill: #9fb3c8; }
+.ai-svg text.ai-cap { fill: var(--muted); font-size: 11px; text-anchor: start; }
+.ai-tw { overflow-x: auto; }
+.ai-t td.ins2 { white-space: normal; min-width: 180px; font-size: 11.5px; line-height: 1.45; }
+.ai-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.ai-steps li { display: grid; grid-template-columns: 130px 1fr auto; gap: 10px; align-items: baseline; }
+.ai-steps li span { color: var(--ink2); }
+.ai-steps li em { font-style: normal; color: #e2d6ff; font-variant-numeric: tabular-nums; white-space: nowrap; }

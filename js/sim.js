@@ -51,6 +51,7 @@ export const MODES = {
     helpers: 2, quadrupeds: 2, partsCap: 40, partsReorder: 14, scanPm: 12,
     drones: 3,   // 순찰 드론 — 시설 크기(순찰 주기)·인시던트 출동률로 산정 (drone.js DRONE_SIZING)
     reorderPoint: 14, shipBatch: 12, dispatchDelay: 0, releaseInterval: 8.3,
+    agentArch: 'hybrid',   // 자율운영 에이전트 구조: 혼합형 다중 에이전트 (반사 계층 + 정비·품질·흐름 에이전트 + 메인 조정자, js/multiagent.js)
     releaseMargin: 0.94,   // 투입 간격 = 병목 사이클 × 0.94 — KPI 영향·개선 제안(투입 간격 단축) 적용: 2시간 × 시드 3 UPH 473 → 475 · WIP 그대로
     lightingKW: 6, hvacKW: 7, agentActive: true,   // 고효율 LED 구역 조명
   },
@@ -1352,7 +1353,10 @@ export class Simulation {
     this.stats.scans = (this.stats.scans ?? 0) + 1;
     const rec = (result) => { (this.scanLog ??= []).push({ t: this.time, by: q.id, st: st.name, health: Math.round(st.health), drift: Math.round(st.drift * 100), result }); if (this.scanLog.length > 60) this.scanLog.shift(); if (result !== '정상' && result !== '점검 생략') this.stats['scan_' + result] = (this.stats['scan_' + result] ?? 0) + 1; };
     if (st.request || st.state === 'DOWN' || st.state === 'MAINT') return rec('점검 생략');
-    if (st.health < this.mode.pmThreshold + this.mode.scanPm) {
+    // 혼합형 다중 에이전트: 순찰 보고는 정비·품질 에이전트 제안으로 메인 조정자에 올라간다 (agentHub) — 단일 에이전트는 바로 처리
+    if (st.health < this.mode.pmThreshold + this.mode.scanPm && this.agentHub?.report({ kind: 'pm', st, prio: 5, critical: st.health <= this.mode.pmThreshold - 7, why: `${q.id} 열화상·진동 스캔 — 건강도 ${st.health.toFixed(0)}%`, by: 'maint', source: q.id })) {
+      rec('예지정비');
+    } else if (st.health < this.mode.pmThreshold + this.mode.scanPm) {
       rec('예지정비');
       if (this.requestTech(st, 'pm')) {
         this.log('plan', `${q.id} 순찰 이상 징후 · ${st.name}`, {
@@ -1361,6 +1365,8 @@ export class Simulation {
           act: '정비 휴머노이드에 예지정비 배정',
         });
       }
+    } else if (st.drift > 0.15 && !st.def.inspect && this.agentHub?.report({ kind: 'cal', st, prio: 5, why: `${q.id} 순찰 — 드리프트 ${(st.drift * 100).toFixed(0)}%`, by: 'quality', source: q.id })) {
+      rec('재보정');
     } else if (st.drift > 0.15 && !st.def.inspect) {
       rec('재보정');
       if (this.selfCalibrate(st)) this.log('plan', `${q.id} 순찰 · ${st.name} 미세 편차`, { obs: `치수·토크 편차 드리프트 ${(st.drift * 100).toFixed(0)}%`, act: '셀 자율 재보정' });

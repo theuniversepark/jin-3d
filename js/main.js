@@ -8,6 +8,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Simulation, MODES, ST_LABEL } from './sim.js';
 import { FactoryAgent } from './agent.js';
 import { HybridAgent, compareArchitecturesAsync } from './multiagent.js';
+import { agentStructureHTML } from './agentinfo.js';
 import { FactoryView } from './factory.js';
 import { UI } from './ui.js';
 import { LLMController } from './llm.js';
@@ -117,6 +118,7 @@ document.getElementById('log').addEventListener('click', (e) => {
 });
 llm.onMix = (key) => { currentLine = lines.zone = { ...currentLine, mix: key }; saveLines(); renderZoneCard(); designer?.sync(); };
 let sim, agent, agentArch = 'single';   // 에이전트 구조: single · hybrid (혼합형 다중 에이전트)
+const archPref = {};   // 단계별 운영자 선택 (없으면 MODES[단계].agentArch — 피지컬AI 기본 혼합형)
 let modeKey = 'smart', speed = 3, running = true, labelsOn = true;
 const SEED = 20261001;
 
@@ -192,7 +194,9 @@ function setRender(style) {
 function start(key) {
   modeKey = key;
   sim = new Simulation(key, SEED, { line: currentLine });
+  agentArch = archPref[key] ?? sim.mode.agentArch ?? 'single';
   agent = agentArch === 'hybrid' ? new HybridAgent(sim) : new FactoryAgent(sim);
+  document.querySelectorAll('#archSeg button').forEach((b) => b.classList.toggle('on', b.dataset.arch === agentArch));
   view.setup(sim, labelsOn, changedIds);
   view.selected = null;
   hub.reset(sim, view);
@@ -355,7 +359,8 @@ document.getElementById('btnLabels').addEventListener('click', (e) => {
 // 에이전트 구조 전환 (운전 중에도): 의사결정 기록·쿨다운·고속 운전 상태를 넘겨받는다
 function setArch(arch) {
   if (arch === agentArch) return;
-  agentArch = arch;
+  agentArch = arch; archPref[modeKey] = arch;
+  if (arch === 'single') sim.agentHub = null;   // 순찰 보고를 다시 바로 처리
   const old = agent, nu = arch === 'hybrid' ? new HybridAgent(sim) : new FactoryAgent(sim);
   for (const k of ['decisions', 'byCat', 'history', 'cool', 'boosted', 'disruptHandled', 'supplyWait', 'llm', 'lastThought']) nu[k] = old[k];
   agent = nu; llm.agent = agent; ui.agent = agent;   // 대화 기록은 그대로 (llm.attach는 기록을 비움)
@@ -1362,12 +1367,14 @@ function uphSpark() {
   const mx = Math.max(1, ...h.map((x) => x.uph)), W = 100 / h.length;
   return `<svg class="fc-spark" viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label="시간당 생산 추이">${h.map((x, i) => `<rect x="${i * W + 0.15}" y="${32 - (x.uph / mx) * 30}" width="${W - 0.3}" height="${(x.uph / mx) * 30}" fill="#3fd0c9"><title>${fclock(x.t)} · UPH ${Math.round(x.uph)} · OEE ${pct(x.oee)}</title></rect>`).join('')}</svg><div class="fc-axis"><span>${fclock(h[0].t)}</span><span>최대 UPH ${Math.round(mx)}</span><span>${fclock(h.at(-1).t)}</span></div>`;
 }
+let fcAgentInfo = false;   // 자율 에이전트 팝업: "🧩 에이전트 구성" 펼침
 function viewAgent() {
   const A = agent, k = sim.kpi(), s = sim;
+  const infoBtn = `<div class="ai-bar"><button type="button" class="ai-btn ${fcAgentInfo ? 'on' : ''}" data-fc-info>🧩 에이전트 구성 · 역할 · 관계 · 판정 순서 ${fcAgentInfo ? '▲ 접기' : '▼ 보기'}</button><small>${A.arch === 'hybrid' ? '혼합형 다중 에이전트 — 반사 계층 + 정비·품질·흐름 에이전트 + 메인 조정자' : '단일 자율 에이전트 — 모듈 6개'}</small></div>${fcAgentInfo ? agentStructureHTML(A, s) : ''}`;
   const bott = s.processing.filter((st) => !st.standby).reduce((b, st) => { const c = st.def.cycle * s.mode.cycleMul * st.speedMul * (st.def.share ?? 1); return c > b.c ? { c, st } : b; }, { c: 0, st: null });
   const saving = s.processing.filter((st) => st.powerSave).length, avgH = s.processing.reduce((a, st) => a + st.health, 0) / s.processing.length;
   const cats = Object.entries(A.byCat).sort((a, b) => b[1] - a[1]);
-  return `<div class="fc-tiles">
+  return `${infoBtn}<div class="fc-tiles">
       ${tile('의사결정', `${A.decisions}건`, `${fdur(s.time)} 동안`)}${tile('예지정비', `${k.pm}건`, `고장 ${k.failures}건`)}${tile('품질 보정', `${k.cal}건`, `유출 ${k.escaped}건 · ${Math.round(k.ppm)} ppm`)}
       ${tile('투입 간격', `${s.releaseInterval.toFixed(2)}초`, bott.st ? `병목 ${bott.st.name} ${bott.c.toFixed(1)}초` : '')}${tile('평균 재공', `${k.avgWip.toFixed(1)}개`, `현재 ${k.wip}개`)}${tile('평균 건강도', `${avgH.toFixed(0)}%`, `절전 셀 ${saving}개`)}${tile('OEE', pct(k.OEE), `가동 ${pct(k.A)} · 양품 ${pct(k.Q)}`)}${tile('에너지', `${k.kwhPerUnit.toFixed(3)} kWh/개`, `${k.energy.toFixed(1)} kWh`)}
     </div>
@@ -1430,5 +1437,6 @@ function renderFacosView(force) {
 }
 document.getElementById('closeFacos').addEventListener('click', () => { fcModal.classList.add('hidden'); fcView = null; });
 fcModal.addEventListener('click', (e) => { if (e.target === fcModal) { fcModal.classList.add('hidden'); fcView = null; } });
+fcBody.addEventListener('click', (e) => { if (e.target.closest('[data-fc-info]')) { fcAgentInfo = !fcAgentInfo; renderFacosView(true); } });
 
 window.__twin = { primKey, setRender, RENDER, openGnb: (id) => openGnb(id), cctvRec, robotRec, cctvView, epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };
