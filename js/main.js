@@ -19,6 +19,7 @@ import { ODOO_PRODUCTS, ODOO_LOCS } from './odoo.js';
 import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
 import { GateView } from './gateview.js';
 import { EpisodeRecorder, buildEpisodesZip, EP_HZ, SAMPLE } from './vla.js';
+import { impactHTML, impactClick } from './impactview.js';
 import { buildAiosZip, HEADS as AIOS_HEADS, FEATURES as AIOS_FEATURES, SAMPLE_S as AIOS_SAMPLE_S, CHUNK as AIOS_CHUNK, TRAIN_MIN as AIOS_TRAIN_MIN } from './aios.js';
 import { zipStore } from './aasx.js';
 import { DRONE_SIZING } from './drone.js';
@@ -1014,7 +1015,7 @@ function frame() {
   if (view.telemetry && ui.robotMode) placeRobotPanel();
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought, { hub: hub.stats(), msgs: hub.msgs, bytes: hub.bytes }); }
   epRec.update();
-  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); renderAios(); aiosUpload(); renderFacos(); renderFacosView(); }
+  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); renderAios(); renderImpact(); aiosUpload(); renderFacos(); renderFacosView(); }
   cctvT += rdt; if (cctvSel && cctvT > 0.12) { cctvT = 0; renderCctvPanel(); }
   if (!glLost) {
     try {
@@ -1134,6 +1135,21 @@ function renderVla(force) {
         <table class="vla-t"><thead><tr><th>ID</th><th>셀 · 로봇</th><th>모델</th><th>보관 / 누적</th><th>성공률</th><th>최근 지시</th><th></th></tr></thead><tbody>
         ${robots.map((R) => { const eps = epRec.list(R.uid), st = P.robotStats.get(R.uid), le = eps.at(-1), dis = !eps.length || shared ? 'disabled' : ''; return `<tr><td><b class="uidc">${R.uid}</b></td><td>${escV(R.st.name.replace(/\s*\(.*\)$/, ''))} · ${kindKo(R.r.kind)}</td><td>${P.versionOf(R.uid)}</td><td>${eps.length} / ${st?.n ?? 0}</td><td>${st?.n ? Math.round((st.ok / st.n) * 100) + '%' : '-'}</td><td class="ins" title="${escV(le?.instruction)}">${escV(le?.instruction ?? '-')}</td><td class="dl"><button type="button" data-dl="${R.uid}" ${dis}>⬇ 전체</button><button type="button" data-dl="${R.uid}" data-one="1" ${dis}>⬇ 1개</button></td></tr>`; }).join('')}</tbody></table></div>
     </div>`);
+}
+
+// ── KPI 영향 분석 · 개선 제안 · 의사결정 창 ─────────────────
+const impactModal = document.getElementById('impactModal'), impactBody = document.getElementById('impactBody');
+const openImpact = () => { impactModal.classList.remove('hidden'); renderImpact(true); };
+document.getElementById('btnImpact').addEventListener('click', openImpact);
+document.getElementById('closeImpact').addEventListener('click', () => impactModal.classList.add('hidden'));
+document.getElementById('kpis').addEventListener('click', (e) => { if (e.target.closest('[data-open-impact]')) openImpact(); });
+impactBody.addEventListener('click', (e) => { if (impactClick(sim, e)) { renderImpact(true); ui.update(); } });
+function renderImpact(force) {
+  const A = sim.impact?.advisor, n = A ? A.pending.length : 0, badge = document.getElementById('impBadge');
+  if (badge) { badge.hidden = !n; badge.textContent = n; }
+  if (impactModal.classList.contains('hidden') && !force) return;
+  if (!force && impactBody.querySelector('button:hover')) return;
+  setHTML(impactBody, impactHTML(sim));
 }
 
 // ── AIOS 공장 운영 AI 창 ─────────────────

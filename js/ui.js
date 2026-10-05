@@ -54,6 +54,7 @@ export class UI {
 
   update() {
     const sim = this.sim, k = sim.kpi();
+    const imp = k.impact, top = imp?.rows.find((r) => r.oeePts > 0.001), hzWip = imp?.rows.find((r) => r.key === 'hazard')?.wip ?? 0, pend = sim.impact?.advisor.pending ?? [], best = [...pend].sort((a, b) => (b.twin?.recommend === 'apply' ? (b.twin.uphCand - b.twin.uphCur) / Math.max(1, b.twin.uphCur) + 1 : 0) - (a.twin?.recommend === 'apply' ? (a.twin.uphCand - a.twin.uphCur) / Math.max(1, a.twin.uphCur) + 1 : 0))[0];
     $('clock').textContent = fmtClock(sim.time);
     const kpi = (label, val, unit = '', sub = '', cls = '') =>
       `<div class="kpi ${cls}"><div class="k">${label}</div><div class="v">${val}<small>${unit}</small></div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
@@ -61,13 +62,16 @@ export class UI {
       kpi('양품 생산', num(k.good), '개', sim.zone ? `도어트림 ${num(sim.stats.goodBy.doortrim ?? 0)} · e-axle ${num(sim.stats.goodBy.eaxle ?? 0)}` : `출하 ${num(k.shipped)}개`),
       kpi('시간당 생산', num(k.uphRecent), 'UPH', `누적 평균 ${num(k.uph)}`),
       `<div class="kpi wide"><div class="k">설비종합효율 OEE</div><div class="v">${pct(k.OEE)}</div>
+        ${top ? `<div class="imp-top1">손실 1위 ${top.label} −${(top.oeePts * 100).toFixed(1)}%p · UPH −${Math.round(top.uph)}</div>` : ''}
         <div class="apq"><div>가용률 ${pct(k.A, 0)}<i style="--w:${k.A * 100}%"></i></div><div>성능 ${pct(k.P, 0)}<i style="--w:${k.P * 100}%"></i></div><div>품질 ${pct(k.Q, 1)}<i style="--w:${k.Q * 100}%"></i></div></div></div>`,
       kpi('불량 유출', num(k.ppm), 'ppm', `검출·배출 ${k.rejected}개`),
-      kpi('재공 WIP', k.wip, '개', `평균 ${k.avgWip.toFixed(1)}`),
-      kpi('전력', k.powerKW.toFixed(0), 'kW', `${k.kwhPerUnit.toFixed(2)} kWh/개`),
+      kpi('재공 WIP', k.wip, '개', `평균 ${k.avgWip.toFixed(1)}${imp && hzWip > 0.005 ? ` · 이벤트 +${hzWip.toFixed(2)}` : ''}`),
+      kpi('전력', k.powerKW.toFixed(0), 'kW', `${k.kwhPerUnit.toFixed(2)} kWh/개${imp ? ` · 낭비 ${imp.kpi.wasteKwh.toFixed(1)}kWh` : ''}`),
       kpi('현장 인원', k.people, '명', sim.mode.key === 'dark' ? `휴머노이드 ${sim.techs.length + sim.helpers.length} · 사족보행 ${sim.quads.length}` : sim.mode.key === 'smart' ? '모니터링 중심' : '공정별 배치'),
       kpi('고장', k.failures, '회', `예지정비 ${k.pm} · 보정 ${k.cal}`),
       kpi('자재 / 완제품', `${k.raw}`, `/${RAW_CAP}`, `완제품 ${k.fg}/${FG_CAP}${sim.supplyDisrupted ? ' · <span style="color:#ff8a8a">공급 차질</span>' : ''}`),
+      // 의사결정 지원: 개선 제안이 있으면 적용 여부를 묻는다 (누르면 KPI 영향·개선 창)
+      pend.length ? `<div class="kpi wide imp-pend" data-open-impact>💡 개선 제안 ${pend.length}건 — ${best.title}${best.twin?.recommend === 'apply' ? ` (트윈 검증 UPH ${Math.round(best.twin.uphCur)} → ${Math.round(best.twin.uphCand)})` : ''} · <b>적용하시겠습니까?</b></div>` : '',
     ].join('');
     $('uphNow').textContent = num(k.uphRecent);
     $('oeeNow').textContent = pct(k.OEE);

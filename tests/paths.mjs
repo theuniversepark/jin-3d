@@ -27,7 +27,7 @@ for (const [mode, label] of [['traditional', '레거시'], ['smart', '자동화'
       for (const m of s.movers) {
         if (m.state === 'line' || m.charging) continue;
         const r = st.get(m);
-        if (!(m.steps[0]?.go && m.path?.length) || !r || Math.hypot(m.x - r.x, m.z - r.z) > 0.05) { st.set(m, { x: m.x, z: m.z, t0: t }); continue; }
+        if (!(m.steps[0]?.go && m.path?.length) || m.hzWait || !r || Math.hypot(m.x - r.x, m.z - r.z) > 0.05) { st.set(m, { x: m.x, z: m.z, t0: t }); continue; }   // 진로 이벤트로 정지 대기 중인 것은 의도된 대기 (tests/hazard.mjs)
         const d = t - r.t0; if (d > worst.d) worst = { d, who: `${m.id} [${m.task}] ← ${m.blockedOn?.id ?? '?'}` };
         // 정비실 안(대기 자리·도구 보관대)에서 정비원·정비 휴머노이드끼리 막힌 시간
         if (s.techs.includes(m) && m.z > 13 && m.z < 16.9 && m.x > 10 && m.x < 18 && s.techs.includes(m.blockedOn) && d > 3) roomWait = Math.max(roomWait, d);

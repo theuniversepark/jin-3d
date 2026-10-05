@@ -12,6 +12,8 @@ app.whenReady().then(async () => {
   await w.loadURL(`http://127.0.0.1:${port}`); await wait(3500);
   const js = (c) => w.webContents.executeJavaScript(c);
   const all = {};
+  // 기본 렌더가 Blender라 도형이 이미 바뀌어 있으면 치수를 읽을 수 없다 — 기본 도형 모델(3d)로 그린 화면에서 모은다
+  await js(`window.__twin.setRender('3d')`); await wait(1500);
   for (const mode of ['traditional', 'smart', 'dark']) {
     await js(`document.querySelector('[data-mode=${mode}]').click()`); await wait(2000);
     // 운영 중에 생기는 모델(대상물 AMR·트럭·입고 트럭 등)도 나오도록 잠시 돌린다

@@ -128,7 +128,7 @@ export class FactoryAgent {
     for (const st of s.processing) {
       if (st.def.inspect || st.request || st.state === 'DOWN' || st.state === 'MAINT') continue;
       const { cpk } = s.assess(st);
-      if (cpk >= 1.15) continue;
+      if (cpk >= (m.cpkMin ?? 1.15)) continue;   // 재보정 시작 Cpk (개선 제안으로 조정)
       if (m.key === 'dark') {
         if (s.selfCalibrate(st)) {
           this.decide('plan', `${st.name} 자율 보정`, {

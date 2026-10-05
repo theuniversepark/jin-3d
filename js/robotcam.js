@@ -45,8 +45,74 @@ export class RobotCamWall {
     r.setRenderTarget(this.rt); r.setClearColor(0x05080c, 1); r.clear(); r.setRenderTarget(prev);
   }
 
-  // ── 카메라를 단 로봇 6대 ─────────────────
+  // ── 영상 칸: 지금 이동·작업 중인 로봇 카메라를 5초마다 돌려 가며 (종류별로 섞어 8칸) ─────────────────
+  // 후보: 이동·작업 중인 정비·물류 휴머노이드 · 사족보행 · 라인 위 운반 AMR · AGV·지게차, 가동 중인 셀의 로봇(6축 손목·AMMR·휴머노이드 머리), 비행 중인 드론
+  // 카메라 시점은 로봇 정보 창과 같은 장착 위치(cameraFor). 움직이는 로봇이 없으면 기본 배치(fixedFeeds)
+  // 문제·이벤트 현장을 보는 로봇은 해결될 때까지 그 칸을 지킨다(📌) — 새 문제가 생기면 곧바로 빈 칸에 들어가고, 나머지 칸만 5초마다 돌아간다
   feeds() {
+    const ROT = 5, N = COLS * ROWS;
+    const pins = this.pinnedFeeds().slice(0, N), pinIds = pins.map((f) => f.robot).join('|');
+    const due = !this.rot || this.t - this.rot.t >= ROT || !this.rot.list.length;
+    if (!due && pinIds === this.rot.pinIds) return this.rot.list;
+    const prev = this.rot?.list ?? [], slots = new Array(N).fill(null);
+    // 1) 고정: 이미 보이던 칸은 그대로, 새로 고정할 영상은 고정 안 된 칸에
+    for (const f of pins) { const j = prev.findIndex((x) => x?.robot === f.robot); if (j >= 0 && j < N && !slots[j]) slots[j] = f; }
+    for (const f of pins) if (!slots.includes(f)) { const j = slots.findIndex((x, k) => !x && !pins.some((p) => p.robot === prev[k]?.robot)); const jj = j >= 0 ? j : slots.indexOf(null); if (jj >= 0) slots[jj] = f; }
+    // 2) 나머지 칸: 5초가 됐으면 이동·작업 중인 로봇으로 돌리고, 아니면 보이던 영상을 그대로
+    const pool = this.activePool().filter((f) => !pins.some((p) => p.robot === f.robot));
+    let cursor = this.rot?.cursor ?? 0; const shown = [];
+    for (let k = 0; k < N; k++) {
+      if (slots[k]) continue;
+      const keep = !due && prev[k] && !pins.some((p) => p.robot === prev[k].robot) && !slots.some((x) => x?.robot === prev[k].robot) ? prev[k] : null;
+      if (keep && !keep.pin) { slots[k] = keep; continue; }
+      if (pool.length) { for (let t = 0; t < pool.length; t++) { const f = pool[cursor % pool.length]; cursor++; if (!slots.some((x) => x?.robot === f.robot)) { slots[k] = f; shown.push(f); break; } } }
+    }
+    // 3) 그래도 빈 칸은 기본 배치에서 겹치지 않는 영상으로
+    for (const f of this.fixedFeeds()) { const j = slots.indexOf(null); if (j < 0) break; if (!slots.some((x) => x?.robot === f.robot)) slots[j] = f; }
+    const list = slots.filter(Boolean);
+    this.rot = { t: due ? this.t : this.rot.t, cursor: pool.length ? cursor % pool.length : 0, list, n: pool.length, pinIds };
+    return list;
+  }
+  // 문제·이벤트 현장을 보는 로봇: 현장 이벤트 대응·점검·감지, 사고·고장 현장 중계 드론, 설비 고장 수리 출동
+  pinnedFeeds() {
+    const sim = this.sim, out = [], seen = new Set();
+    const movers = [...sim.movers, ...(sim.drones ?? [])], byId = (id) => movers.find((m) => m.id === id);
+    const pin = (m, why) => { if (!m || seen.has(m.id)) return; const c = this.cameraFor({ type: 'mover', id: m.id }); if (!c) return; seen.add(m.id); out.push({ ref: { type: 'mover', id: m.id }, robot: m.id, kind: m.kind, mover: m, label: c.label, pose: c.pose, pin: why }); };
+    const open = (sim.fieldEvents ?? []).filter((e) => !e.cleared);
+    for (const ev of open) {
+      const L = FIELD_EVENTS[ev.type]?.label ?? '현장 이벤트';
+      pin(byId(ev.responder), `${L} 대응`);
+      for (const m of sim.techs) if (m.tool === 'smoke') pin(m, `${L} 소화 대기`);
+      pin(byId(ev.detectedBy), `${L} 감지`);
+    }
+    for (const q of sim.quads) if (q.scanning) pin(q, '열화상 정밀 점검');
+    for (const d of sim.drones ?? []) if (d.mission) pin(d, d.arrived ? '사고 현장 중계' : '현장 출동');
+    for (const req of sim.requests ?? []) if (req.tech && req.kind === 'repair') pin(req.tech, `${req.st.name} 고장 수리`);   // 설비 고장 수리 (계획 정비·보정은 고정하지 않음)
+    return out;
+  }
+  // 지금 이동·작업 중인 로봇 영상 후보 — 종류별로 번갈아 섞는다
+  activePool() {
+    const sim = this.sim, view = this.view, groups = new Map();
+    const add = (cat, f) => { if (!f) return; (groups.get(cat) ?? groups.set(cat, []).get(cat)).push(f); };
+    const feed = (ref, robot, kind, extra = {}) => { const c = this.cameraFor(ref); return c ? { ref, robot, kind, label: c.label, pose: c.pose, ...extra } : null; };
+    const busy = (m) => m.moving || (!m.idle && !m.chgNow && !m.charging);
+    for (const m of [...sim.techs, ...sim.helpers]) if (m.kind === 'humanoid' && busy(m)) add('humanoid', feed({ type: 'mover', id: m.id }, m.id, m.kind, { mover: m }));
+    for (const m of sim.quads) if (busy(m)) add('quadruped', feed({ type: 'mover', id: m.id }, m.id, m.kind, { mover: m }));
+    { const cs = sim.carriers.filter((m) => m.state === 'line' || m.moving), off = Math.floor(this.t / 5) * 4;   // 운반 AMR은 한 번에 4대까지 — 순환마다 다른 AMR
+      for (let k = 0; k < Math.min(4, cs.length); k++) { const m = cs[(off + k) % cs.length]; add('carrier', feed({ type: 'mover', id: m.id }, m.id, m.kind, { mover: m })); } }
+    for (const m of [...sim.vehicles, ...(sim.forklifts ?? [])]) if (busy(m)) add('vehicle', feed({ type: 'mover', id: m.id }, m.id, m.kind, { mover: m }));
+    for (const d of sim.drones ?? []) if (d.y > 0.5) add('drone', feed({ type: 'mover', id: d.id }, d.id, 'drone', { mover: d }));
+    for (const sv of view?.stationViews ?? []) {
+      const st = sv.st, rs = sv.parts.robots; if (!rs?.length || st.state !== 'BUSY') continue;
+      rs.forEach((r, idx) => add('cell', feed({ type: 'cell', stationId: st.id, idx }, st.robotUids?.[idx] ?? `${st.name} 로봇 #${idx + 1}`, r.kind, { station: st })));
+    }
+    const cats = ['cell', 'humanoid', 'carrier', 'quadruped', 'drone', 'vehicle'].filter((c) => groups.get(c)?.length), out = [];
+    for (let k = 0; out.length < [...groups.values()].reduce((a, g) => a + g.length, 0); k++) for (const c of cats) { const g = groups.get(c); if (k < g.length) out.push(g[k]); }
+    return out;
+  }
+
+  // ── 기본 배치 (움직이는 로봇이 없을 때): 카메라를 단 로봇 6대 + 드론 ─────────────────
+  fixedFeeds() {
     const sim = this.sim, view = this.view, out = [];
     // fwd: 카메라를 몸체 앞면으로 내민 거리 (자기 몸·머리가 화면을 가리지 않게)
     const mover = (m, label, h, fwd, ahead = 6, down = 0.28) => m && out.push({ ref: { type: 'mover', id: m.id }, robot: m.id, label, kind: m.kind, mover: m,
@@ -309,6 +375,7 @@ export class RobotCamWall {
       // 칸 머리: 녹화 표시·로봇·카메라·추론 정보
       g.fillStyle = 'rgba(5,8,12,0.72)'; g.fillRect(x0, y0, TW, 22);
       g.fillStyle = Math.sin(this.t * 4) > 0 ? '#ff4d4d' : '#7a2020'; g.beginPath(); g.arc(x0 + 11, y0 + 11, 5, 0, Math.PI * 2); g.fill();
+      if (f.pin) { g.fillStyle = 'rgba(255,140,40,0.85)'; g.fillRect(x0, y0 + 22, TW, 18); g.fillStyle = '#05080c'; g.font = `700 12px ${FONT}`; g.fillText(`📌 모니터링 중 · ${f.pin} · 해결 시까지`, x0 + 8, y0 + 35); }
       g.fillStyle = '#e8edf2'; g.font = `600 13px ${FONT}`; g.fillText(`${f.robot} · ${f.label}`, x0 + 22, y0 + 15);
       const lat = 14 + Math.round(hash(f.robot + Math.floor(this.t * 2)) * 12);
       g.fillStyle = '#7ff3ff'; g.font = `12px ${FONT}`; const info = `AI 추론 ${lat}ms · 객체 ${n} · ${simClock}`;
@@ -321,6 +388,10 @@ export class RobotCamWall {
       const fy = y0 + TH - 20 - (row === ROWS - 1 ? 30 : 0);   // 아래 줄은 하단 알람 띠 위로
       g.fillStyle = 'rgba(5,8,12,0.6)'; g.fillRect(x0, fy, TW, 20);
       g.fillStyle = '#cfe6f0'; g.font = `12px ${FONT}`; g.fillText(`작업: ${task}`.slice(0, 48), x0 + 8, fy + 14);
+      { // 칸 바닥 오른쪽: 고정(문제·이벤트 해결 시까지) 또는 5초 순환 남은 시간
+        const tag = f.pin ? '📌 해결 시까지 유지' : this.rot?.n ? `🔄 ${Math.max(0, Math.ceil(5 - (this.t - this.rot.t)))}s · 순환 ${this.rot.n}대` : '';
+        if (tag) { g.fillStyle = f.pin ? '#ffb35a' : '#7ff3ff'; g.font = `11px ${FONT}`; g.fillText(tag, x0 + TW - g.measureText(tag).width - 8, fy + 14); }
+      }
       // 이 로봇과 관련된 알람 배너
       const mine = alarms.filter((a) => (a.m && a.m === f.mover) || (a.at && (a.at === f.station || (f.mover?.lineInfo?.station === a.at.id))) || (a.ev && (a.ev.detectedBy === f.robot || a.ev.responder === f.mover?.id)));
       mine.slice(0, 2).forEach((a, k) => {

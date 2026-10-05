@@ -1,4 +1,5 @@
 // 제조 라인 시뮬레이션 엔진 — 렌더링과 분리되어 있어 헤드리스(고속 비교) 실행이 가능하다.
+import { ImpactTracker } from './impact.js';
 import { CommandCenter } from './commands.js';
 import { TruckYard, planForklift, YARD } from './shipping.js';
 import { InboundYard, planReceiver, WH, INBOUND } from './receiving.js';
@@ -55,10 +56,10 @@ export const MODES = {
 
 // 현장 이벤트 (피지컬AI 단계: 로봇 카메라 영상의 AI 추론으로 감지 → 자율 대응)
 export const FIELD_EVENTS = {
-  leak:      { label: '바닥 누유', cls: '누유', severity: 'alarm', response: 'clean', task: '누유 흡착·세척' },
-  debris:    { label: '바닥 이물질', cls: '이물질', severity: 'warn', response: 'clean', task: '이물질 수거' },
-  intrusion: { label: '안전구역 무단 진입', cls: '사람', severity: 'alarm', response: 'safety', task: '' },
-  smoke:     { label: '연기 의심', cls: '연기', severity: 'alarm', response: 'inspect', task: '열화상 정밀 점검' },
+  leak:      { label: '바닥 누유', cls: '누유', severity: 'alarm', response: 'clean', task: '누유 흡착·세척', radius: 1.3 },
+  debris:    { label: '바닥 이물질', cls: '이물질', severity: 'warn', response: 'clean', task: '이물질 수거', radius: 1.0 },
+  intrusion: { label: '안전구역 무단 진입', cls: '사람', severity: 'alarm', response: 'safety', task: '', radius: 2.2 },
+  smoke:     { label: '연기 의심', cls: '연기', severity: 'alarm', response: 'inspect', task: '열화상 정밀 점검', radius: 1.8 },
 };
 
 // 정비실 도구 세트 — 정비원·정비 휴머노이드가 상황에 맞는 도구를 정비실에서 챙겨 출동하고, 처리 후 반납한다
@@ -93,7 +94,7 @@ function toolSteps(sim, m, kit, inc) {
   const spot = toolSpot(kit), door = { x: ROOM_IN_X, z: ROOM_FRONT_Z, aisle: 'F', name: '정비실 앞 (들어가는 줄)' }, K = TOOL_KITS[kit];
   // 같은 보관대를 다른 사람이 쓰고 있거나 그리로 가는 중이면 들어가기 전 자리(충전 도크·정비실 앞)에서 기다린다 — 정비실 안쪽 줄에 서서 동료 길을 막지 않게
   const near = (o, p, r) => Math.hypot(o.x - p.x, o.z - p.z) < r;
-  const free = () => !sim.movers.some((o) => o !== m && (o.kind === 'humanoid' || o.kind === 'human') && (near(o, spot, 1.2) || (o.steps[0]?.go && near(o.steps[0].go, spot, 0.1))));
+  const free = () => !sim.movers.some((o) => o !== m && (o.kind === 'humanoid' || o.kind === 'human') && ((near(o, spot, 1.0) && !o.chgNow && !(o.idle && near(o, o.home, 0.3))) || (o.steps[0]?.go && near(o.steps[0].go, spot, 0.1))));   // 자기 충전 도크에 선 동료는 보관대를 쓰는 것이 아니다
   const wait = { until: free, task: `${K.label} 보관대 차례 대기` };
   const walkIn = inTechRoom(m) ? roomWalk(m, spot) : [{ go: door }, ...roomWalk(door, spot)];
   const exit = [{ go: { x: ROOM_OUT_X, z: ROOM_IN_Z, aisle: 'F', name: '정비실 안' }, via: [] }, { go: { x: ROOM_OUT_X, z: ROOM_FRONT_Z, aisle: 'F', name: '정비실 앞 (나오는 줄)' }, via: [] }];   // 보관대 → 나오는 줄 → 정비실 앞
@@ -252,7 +253,7 @@ export class Mover {
       return true;
     }
     // 할 일 없이 섰거나, 제자리에서 일하는 중(점검·대기·작업 — 이동 단계가 아님)인 상대가 내 목적지가 아닌 길을 막으면 1.5초 뒤 옆으로 돌아간다
-    const parked = b.idle || (!b.moving && !b.steps[0]?.go);
+    const parked = b.idle || (!b.moving && !b.steps[0]?.go) || !!b.hzWait;   // 진로 이벤트로 멈춰 기다리는 이동체도 정지 장애물로 보고 돌아간다
     // 내 목적지에서 다른 이동체가 일하고 있으면(같은 현장에 함께 출동 등) 그 바로 옆에서 멈춘 것으로 본다
     if (parked && atDest && !b.idle && Math.hypot(this.x - end.x, this.z - end.z) < moverRadius(this) + moverRadius(b) + 0.9) { this.path = [{ x: this.x, z: this.z }]; this.blockedOn = null; this.blockT = 0; return false; }
     if (parked && !atDest && this.blockT > 1.5) {
@@ -280,6 +281,7 @@ export class Mover {
       if (this.kind === 'forklift' && !this.receiver && this.loc?.aisle && AISLE[this.loc.aisle] != null) this.heading = this.loc.name === '충전소' ? Math.PI / 2 : this.loc.z > AISLE[this.loc.aisle] ? 0 : Math.PI;
       return;
     }
+    if (!st.go && this.hazardOut?.(this)) return this.update(dt);   // 서서 일하던 자리에 현장 이벤트가 나면 반경 밖으로 비켜섰다가 해결 뒤 돌아와 이어 한다
     if (st.go) {
       if (!this.path) {
         this.path = st.via ? [...st.via, st.go].map((p) => ({ x: p.x, z: p.z })) : route(this.loc, st.go, this);
@@ -301,6 +303,7 @@ export class Mover {
           }
         }
       }
+      if (this.hazard?.(this, st)) { this.wantDir = null; return; }   // 진로 위 현장 이벤트: 우회하거나 해결될 때까지 정지 대기 (sim.moverHazard)
       let rem = this.speed * dt, checked = false;
       while (rem > 0 && this.path.length) {
         const p = this.path[0];
@@ -353,7 +356,8 @@ export class Simulation {
     this.releaseTimer = 0; this.releaseHold = false; this.releaseInterval = m.releaseInterval;
     this.powerKW = 0;
     this.requests = [];
-    this.orch = new Orchestrator(this); this.cmd = new CommandCenter(this);   // 공장 오케스트레이터 (인시던트 보고·판단·명령)
+    this.orch = new Orchestrator(this); this.cmd = new CommandCenter(this);
+    this.impact = new ImpactTracker(this);   // 이벤트·문제 → UPH·OEE·WIP·POWER 영향 분석 · 개선 제안 · 의사결정 지원 (impact.js)   // 공장 오케스트레이터 (인시던트 보고·판단·명령)
 
     this.line = opts.line ?? DEFAULT_LINE;
     const defs = buildStationDefs(this.line, modeKey);
@@ -458,7 +462,7 @@ export class Simulation {
     // 충돌 회피: 모든 이동체가 서로를 감지한다 (우선순위: 운반 중 AMR·AGV > 정비 > 기타)
     this.movers = [...this.carriers, ...this.vehicles, ...this.forklifts, ...this.techs, ...this.helpers, ...this.quads, ...this.workers];
     const prio = { carrier: 5, agv: 4, forklift: 4, humanoid: 3, human: 3, robot: 3, quadruped: 1, worker: 2 };
-    this.movers.forEach((m, i) => { m.prio = (prio[m.kind] ?? 1) * 100 - i; m.sense = this.sense; });
+    this.movers.forEach((m, i) => { m.prio = (prio[m.kind] ?? 1) * 100 - i; m.sense = this.sense; m.hazard = this.moverHazard; m.hazardOut = this.hazardOut; });
     // 휴머노이드 충전 도크(대기 자리 뒤 기둥·바닥 판)는 움직이지 않는 장애물 — 다른 이동체는 서 있는 로봇처럼 돌아가고, 도크 주인은 자기 도크를 무시한다
     this.docks = this.movers.filter((m) => m.kind === 'humanoid' && m.home?.heading != null).map((m) => ({
       id: `${m.id} 충전 도크`, kind: 'dock', owner: m, x: m.home.x - Math.sin(m.home.heading) * 0.2, z: m.home.z - Math.cos(m.home.heading) * 0.2,
@@ -744,12 +748,109 @@ export class Simulation {
   hasSpace(c) { return !c.items.length || c.items[c.items.length - 1].s >= c.spacing; }
   frontReady(c) { return c.items.length && c.items[0].s >= c.len - 1e-6; }
   updateConveyor(c, dt) {
-    const it = c.items;
+    const it = c.items, hz = this.useAMR && this.openHazards().length;
     for (let i = 0; i < it.length; i++) {
-      const lim = i === 0 ? c.len : it[i - 1].s - c.spacing;
+      let lim = i === 0 ? c.len : it[i - 1].s - c.spacing;
+      // 운반 AMR(라인 위 고정 경로): 앞 2.5m에 현장 이벤트가 있으면 그 앞에서 정지 — 해결되면 이어서 간다 (처음 마주친 AMR이 상위 보고)
+      if (hz) {
+        const who = it[i].item.carrier?.id ?? `대상물 #${it[i].item.id}`;
+        let stopAt = null;
+        for (let d = 0.3; d <= 2.5 && it[i].s + d <= c.len + 1e-6 && stopAt == null; d += 0.25) { const p = pointAt(c.path, it[i].s + d); const ev = this.hazardAt(p.x, p.z, 0.55); if (ev) { stopAt = it[i].s; this.reportHazard(who, ev, 'wait'); } }
+        if (stopAt != null) { lim = Math.min(lim, stopAt); it[i].hzWait = true; it[i].hzEv = this.hazardAt(pointAt(c.path, Math.min(c.len, it[i].s + 1)).x, pointAt(c.path, Math.min(c.len, it[i].s + 1)).z, 2.6) ?? it[i].hzEv; }
+        else if (it[i].hzWait) { it[i].hzWait = false; this.hazardResumed(who); }
+      }
       it[i].s = Math.min(it[i].s + c.speed * dt, Math.max(lim, it[i].s));
     }
   }
+
+  // ── 진로 위 현장 이벤트 (해결 전): 이동체는 우회하거나 정지 대기하고, 처음 마주친 이동체가 오케스트레이터에 보고한다 ─────────────────
+  openHazards() { return (this.fieldEvents ?? []).filter((e) => !e.cleared); }
+  hazardAt(x, z, pad = 0) { for (const ev of this.openHazards()) if (Math.hypot(x - ev.x, z - ev.z) < (FIELD_EVENTS[ev.type]?.radius ?? 1.2) + pad) return ev; return null; }
+  reportHazard(who, ev, mode) {
+    (ev.affected ??= new Map());
+    if (ev.affected.get(who) === mode) return;
+    const first = !ev.affected.size; ev.affected.set(who, mode);
+    if (!ev.detected) this.detectFieldEvent(ev, who, 0.88);   // 진로 센서·카메라로 처음 발견 → 인시던트 열림
+    const inc = ev.inc ?? this.orch.find(`ev:${ev.id}`), L = FIELD_EVENTS[ev.type]?.label ?? '현장 이벤트';
+    const text = `${who} 진로에 ${L} — ${mode === 'detour' ? '우회 경로로 돌아감' : '해결될 때까지 정지 대기'}`;
+    if (inc?.status === 'open') ev.reported = (ev.reported ?? 0) + 1;
+    if (inc) this.orch.step(inc, 'field', 'report', `${text} (상위 보고${first ? '' : ` · 영향 ${ev.affected.size}대`})`);
+    this.log('warn', `진로 이벤트 · ${who}`, { obs: `${L} · x ${ev.x.toFixed(1)}, z ${ev.z.toFixed(1)}`, act: mode === 'detour' ? '우회' : '정지 대기 (해결 시 재개)' });
+    this.stats.hazardReports = (this.stats.hazardReports ?? 0) + 1;
+  }
+  hazardResumed(who) { this.log('ok', `진로 정상화 · ${who}`, { act: '현장 이벤트 해결 확인 · 이동 재개' }); this.stats.hazardResumes = (this.stats.hazardResumes ?? 0) + 1; }
+  hazardInvolved(m, ev) { return ev.responder === m.id || !!m.tool || !!m.scanning; }
+  hazardOut = (m) => {
+    if (m.state === 'line' || m.kind === 'carrier') return false;
+    for (const ev of this.openHazards()) {
+      const R = (FIELD_EVENTS[ev.type]?.radius ?? 1.2) + moverRadius(m) * 0.8, dx = m.x - ev.x, dz = m.z - ev.z, dd = Math.hypot(dx, dz);
+      if (dd >= R || this.hazardInvolved(m, ev)) continue;
+      const base = dd > 0.05 ? Math.atan2(dz, dx) : 0;
+      for (const da of [0, 0.5, -0.5, 1, -1, 1.6, -1.6, Math.PI]) {
+        const r = R + 0.4, esc = { x: ev.x + Math.cos(base + da) * r, z: ev.z + Math.sin(base + da) * r };
+        if (!(esc.x > -50.2 && esc.x < 36.8 && Math.abs(esc.z) < 19) || m.dockAt?.(esc, m)) continue;
+        const aisle = m.loc?.aisle;
+        m.steps.unshift({ go: { ...esc, aisle, name: '이벤트 반경 밖' }, via: [] }, { go: { x: m.x, z: m.z, aisle, name: m.loc?.name ?? '작업 자리' }, via: [] });
+        this.reportHazard(m.id, ev, 'detour');
+        return true;
+      }
+    }
+    return false;
+  };
+  // 이동체: 앞 3m 경로가 해결 안 된 현장 이벤트 반경에 들면 — 우회 경로를 찾으면 돌아가고, 없으면 정지 대기(true)
+  moverHazard = (m, st) => {
+    const evs = this.openHazards();
+    if (!evs.length) { if (m.hzWait) { m.hzWait = null; this.hazardResumed(m.id); } return false; }
+    const R = (ev) => (FIELD_EVENTS[ev.type]?.radius ?? 1.2) + moverRadius(m) * 0.8;
+    // 그 이벤트에 대응하러 가는 중(도구 챙긴 정비 휴머노이드·점검 사족보행)이면 피하지 않는다 — 목적지가 반경 안인 다른 일은 반경 밖에서 해결을 기다린다
+    const goingTo = (ev) => this.hazardInvolved(m, ev) && Math.hypot(st.go.x - ev.x, st.go.z - ev.z) < R(ev) + 1.8;
+    // 이미 반경 안(이벤트가 바로 옆에서 발생)이면 그 자리에서 기다리지 않고 반경 밖으로 먼저 빠져나온다
+    if (m.hzEsc && m.path?.[0] === m.hzEsc) return false;
+    m.hzEsc = null;
+    const okPt = (p) => p.x > -50.2 && p.x < 36.8 && Math.abs(p.z) < 19 && !this.stations.some((s2) => Math.abs(p.x - s2.x) < 2.6 && Math.abs(p.z - (s2.z ?? 0)) < 2.6) && !m.dockAt?.(p, m);
+    for (const ev of evs) {
+      const dx = m.x - ev.x, dz = m.z - ev.z, dd = Math.hypot(dx, dz);
+      if (goingTo(ev) || dd >= R(ev)) continue;
+      const base = dd > 0.05 ? Math.atan2(dz, dx) : Math.atan2(-(m.z - (m.path?.[0]?.z ?? m.z)), m.x - (m.path?.[0]?.x ?? m.x) || 1);
+      for (const da of [0, 0.5, -0.5, 1, -1, 1.6, -1.6, Math.PI]) {
+        const r = R(ev) + 0.4, esc = { x: ev.x + Math.cos(base + da) * r, z: ev.z + Math.sin(base + da) * r };
+        if (!okPt(esc)) continue;
+        m.hzEsc = esc; m.path = [esc, ...(m.path ?? [])];
+        this.reportHazard(m.id, ev, 'detour');
+        return false;
+      }
+    }
+    const pts = [{ x: m.x, z: m.z }, ...(m.path ?? [])];
+    let hit = null, acc = 0;
+    for (let k = 0; k + 1 < pts.length && acc < 3 && !hit; k++) {
+      const a = pts[k], b = pts[k + 1], L = Math.hypot(b.x - a.x, b.z - a.z);
+      for (let t = 0; t <= L && acc + t <= 3; t += 0.25) { const x = a.x + (b.x - a.x) * (t / (L || 1)), z = a.z + (b.z - a.z) * (t / (L || 1)); for (const ev of evs) if (!goingTo(ev) && Math.hypot(x - ev.x, z - ev.z) < R(ev)) { hit = { ev, k, dir: { x: (b.x - a.x) / (L || 1), z: (b.z - a.z) / (L || 1) } }; break; } if (hit) break; }
+      acc += L;
+    }
+    if (!hit) { if (m.hzWait) { m.hzWait = null; this.hazardResumed(m.id); } return false; }
+    const ev = hit.ev;
+    if (m.hzWait?.ev === ev) return true;
+    // 우회: 이벤트 반경 밖 양옆 두 점(앞·뒤)으로 돌아 원래 길에 다시 오른다 — 셀·충전 도크·건물 밖이면 반대쪽, 둘 다 안 되면 대기
+    if (m.kind !== 'carrier' || m.state === 'return') {
+      m.hzTried ??= new Set();
+      if (!m.hzTried.has(ev.id)) {
+        m.hzTried.add(ev.id);
+        const d = hit.dir, n = { x: -d.z, z: d.x }, r = R(ev) + 0.7, ok = okPt;
+        for (const sg of [1, -1]) {
+          const before = { x: ev.x - d.x * r + n.x * sg * r, z: ev.z - d.z * r + n.z * sg * r }, after = { x: ev.x + d.x * r + n.x * sg * r, z: ev.z + d.z * r + n.z * sg * r };
+          if (!ok(before) || !ok(after)) continue;
+          // 이벤트 반경 안에 있던 경유점은 버리고(목적지는 그대로) 우회 두 점을 앞에 넣는다
+          const rest = (m.path ?? []).filter((p, i, arr) => i === arr.length - 1 || Math.hypot(p.x - ev.x, p.z - ev.z) > R(ev) + 0.3);
+          const ahead = rest.findIndex((p) => (p.x - ev.x) * d.x + (p.z - ev.z) * d.z > 0);
+          m.path = [before, after, ...(ahead >= 0 ? rest.slice(ahead) : rest.slice(-1))];
+          this.reportHazard(m.id, ev, 'detour');
+          return false;
+        }
+      }
+    }
+    m.hzWait = { ev }; this.reportHazard(m.id, ev, 'wait');
+    return true;
+  };
 
   wip() {
     let n = 0;
@@ -820,6 +921,7 @@ export class Simulation {
     }
     this.accountEnergy(dt);
     this.stats.wipInt += this.wip() * dt;
+    this.impact.tick(dt);
     if (this.time - this.lastHist >= 20) {
       this.lastHist = this.time;
       const k = this.kpi();
@@ -1533,6 +1635,7 @@ export class Simulation {
       powerKW: this.powerKW, failures: s.failures, pm: s.pm, cal: s.cal, rejected: s.rejected, escaped: s.escaped,
       ppm: out ? (s.escaped / out) * 1e6 : 0, people: this.peopleOnSite(), shipped: s.shipped,
       raw: this.rawStock, fg: this.fgStock,
+      impact: this.impact?.report(0),   // 원인별 손실: UPH·OEE(%p)·WIP·전력 (impact.js)
     };
   }
 }

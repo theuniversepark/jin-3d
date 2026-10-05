@@ -1135,8 +1135,10 @@ function buildScrew(g, st) {
   // 너트러너 문형은 대상물(셀 중앙) 바로 위 — 기둥은 양쪽 로봇 팔 작업 범위(x<-0.3) 밖
   for (const z of [-1.1, 1.1]) put(box(0.12, 2.6, 0.12, MAT.steel), 0.15, 1.45, z, g);
   put(box(0.2, 0.2, 2.4, MAT.steel), 0.15, 2.75, 0, g);
+  put(box(0.24, 0.34, 0.24, MAT.dark), 0.15, 2.75, 0, g);                 // Z축 가이드 블록 (빔에 고정)
   const head = put(new THREE.Group(), 0.15, 2.3, 0, g);
   put(box(0.3, 0.35, 0.3, MAT.accent), 0, 0.1, 0, head);
+  put(box(0.08, 1.25, 0.08, MAT.steel), 0, 0.8, 0, head);                // Z축 봉 — 가장 낮게(1.95m) 내려와도 윗끝(3.3m)이 빔·가이드 블록 안에 남는다
   const bit = put(cyl(0.035, 0.05, 0.55, MAT.steel, 10), 0, -0.3, 0, head);
   const feeders = [];
   for (const z of [-1.0, 1.0]) {
@@ -1154,8 +1156,9 @@ function buildScrew(g, st) {
 function buildFasten(g, st) {
   for (const z of [-1.3, 1.3]) put(box(0.18, 3.0, 0.18, MAT.dark), 0.2, 1.6, z, g);
   put(box(0.3, 0.3, 2.8, MAT.dark), 0.2, 3.1, 0, g);
+  put(cyl(0.18, 0.18, 0.42, MAT.dark, 20), 0.2, 3.1, 0, g);              // 승강축 가이드 슬리브 (빔에 고정)
   const head = put(new THREE.Group(), 0.2, 2.4, 0, g);
-  put(cyl(0.12, 0.12, 0.9, MAT.steel), 0, 0.45, 0, head);
+  put(cyl(0.12, 0.12, 1.45, MAT.steel), 0, 0.72, 0, head);               // 승강축 — 가장 낮게(1.95m) 내려와도 윗끝(3.4m)이 빔·슬리브 안에 남는다
   const disc = put(cyl(0.45, 0.45, 0.22, MAT.accent, 24), 0, 0, 0, head);
   const spindles = [];
   for (let i = 0; i < 6; i++) {
