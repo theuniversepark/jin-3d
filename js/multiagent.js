@@ -65,7 +65,7 @@ export class HybridAgent extends FactoryAgent {
   }
   // 현장 보고 → 해당 도메인 에이전트 제안 (메인 조정자가 판정). 이미 처리 중·같은 제안이 대기 중이면 받지 않는다
   report(p) {
-    if (!this.m.agentActive || this.llm) return false;
+    if (!this.m.agentActive) return false;
     const st = p.st;
     if (st && (st.request || st.state === 'DOWN' || st.state === 'MAINT')) return true;
     const key = `${p.kind}:${st?.id ?? ''}`;
@@ -82,7 +82,6 @@ export class HybridAgent extends FactoryAgent {
     this.logistics();
     if (!this.m.agentActive) return;
     this.energy(); this.fleet(); this.wipReflex();
-    if (this.llm) { this.summary(); return; }   // 대화 기반: 감독 판단은 Claude (단일 에이전트와 같게)
     // ② 도메인 에이전트: 각자 주기로 제안
     const t = this.sim.time;
     for (const a of this.agents) {

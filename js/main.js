@@ -362,7 +362,7 @@ function setArch(arch) {
   agentArch = arch; archPref[modeKey] = arch;
   if (arch === 'single') sim.agentHub = null;   // 순찰 보고를 다시 바로 처리
   const old = agent, nu = arch === 'hybrid' ? new HybridAgent(sim) : new FactoryAgent(sim);
-  for (const k of ['decisions', 'byCat', 'history', 'cool', 'boosted', 'disruptHandled', 'supplyWait', 'llm', 'lastThought']) nu[k] = old[k];
+  for (const k of ['decisions', 'byCat', 'history', 'cool', 'boosted', 'disruptHandled', 'supplyWait', 'lastThought']) nu[k] = old[k];
   agent = nu; llm.agent = agent; ui.agent = agent;   // 대화 기록은 그대로 (llm.attach는 기록을 비움)
   document.querySelectorAll('#archSeg button').forEach((b) => b.classList.toggle('on', b.dataset.arch === arch));
   sim.log('info', `에이전트 구조 전환 · ${arch === 'hybrid' ? '혼합형 다중 에이전트' : '단일 자율 에이전트'}`, { act: arch === 'hybrid' ? '반사 계층(배차·절전·충전·투입 보류) + 정비·품질·흐름 에이전트 제안 → 메인 조정자 판정' : '정비·품질·흐름·물류·에너지·충전 모듈이 바로 판단·실행' });

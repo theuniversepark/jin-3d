@@ -18,7 +18,6 @@ export class FactoryAgent {
     this.supplyWait = 0;
     this.boosted = null;
     this.disruptHandled = 0;
-    this.llm = false;   // true면 감독 판단(정비·품질·흐름)을 Claude에 위임하고 반사 계층만 수행
     this.lastThought = '라인 상태 학습 중…';
   }
 
@@ -47,11 +46,9 @@ export class FactoryAgent {
   think() {
     this.logistics();
     if (!this.m.agentActive) return;
-    if (!this.llm) {
-      this.maintenance();
-      this.quality();
-      this.flowControl();
-    }
+    this.maintenance();
+    this.quality();
+    this.flowControl();
     this.energy();
     this.fleet();
     this.summary();

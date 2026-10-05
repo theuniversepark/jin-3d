@@ -42,10 +42,9 @@ export class LLMController {
     this.setEnabled(this.enabled && sim.mode.agentActive);
   }
 
-  // 대화 기반은 Claude 연결 없이도 쓸 수 있다 (내장 해석기). 운영 판단은 언제나 추론 기반 에이전트가 한다
+  // 대화 기반은 Claude 연결 없이도 쓸 수 있다 (내장 해석기). 운영 판단은 언제나 추론 기반 에이전트가 한다 — Claude는 운영자 지시 해석에만 쓴다
   setEnabled(on) {
     this.enabled = !!(on && this.sim?.mode.agentActive);
-    if (this.agent) this.agent.llm = false;
     this.onChange?.();
   }
 
