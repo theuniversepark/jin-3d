@@ -1295,7 +1295,7 @@ function renderAios(force) {
   const stage = (ic, title, val, sub, on) => `<div class="vs aios ${on ? 'on' : ''}"><i>${ic}</i><b>${title}</b><span>${val}</span><small>${sub}</small></div>`;
   const ph = { train: (x) => `학습 ${x.epoch}/${x.epochs}`, twin: () => '트윈 검증', shadow: () => '섀도 모드', verify: () => '적용 · 효과 확인', done: () => '배포 완료', rejected: () => '배포 안 함', rollback: () => '롤백' };
   const S = P.samples.slice(-8).reverse(), shared = !!window.JIN3D_SHARED;
-  const dirTxt = `…/${(aiosDir?.dir ?? 'data/aios').split(/[\\/]/).slice(-2).join('/')}/*.zip`;
+  const dirTxt = `…/${(aiosDir?.dir ?? 'data/aios').split(/[\\/]/).slice(-2).join('/')}/*.zip · 보관 최근 ${(aiosDir?.keep ?? 1008).toLocaleString('ko-KR')}묶음 · 최대 ${((aiosDir?.maxBytes ?? 1073741824) / 1073741824).toFixed(0)}GB (오래된 것부터 정리)`;
   setHTML(aiosBody, `
     <div class="vla-flow">
       ${stage('🏭', '1 현장 데이터 수집', `샘플 ${P.total}개 · ${AIOS_SAMPLE_S}초 주기`, '생산·설비·물류(AMR·AGV)·에너지·품질 + 인시던트·운영 의사결정', true)}<b class="va">›</b>

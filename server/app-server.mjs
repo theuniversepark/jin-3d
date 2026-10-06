@@ -173,15 +173,25 @@ async function saveAios(req, res, url) {
     const dir = path.join(DATA_DIR(), 'aios');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${id}.zip`), buf);
-    return send(res, 200, { ok: true, bytes: buf.length });
+    return send(res, 200, { ok: true, bytes: buf.length, pruned: pruneAios() });
   } catch (e) { return send(res, 400, { error: e.message }); }
+}
+// AIOS 운영 데이터 보관 한도: 최근 1,008묶음(10분 묶음 7일 · JIN3D_AIOS_KEEP), 전체 1GB(JIN3D_AIOS_MAX_MB) — 넘으면 오래된 것부터 지운다
+export const AIOS_KEEP = () => Number(process.env.JIN3D_AIOS_KEEP) || 1008;
+export const AIOS_MAX_BYTES = () => (Number(process.env.JIN3D_AIOS_MAX_MB) || 1024) * 1024 * 1024;
+export function pruneAios() {
+  const dir = path.join(DATA_DIR(), 'aios'); let n = 0, files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.zip')).map((f) => { const st = fs.statSync(path.join(dir, f)); return { f, t: st.mtimeMs, b: st.size }; }).sort((a, b) => a.t - b.t); } catch { return 0; }
+  let total = files.reduce((a, x) => a + x.b, 0), left = files.length;
+  for (const x of files) { if (left <= AIOS_KEEP() && total <= AIOS_MAX_BYTES()) break; fs.rmSync(path.join(dir, x.f), { force: true }); total -= x.b; left--; n++; }
+  return n;
 }
 // GET /api/aios → 저장된 운영 데이터 묶음 수·용량
 function listAios(res) {
   const dir = path.join(DATA_DIR(), 'aios');
   let files = [];
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.zip')); } catch { /* 아직 없음 */ }
-  return send(res, 200, { dir, count: files.length, bytes: files.reduce((a, f) => a + fs.statSync(path.join(dir, f)).size, 0) });
+  return send(res, 200, { dir, count: files.length, bytes: files.reduce((a, f) => a + fs.statSync(path.join(dir, f)).size, 0), keep: AIOS_KEEP(), maxBytes: AIOS_MAX_BYTES() });
 }
 
 // 키를 바꾸면 클라이언트를 새로 만든다. 빈 값이면 환경변수(ANTHROPIC_API_KEY 등)로 되돌아간다.
@@ -302,6 +312,6 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, host, () => { setTimeout(() => { try { pruneEpisodes(null, true); } catch { /* 무시 */ } }, 3000); resolve({ server, port: server.address().port }); });   // 시작 3초 뒤 쌓여 있던 에피소드 정리
+    server.listen(port, host, () => { setTimeout(() => { try { pruneEpisodes(null, true); pruneAios(); } catch { /* 무시 */ } }, 3000); resolve({ server, port: server.address().port }); });   // 시작 3초 뒤 쌓여 있던 에피소드·AIOS 데이터 정리
   });
 }
