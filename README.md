@@ -234,6 +234,7 @@ AMR이 구분 적재장 입구(경로 끝)에서 **가운데 정지 구간까지
 - **기준 시계**: 공장 전체가 하나의 시계를 씁니다. 시뮬레이션 0초 = 시작일 08:00(현지) 기준이고, 모든 운영 데이터·이벤트·OPC UA 메시지·저장 파일의 시각이 이 시계의 ISO 8601 UTC 값입니다. 상단 시계에 마우스를 올리면 UTC 기준 시각이 보입니다.
 - **이동 로봇 전송 경로 (Private 5G)**: AMR·AGV·자율 지게차·휴머노이드·사족보행·드론·AMMR의 AAS·OPC UA 메시지는 그 로봇의 5G 모뎀 → Private 5G 업링크 → 5GC UPF → MQTT 브로커로 갑니다(DAPS 핸드오버로 끊김·유실 0, 아래 'Private 5G 특화망'). 설비·셀처럼 고정된 자산은 유선(공장 LAN)입니다.
 - **수집**: 수집 주기(기본 10초, 시뮬레이션 시간)마다 모든 자산의 값을 한 시각으로 묶어 기록하고, 운영 로그는 발생 시각 그대로 이벤트로 기록합니다. 최근 6000회차를 보관합니다.
+- **AAS 스키마 설계 기준**: 어떤 규격·기준으로 서브모델과 속성을 정했는지, 한계와 다음 단계는 [docs/AAS_SCHEMA.md](docs/AAS_SCHEMA.md)에 정리했습니다.
 - **AAS 모델** (IDTA Part 1 메타모델 — 기본 **v3.1**, 저장 옵션 v3.0): 자산마다 AAS 하나 — 라인, 설비·셀, 셀 로봇(관절·TCP), 운반 AMR, AGV/지게차, 휴머노이드, 사족보행, 정비로봇. 서브모델은 Nameplate · TechnicalData · OperationalData(실시간 값) · TimeSeries(IDTA 02008). 제조사명은 "Jin-3D 가상 자산"입니다.
 - **OPC UA PubSub over MQTT** (OPC UA Part 14, JSON 인코딩, MQTT 전송): 서버에 내장 MQTT 브로커(aedes)가 `mqtt://127.0.0.1:1883`에서 실행됩니다.
   - 데이터: `opcua/json/data/jin3d/MetaFactory/<자산 id>` — NetworkMessage(`ua-data`) 안의 DataSetMessage(`ua-keyframe`), 필드마다 `Value`·`SourceTimestamp`
