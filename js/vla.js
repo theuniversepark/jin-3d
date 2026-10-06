@@ -24,7 +24,10 @@ const MOBILE_JOINTS = [
   { name: '왼고관절', unit: 'rad' }, { name: '왼무릎', unit: 'rad' }, { name: '오른고관절', unit: 'rad' }, { name: '오른무릎', unit: 'rad' },
   { name: '베이스 x', unit: 'mm' }, { name: '베이스 z', unit: 'mm' }, { name: '베이스 방향', unit: 'rad' },
 ];
-const MOBILE_MAX_S = 180, MOBILE_FRAME_S = 2;   // 이동 휴머노이드 에피소드: 최대 3분 · 카메라 프레임 2초마다(단계가 바뀔 때도)
+const MOBILE_MAX_S = 180, MOBILE_FRAME_S = 2;   // 이동 휴머노이드 에피소드: 최대 3분 · 카메라 프레임 2초마다(단계가 바뀔 때도) — 사진(JPEG) 방식
+// 영상(MP4) 방식 (서버 ffmpeg가 있을 때 — 맥 앱): 카메라 프레임을 스텝마다 캡처해 에피소드가 끝나면 카메라별 H.264 MP4로 묶는다
+// 셀 로봇 5fps(스텝마다) · 이동 휴머노이드 2.5fps(2스텝마다, 에피소드가 길어서). 스텝은 {영상 경로, 타임스탬프}로 영상 프레임을 가리킨다 (LeRobot 형식)
+export const VIDEO_FPS = { cell: EP_HZ, mobile: EP_HZ / 2 };
 const two = (n, w = 6) => String(n).padStart(w, '0');
 
 // VLA 6축 로봇의 작업 단계 (factory.animVLA 키프레임과 같은 구간)
@@ -41,7 +44,7 @@ function instruction(st, kind, product, color, lead = true) {
 
 // ── 에피소드 기록기 (3D 화면 쪽: 관절값·카메라는 화면 모델에서 읽는다) ─────────────────
 export class EpisodeRecorder {
-  constructor(view, camWall, hub) { this.view = view; this.camWall = camWall; this.hub = hub; this.server = false; this.onEpisode = null; }
+  constructor(view, camWall, hub) { this.view = view; this.camWall = camWall; this.hub = hub; this.server = false; this.video = false; this.onEpisode = null; }   // video: 서버 ffmpeg로 MP4 (main.js가 /api/status로 켬)
   attach(sim) {
     this.sim = sim; this.on = sim.mode.key === 'dark';
     this.byRobot = new Map(); this.rec = new Map(); this.seq = 0; this.total = 0; this.uploaded = 0; this.bytes = 0; this.captureQ = [];
@@ -70,7 +73,7 @@ export class EpisodeRecorder {
   // 카메라 프레임 요청: 카메라가 여럿이면(휴머노이드·AMMR) 네 시점을 같은 시각으로 함께
   queueFrames(rec, step, ref, cams) {
     if (cams) rec.multiCam = true;
-    if (this.captureQ.length > 48) { this.skipped = (this.skipped ?? 0) + 1; return; }   // 빠른 배속 등으로 캡처가 밀리면 이번 프레임은 건너뛴다 (없는 영상 파일을 가리키지 않게)
+    if (this.captureQ.length > (this.video ? 160 : 48)) { this.skipped = (this.skipped ?? 0) + 1; return; }   // 빠른 배속 등으로 캡처가 밀리면 이번 프레임은 건너뛴다 (없는 영상 파일을 가리키지 않게)
     const n = two(rec.nFrame = (rec.nFrame ?? -1) + 1, 3);
     if (!cams) { const fname = `frame_${n}.jpg`; step.frame = fname; this.captureQ.push({ rec, fname, ref, t: step.t }); return; }
     step.frames = {};
@@ -109,7 +112,7 @@ export class EpisodeRecorder {
         const phase = r.vla ? phaseOf(u) : ammrPhase(st.ammr?.[i]);
         const grip = r.vla ? (r.vla.held.visible ? 1 : 0) : st.ammr?.[i]?.carry ? 1 : 0;
         const step = { i: rec.steps.length, t: Math.round((t - rec.t0) * 1000) / 1000, ts: this.hub.iso(t), state: q, tcp_mm: tcp, gripper: grip, phase, frame: null };
-        if (phase !== rec.lastPhase || rec.steps.length - (rec.lastFrameStep ?? -99) >= EP_HZ) {   // 단계가 바뀌거나 1초마다 카메라 프레임
+        if (this.video || phase !== rec.lastPhase || rec.steps.length - (rec.lastFrameStep ?? -99) >= EP_HZ) {   // 영상: 스텝마다 · 사진: 단계가 바뀌거나 1초마다
           rec.lastPhase = phase; rec.lastFrameStep = rec.steps.length;
           this.queueFrames(rec, step, { type: 'cell', stationId: st.id, idx: i }, r.cams ? EP_CAMS : null);
         }
@@ -118,7 +121,7 @@ export class EpisodeRecorder {
       if (ended || broken) this.finish(rec, broken ? `중단: ${st.state}` : null);
     }
     // 카메라 캡처는 한 프레임에 4장까지 (화면 끊김 방지 — 휴머노이드·AMMR 네 시점이 한 프레임에)
-    for (let k = 0; k < 4 && this.captureQ.length; k++) {
+    for (let k = 0; k < (this.video ? 8 : 4) && this.captureQ.length; k++) {
       const c = this.captureQ.shift(), pr = this.camWall.captureFrame(c.ref, 160, 120);
       c.rec.frames.push({ file: c.fname, cam: c.cam ?? null, t: c.t, data: pr });
     }
@@ -145,10 +148,38 @@ export class EpisodeRecorder {
       const phase = m.moving ? 'navigate' : 'manipulate';
       const step = { i: rec.steps.length, t: Math.round((t - rec.t0) * 1000) / 1000, ts: this.hub.iso(t), state: this.mobileState(R),
         tcp_mm: [Math.round((dx * sn + dz * c) * 1000), Math.round(-(dx * c - dz * sn) * 1000), Math.round(w.y * 1000)], gripper: m.tool || m.carry ? 1 : 0, phase, frame: null };
-      if (phase !== rec.lastPhase || t - rec.lastFrameT >= MOBILE_FRAME_S) { rec.lastPhase = phase; rec.lastFrameT = t; this.queueFrames(rec, step, { type: 'mover', id: m.id }, EP_CAMS); }
+      if (this.video ? rec.steps.length % 2 === 0 : (phase !== rec.lastPhase || t - rec.lastFrameT >= MOBILE_FRAME_S)) { rec.lastPhase = phase; rec.lastFrameT = t; this.queueFrames(rec, step, { type: 'mover', id: m.id }, EP_CAMS); }
       rec.steps.push(step);
     }
     if (ended || over) this.finish(rec, over ? '시간 제한 (3분)' : null);
+  }
+
+  // 카메라 프레임 → 카메라별 MP4 (서버 ffmpeg): 프레임마다 다음 프레임까지 머무는 시간을 넘겨 실제 시각 간격을 지킨다
+  async toVideos(ep, fps) {
+    const byCam = new Map();
+    for (const f of ep.frames) { const k = f.cam ?? 'wrist'; (byCam.get(k) ?? byCam.set(k, []).get(k)).push(f); }
+    const videos = {};
+    try {
+      for (const [cam, fs] of byCam) {
+        fs.sort((a, b) => a.t - b.t);
+        const datas = await Promise.all(fs.map((f) => f.data)), ok = fs.map((f, i) => ({ ...f, bytes: datas[i] })).filter((f) => f.bytes);
+        if (ok.length < 2) continue;
+        const durs = ok.map((f, i) => (i + 1 < ok.length ? ok[i + 1].t - f.t : 1 / fps));
+        const zip = zipStore([...ok.map((f, i) => ({ path: `frame_${two(i, 5)}.jpg`, data: f.bytes })), { path: 'durations.json', data: JSON.stringify(durs) }]);
+        const r = await fetch(`/api/frames-mp4?fps=${fps}`, { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: zip });
+        if (!r.ok) throw new Error(`MP4 변환 실패 ${r.status}`);
+        videos[cam] = { file: `${cam}.mp4`, data: new Uint8Array(await r.arrayBuffer()), fps, frames: ok.length, t0: ok[0].t, times: ok.map((f) => f.t), width: 160, height: 120 };
+      }
+    } catch { return false; }
+    if (!Object.keys(videos).length) return false;
+    // 스텝 → 영상 타임스탬프 (그 카메라의 그 시각 프레임; 캡처가 건너뛴 스텝은 직전 프레임)
+    for (const s of ep.steps) {
+      s.video = {};
+      for (const [cam, v] of Object.entries(videos)) { let k = 0; while (k + 1 < v.times.length && v.times[k + 1] <= s.t + 1e-6) k++; s.video[cam] = Math.round((v.times[k] - v.t0) * 1000) / 1000; }
+    }
+    for (const v of Object.values(videos)) delete v.times;
+    ep.videos = videos; ep.frames = [];   // 영상으로 묶었으니 낱장 사진은 버린다 (메모리)
+    return true;
   }
 
   async finish(rec, abort) {
@@ -166,9 +197,11 @@ export class EpisodeRecorder {
       cameras: rec.multiCam ? EP_CAMS : ['wrist'], task: rec.task ?? null, mobile: !!rec.mobile,
     };
     if (ep.length < 3) return;
+    ep.frameCount = rec.frames.length;
+    if (this.video && this.server) await this.toVideos(ep, rec.mobile ? VIDEO_FPS.mobile : VIDEO_FPS.cell);   // 카메라별 MP4 (실패하면 사진 그대로)
     const arr = this.byRobot.get(rec.uid) ?? []; arr.push(ep); if (arr.length > KEEP) arr.shift(); this.byRobot.set(rec.uid, arr);
     this.total++;
-    this.dataBytes = (this.dataBytes ?? 0) + JSON.stringify(ep.steps).length + ep.frames.length * 6000;   // 관절·동작 기록 + 카메라 프레임(160×120 JPEG 약 6KB)
+    this.dataBytes = (this.dataBytes ?? 0) + JSON.stringify(ep.steps).length + (ep.videos ? Object.values(ep.videos).reduce((a, v) => a + v.data.length, 0) : ep.frames.length * 6000);   // 관절·동작 기록 + 카메라 영상(MP4) 또는 프레임(160×120 JPEG 약 6KB)
     this.sim.vla?.onEpisode(ep);
     // 서버 저장 (맥 앱·npm start) — 에피소드 하나를 zip으로
     if (this.server) {
@@ -187,7 +220,7 @@ export async function buildEpisodesZip(uid, eps, runId) {
   const files = [];
   const e0 = eps[0];
   const info = {
-    dataset: `jin3d_${uid}`, format: 'Jin-3D VLA episode v1 (LeRobot 유사 구조: 메타 · 스텝 JSONL · 카메라 JPEG)', generator: 'Jin-3D 디지털트윈 (시뮬레이션 데이터)',
+    dataset: `jin3d_${uid}`, format: e0?.videos ? 'Jin-3D VLA episode v2 (LeRobot 유사 구조: 메타 · 스텝 JSONL · 카메라 MP4 영상 + 타임스탬프)' : 'Jin-3D VLA episode v1 (LeRobot 유사 구조: 메타 · 스텝 JSONL · 카메라 JPEG)', generator: 'Jin-3D 디지털트윈 (시뮬레이션 데이터)',
     run_id: runId, robot: { id: uid, kind: e0?.robot_kind, cell: e0?.cell, cell_name: e0?.cell_name, joints: e0?.jointNames, units: e0?.jointUnits, cameras: e0?.cameras ?? ['wrist'],
       ...(e0?.robot_kind === 'humanoid' ? { dof_note: 'Atlas형 — 허리 360° 연속 회전 · 머리 좌우 ±90°' } : {}) },
     fps: EP_HZ, episodes: eps.length, total_steps: eps.reduce((a, e) => a + e.length, 0),
@@ -195,7 +228,11 @@ export async function buildEpisodesZip(uid, eps, runId) {
       'observation.state': { dtype: 'float32', shape: [e0?.jointNames?.length ?? 0], names: e0?.jointNames, units: e0?.jointUnits },
       'observation.tcp_mm': { dtype: 'int32', shape: [3], names: ['x', 'y', 'z'], frame: '로봇 베이스 기준 (x 전방, y 왼쪽, z 위)' },
       'observation.gripper': { dtype: 'int8', shape: [1], desc: '1 = 부품 파지' },
-      ...(e0?.cameras?.length > 1
+      ...(e0?.videos
+        ? Object.fromEntries(Object.entries(e0.videos).map(([c, v]) => [c === 'wrist' ? 'observation.image' : `observation.images.${c}`, { dtype: 'video', shape: [v.height, v.width, 3], names: ['height', 'width', 'channel'],
+          info: { 'video.fps': v.fps, 'video.codec': 'h264', 'video.pix_fmt': 'yuv420p', 'video.height': v.height, 'video.width': v.width, 'video.is_depth_map': false, has_audio: false },
+          desc: `${CAM_KO[c] ?? '손목'} 카메라 영상 (MP4 · ${v.fps}fps) — 스텝의 {path, timestamp}로 프레임을 찾는다` }]))
+        : e0?.cameras?.length > 1
         ? Object.fromEntries(EP_CAMS.map((c) => [`observation.images.${c}`, { dtype: 'jpeg', shape: [120, 160, 3], desc: `${CAM_KO[c]} 카메라 프레임 (네 카메라 같은 시각 · 작업 단계가 바뀔 때 · ${e0.mobile ? MOBILE_FRAME_S : 1}초마다)` }]))
         : { 'observation.image': { dtype: 'jpeg', shape: [120, 160, 3], desc: '로봇 카메라 프레임 (작업 단계가 바뀔 때 · 1초마다)' } }),
       action: { dtype: 'float32', shape: [e0?.jointNames?.length ?? 0], desc: '다음 스텝 관절 목표 (절대값)' },
@@ -206,13 +243,17 @@ export async function buildEpisodesZip(uid, eps, runId) {
     time: '모든 시각은 디지털트윈 기준 시계(UTC, ISO 8601). t는 에피소드 시작 기준 초',
   };
   files.push({ path: 'meta/info.json', data: JSON.stringify(info, null, 2) });
-  files.push({ path: 'meta/episodes.jsonl', data: eps.map((e) => JSON.stringify({ episode: e.id, instruction: e.instruction, success: e.success, termination: e.termination, product: e.product, item_id: e.item_id, model_version: e.model_version, start: e.start, end: e.end, duration_s: e.duration_s, length: e.length, frames: e.frames.length, cameras: e.cameras ?? ['wrist'], task: e.task ?? undefined })).join('\n') + '\n' });
+  files.push({ path: 'meta/episodes.jsonl', data: eps.map((e) => JSON.stringify({ episode: e.id, instruction: e.instruction, success: e.success, termination: e.termination, product: e.product, item_id: e.item_id, model_version: e.model_version, start: e.start, end: e.end, duration_s: e.duration_s, length: e.length, frames: e.frameCount ?? e.frames.length, videos: e.videos ? Object.fromEntries(Object.entries(e.videos).map(([c, v]) => [c, `videos/${e.id}/${v.file}`])) : undefined, cameras: e.cameras ?? ['wrist'], task: e.task ?? undefined })).join('\n') + '\n' });
   for (const e of eps) {
-    const img = (s) => (s.frames ? Object.fromEntries(EP_CAMS.map((c) => [`observation.images.${c}`, s.frames[c] ? `videos/${e.id}/${s.frames[c]}` : null])) : { 'observation.image': s.frame ? `videos/${e.id}/${s.frame}` : null });
+    const img = (s) => (e.videos && s.video ? Object.fromEntries(Object.entries(e.videos).map(([c, v]) => [c === 'wrist' ? 'observation.image' : `observation.images.${c}`, { path: `videos/${e.id}/${v.file}`, timestamp: s.video[c] ?? 0 }])) : s.frames ? Object.fromEntries(EP_CAMS.map((c) => [`observation.images.${c}`, s.frames[c] ? `videos/${e.id}/${s.frames[c]}` : null])) : { 'observation.image': s.frame ? `videos/${e.id}/${s.frame}` : null });
     files.push({ path: `data/${e.id}.jsonl`, data: e.steps.map((s) => JSON.stringify({ step: s.i, t: s.t, timestamp: s.ts, 'observation.state': s.state, 'observation.tcp_mm': s.tcp_mm, 'observation.gripper': s.gripper, action: s.action, phase: s.phase, ...img(s) })).join('\n') + '\n' });
+    for (const v of Object.values(e.videos ?? {})) files.push({ path: `videos/${e.id}/${v.file}`, data: v.data });   // 카메라별 MP4
     for (const f of e.frames) { const d = await f.data; if (d) files.push({ path: `videos/${e.id}/${f.file}`, data: d }); }
   }
-  files.push({ path: 'README.txt', data: `Jin-3D VLA 에피소드 데이터 — 로봇 ${uid}\n에피소드 ${eps.length}개 · ${EP_HZ}Hz · 카메라 프레임 JPEG 160x120 (단계 전환·1초마다)\n${e0?.cameras?.length > 1 ? `카메라 4대: ${EP_CAMS.map((c) => `${c}(${CAM_KO[c]})`).join(' · ')} — 같은 시각의 네 시점을 videos/<에피소드>/<카메라>/frame_*.jpg로\n` : ''}스키마: meta/info.json · 요약: meta/episodes.jsonl · 스텝: data/*.jsonl · 영상: videos/*/${e0?.cameras?.length > 1 ? '<카메라>/' : ''}frame_*.jpg\n시뮬레이션으로 생성된 데이터입니다.\n` });
+  const vids = e0?.videos ? Object.values(e0.videos) : null;
+  files.push({ path: 'README.txt', data: vids
+    ? `Jin-3D VLA 에피소드 데이터 — 로봇 ${uid}\n에피소드 ${eps.length}개 · 스텝 ${EP_HZ}Hz · 카메라 영상 MP4(H.264 · ${vids[0].width}x${vids[0].height} · ${vids[0].fps}fps) — ${Object.keys(e0.videos).join(' · ')}\n영상: videos/<에피소드>/<카메라>.mp4 · 스텝(data/*.jsonl)의 observation.images.<카메라> = {path, timestamp(초)} 로 영상 프레임을 찾습니다 (LeRobot 형식)\n스키마: meta/info.json · 요약: meta/episodes.jsonl\n시뮬레이션으로 생성된 데이터입니다.\n`
+    : `Jin-3D VLA 에피소드 데이터 — 로봇 ${uid}\n에피소드 ${eps.length}개 · ${EP_HZ}Hz · 카메라 프레임 JPEG 160x120 (단계 전환·1초마다)\n${e0?.cameras?.length > 1 ? `카메라 4대: ${EP_CAMS.map((c) => `${c}(${CAM_KO[c]})`).join(' · ')} — 같은 시각의 네 시점을 videos/<에피소드>/<카메라>/frame_*.jpg로\n` : ''}스키마: meta/info.json · 요약: meta/episodes.jsonl · 스텝: data/*.jsonl · 영상: videos/*/${e0?.cameras?.length > 1 ? '<카메라>/' : ''}frame_*.jpg\n(서버 ffmpeg가 없어 사진으로 저장 — 맥 앱에서는 MP4 영상)\n시뮬레이션으로 생성된 데이터입니다.\n` });
   return zipStore(files);
 }
 

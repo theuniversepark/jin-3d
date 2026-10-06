@@ -34,6 +34,16 @@ const again = await (await fetch(`${base}/api/convert?kind=robotcam&id=${id}`)).
 check('같은 구간은 다시 변환하지 않음 (결과 재사용)', again.at === res.at);
 const clip = await fetch(`${base}/api/clip-mp4?fps=8`, { method: 'POST', body: fs.readFileSync(src) }), cb = new Uint8Array(await clip.arrayBuffer());
 check('개별 녹화 WebM → MP4', clip.ok && clip.headers.get('content-type') === 'video/mp4' && String.fromCharCode(...cb.slice(4, 8)) === 'ftyp');
+// VLA 에피소드: JPEG 프레임(시각 간격 제각각) → MP4 (concat · 고정 fps · yuv420p)
+const { zipStore } = await import('../js/aasx.js');
+spawnSync(ff, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=160x120:rate=5:duration=2', path.join(dir, 'fr_%02d.jpg')]);
+const jpgs = fs.readdirSync(dir).filter((f) => /^fr_\d+\.jpg$/.test(f)).sort();
+const durs = jpgs.map((_, i) => (i === 3 ? 0.6 : 0.2));   // 한 프레임은 캡처가 건너뛰어 0.6초 머묾
+const fz = zipStore([...jpgs.map((f, i) => ({ path: `frame_${String(i).padStart(5, '0')}.jpg`, data: fs.readFileSync(path.join(dir, f)) })), { path: 'durations.json', data: JSON.stringify(durs) }]);
+const fr = await fetch(`${base}/api/frames-mp4?fps=5`, { method: 'POST', body: fz }), fb = Buffer.from(await fr.arrayBuffer()); fs.writeFileSync(path.join(dir, 'ep.mp4'), fb);
+const pe = hasProbe ? probe(path.join(dir, 'ep.mp4')) : null, nf = hasProbe ? Number(spawnSync(ff.replace(/ffmpeg$/, 'ffprobe'), ['-v', 'error', '-count_frames', '-select_streams', 'v', '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', path.join(dir, 'ep.mp4')]).stdout.toString().trim()) : 0;
+const expect = Math.round(durs.reduce((a, b) => a + b, 0) * 5);
+check('VLA 에피소드 프레임 → MP4 (H.264 · yuv420p · 시각 간격 유지)', fr.ok && (!hasProbe || (pe.codec_name === 'h264' && pe.pix_fmt === 'yuv420p' && Math.abs(nf - expect) <= 1)), `${jpgs.length}장 → ${nf}프레임(5fps · 기대 ${expect}) · ${fb.length}B`);
 const bad = await fetch(`${base}/videos/robotcam/${id}/..%2F..%2Fx.mp4`), bad2 = await fetch(`${base}/api/convert?kind=etc&id=${id}`);
 check('잘못된 경로·종류 거부', bad.status === 404 && bad2.status === 400);
 fs.rmSync(dir, { recursive: true, force: true });

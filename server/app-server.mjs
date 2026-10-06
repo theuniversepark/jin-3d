@@ -8,7 +8,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { runAgentTurn, MODEL } from './llm-agent.mjs';
 import { designLine } from './line-designer.mjs';
 import { startMqtt, mqttStatus, mqttPublish } from './mqtt-gateway.mjs';
-import { ffmpegInfo, queueConvert, convertClip } from './video-convert.mjs';
+import { ffmpegInfo, queueConvert, convertClip, readStoredZip, framesToMp4 } from './video-convert.mjs';
 import { odooStatus, odooConfig, odooSync, odooReset } from './odoo-gateway.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -37,19 +37,42 @@ async function saveEpisode(req, res, url) {
     const dir = path.join(DATA_DIR(), 'episodes', robot);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${id}.zip`), buf);
-    return send(res, 200, { ok: true, bytes: buf.length });
+    const pruned = pruneEpisodes(robot);
+    return send(res, 200, { ok: true, bytes: buf.length, pruned });
   } catch (e) { return send(res, 400, { error: e.message }); }
+}
+// 에피소드 보관 한도: 로봇마다 최근 500개(JIN3D_EPISODE_KEEP), 전체 3GB(JIN3D_EPISODE_MAX_MB) — 넘으면 오래된 것부터 지운다
+// 로봇별 정리는 저장할 때마다, 전체 용량 정리는 50번 저장마다(파일이 많으면 목록 읽기가 무거워서) 한다
+export const EPISODE_KEEP = () => Number(process.env.JIN3D_EPISODE_KEEP) || 500;
+export const EPISODE_MAX_BYTES = () => (Number(process.env.JIN3D_EPISODE_MAX_MB) || 3072) * 1024 * 1024;
+let epSaves = 0;
+export function pruneEpisodes(robot = null, force = false) {
+  const base = path.join(DATA_DIR(), 'episodes'); let n = 0;
+  const list = (r) => { try { return fs.readdirSync(path.join(base, r)).filter((f) => f.endsWith('.zip')).map((f) => { const st = fs.statSync(path.join(base, r, f)); return { r, f, t: st.mtimeMs, b: st.size }; }); } catch { return []; } };
+  const drop = (x) => { fs.rmSync(path.join(base, x.r, x.f), { force: true }); n++; };
+  if (robot) { const fs1 = list(robot).sort((a, b) => a.t - b.t); for (const x of fs1.slice(0, Math.max(0, fs1.length - EPISODE_KEEP()))) drop(x); }
+  if (force || ++epSaves % 50 === 1) {
+    let robots = []; try { robots = fs.readdirSync(base); } catch { return n; }
+    const all = [];
+    for (const r of robots) { const l = list(r).sort((a, b) => a.t - b.t); for (const x of l.slice(0, Math.max(0, l.length - EPISODE_KEEP()))) drop(x); all.push(...l.slice(Math.max(0, l.length - EPISODE_KEEP()))); }
+    all.sort((a, b) => a.t - b.t);
+    let total = all.reduce((a, x) => a + x.b, 0);
+    for (const x of all) { if (total <= EPISODE_MAX_BYTES()) break; drop(x); total -= x.b; }
+  }
+  return n;
 }
 // GET /api/episodes → 로봇별 저장 에피소드 수·용량
 function listEpisodes(res) {
   const base = path.join(DATA_DIR(), 'episodes'), robots = {};
-  try {
-    for (const r of fs.readdirSync(base)) {
+  let names = []; try { names = fs.readdirSync(base); } catch { /* 아직 저장된 에피소드 없음 */ }
+  for (const r of names) {   // 로봇 폴더만 (.DS_Store 같은 파일이 섞여 있어도 목록이 비지 않게)
+    try {
+      if (!fs.statSync(path.join(base, r)).isDirectory()) continue;
       const files = fs.readdirSync(path.join(base, r)).filter((f) => f.endsWith('.zip'));
       robots[r] = { count: files.length, bytes: files.reduce((a, f) => a + fs.statSync(path.join(base, r, f)).size, 0) };
-    }
-  } catch { /* 아직 저장된 에피소드 없음 */ }
-  return send(res, 200, { dir: base, robots });
+    } catch { /* 읽을 수 없는 항목은 건너뜀 */ }
+  }
+  return send(res, 200, { dir: base, robots, keep: EPISODE_KEEP(), maxBytes: EPISODE_MAX_BYTES() });
 }
 
 // CCTV 자동 녹화(NVR) 구간 저장소 — POST /api/cctv?id=run-..._cctv_0001&ext=webm|json → data/cctv/<id>.<ext>
@@ -72,6 +95,16 @@ async function convertApi(res, url) {
   if (!['robotcam', 'cctv'].includes(kind) || !SAFE.test(id)) return send(res, 400, { error: 'kind·id 형식 오류' });
   if (!ffmpegInfo().available) return send(res, 503, { error: 'ffmpeg 없음' });
   try { return send(res, 200, await queueConvert(path.join(DATA_DIR(), kind), id)); } catch (e) { return send(res, 500, { error: e.message }); }
+}
+// POST /api/frames-mp4?fps=5 (본문: 무압축 zip — frame_*.jpg + durations.json[초]) → MP4 (VLA 에피소드 카메라 영상)
+async function framesMp4(req, res, url) {
+  if (!ffmpegInfo().available) return send(res, 503, { error: 'ffmpeg 없음' });
+  try {
+    const z = readStoredZip(await readRaw(req, 64 * 1024 * 1024)), durs = JSON.parse(z.get('durations.json')?.toString() ?? '[]');
+    const names = [...z.keys()].filter((n) => /^frame_\d+\.jpg$/.test(n)).sort();
+    const mp4 = await framesToMp4(names.map((n, i) => ({ name: n, data: z.get(n), dur: durs[i] ?? 0.2 })), Math.min(30, Math.max(1, Number(url.searchParams.get('fps')) || 5)));
+    res.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': mp4.length }); res.end(mp4);
+  } catch (e) { return send(res, 500, { error: e.message }); }
 }
 // POST /api/clip-mp4?fps=8 (본문: WebM) → MP4 (CCTV 정보 창 개별 녹화)
 async function clipMp4(req, res, url) {
@@ -229,6 +262,7 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
     if (url.pathname.startsWith('/videos/')) return serveVideo(res, url);
     if (url.pathname === '/api/convert') return convertApi(res, url);
     if (url.pathname === '/api/clip-mp4' && req.method === 'POST') return clipMp4(req, res, url);
+    if (url.pathname === '/api/frames-mp4' && req.method === 'POST') return framesMp4(req, res, url);
     if (url.pathname === '/api/episodes' && req.method === 'POST') return saveEpisode(req, res, url);
     if (url.pathname === '/api/episodes') return listEpisodes(res);
     if (url.pathname === '/api/aios' && req.method === 'POST') return saveAios(req, res, url);
@@ -268,6 +302,6 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, host, () => resolve({ server, port: server.address().port }));
+    server.listen(port, host, () => { setTimeout(() => { try { pruneEpisodes(null, true); } catch { /* 무시 */ } }, 3000); resolve({ server, port: server.address().port }); });   // 시작 3초 뒤 쌓여 있던 에피소드 정리
   });
 }

@@ -1160,7 +1160,7 @@ designer = new LineDesigner({
 });
 llm.probe();
 // 에피소드 서버 저장이 가능한지 (맥 앱·npm start) — 정적 호스팅·공유 페이지는 브라우저 보관만
-if (!window.JIN3D_SHARED && !window.JIN3D_NO_SERVER) fetch('/api/status').then((r) => r.json()).then((j) => { epRec.server = !!j.episodes; cctvRec.server = !!j.cctv; robotRec.server = !!j.robotcam; robotRec.ffmpeg = cctvRec.ffmpeg = !!j.ffmpeg?.available; ffmpegVer = j.ffmpeg?.version ?? null; if (j.dataDir) { cctvRec.dir = `${j.dataDir}/cctv`; robotRec.dir = `${j.dataDir}/robotcam`; } }).catch(() => {});
+if (!window.JIN3D_SHARED && !window.JIN3D_NO_SERVER) fetch('/api/status').then((r) => r.json()).then((j) => { epRec.server = !!j.episodes; cctvRec.server = !!j.cctv; robotRec.server = !!j.robotcam; robotRec.ffmpeg = cctvRec.ffmpeg = !!j.ffmpeg?.available; epRec.video = epRec.server && !!j.ffmpeg?.available; ffmpegVer = j.ffmpeg?.version ?? null; if (j.dataDir) { cctvRec.dir = `${j.dataDir}/cctv`; robotRec.dir = `${j.dataDir}/robotcam`; } }).catch(() => {});
 
 // ── 맥 앱(Jin-3D) 전용: API 키 설정 ─────────────────
 const bridge = window.jin3d;
@@ -1216,7 +1216,7 @@ function renderVla(force) {
   if (vlaBody.matches(':hover') && vlaBody.querySelector('button:hover')) return;   // 누르는 중에는 다시 그리지 않는다
   const robots = epRec.robots(), j = P.job, last = P.jobs[0], need = 200 * (P.backoff ?? 1);
   const okRate = P.allEps ? Math.round((P.okEps / P.allEps) * 100) : 0;
-  const recNow = epRec.rec.size, frames = robots.reduce((a, R) => a + epRec.list(R.uid).reduce((b, e) => b + e.frames.length, 0), 0);
+  const recNow = epRec.rec.size, frames = robots.reduce((a, R) => a + epRec.list(R.uid).reduce((b, e) => b + (e.frameCount ?? e.frames.length), 0), 0);
   const deployed = robots.filter((R) => P.versionOf(R.uid) === P.label(P.latest)).length;
   const act = j?.phase ?? 'idle', shared = !!window.JIN3D_SHARED;
   const stage = (ic, title, val, sub, on) => `<div class="vs ${on ? 'on' : ''}"><i>${ic}</i><b>${title}</b><span>${val}</span><small>${sub}</small></div>`;
@@ -1226,7 +1226,7 @@ function renderVla(force) {
       ${stage('🤖', '1 로봇 수집', `기록 중 ${recNow}대 · 누적 ${epRec.total}개`, `VLA 로봇 ${robots.length}대 · 작업 사이클 ${SAMPLE}번에 1번`, recNow > 0)}<b class="va">›</b>
       ${stage('🧹', '2 AI-ready 정제', `${EP_HZ}Hz · 카메라 ${frames}장`, '관절·TCP·그리퍼·작업 단계 · 지시·성공 라벨 · UTC 동기', recNow > 0)}<b class="va">›</b>
       ${stage('🎞', '3 에피소드', `성공률 ${okRate}%`, `성공 ${P.okEps} / 전체 ${P.allEps}`, false)}<b class="va">›</b>
-      ${stage('🗄', '4 서버 저장', epRec.server ? `${epRec.uploaded}개 · ${(epRec.bytes / 1048576).toFixed(1)}MB` : '브라우저 보관', epRec.server ? escV(`…/${(vlaDir?.dir ?? 'data/episodes').split(/[\\/]/).slice(-2).join('/')}/<로봇 ID>/*.zip`) : '서버 없음 (웹·공유) — 파일로 내려받아 보관', epRec.uploaded > 0)}<b class="va">›</b>
+      ${stage('🗄', '4 서버 저장', epRec.server ? `${epRec.uploaded}개 · ${(epRec.bytes / 1048576).toFixed(1)}MB` : '브라우저 보관', epRec.server ? escV(`…/${(vlaDir?.dir ?? 'data/episodes').split(/[\\/]/).slice(-2).join('/')}/<로봇 ID>/*.zip · 보관 로봇별 ${vlaDir?.keep ?? 500}개 · 최대 ${((vlaDir?.maxBytes ?? 3221225472) / 1073741824).toFixed(0)}GB (오래된 것부터 정리)`) : '서버 없음 (웹·공유) — 파일로 내려받아 보관', epRec.uploaded > 0)}<b class="va">›</b>
       ${stage('🧠', '5 VLA 학습', act === 'train' ? `에폭 ${j.epoch}/${j.epochs} · loss ${j.loss.at(-1) ?? '-'}` : `다음 학습까지 ${Math.max(0, need - P.newEps)}개`, act === 'train' ? `${j.label} 미세조정 · 에피소드 ${j.episodes}개` : `새 에피소드 ${P.newEps}개 누적`, act === 'train')}<b class="va">›</b>
       ${stage('✅', '6 평가 게이트', j?.val != null ? `${j.val}% (이전 ${j.prevVal}%)` : last?.val != null ? `${last.label} ${last.val}%` : '-', '검증 성공률 +0.3%p 이상이면 배포', act === 'eval')}<b class="va">›</b>
       ${stage('🚀', '7 로봇 배포', `${P.label(P.latest)} · ${deployed}/${robots.length}대`, act === 'canary' ? `카나리 ${j.canary} 모니터링` : act === 'rollout' ? `OTA ${j.rollout.length}/${j.rollout.length + j.queue.length}대` : '추론 모델 → 로봇 (OTA)', act === 'canary' || act === 'rollout')}
@@ -1236,7 +1236,7 @@ function renderVla(force) {
       <div><h4>학습·배포 이력</h4><table class="vla-t"><thead><tr><th>모델</th><th>상태</th><th>에피소드</th><th>loss</th><th>검증</th><th>배포</th></tr></thead><tbody>
         ${P.jobs.map((x) => `<tr><td><b>${x.label}</b></td><td class="p-${x.phase}">${({ train: `학습 ${x.epoch}/${x.epochs}`, eval: '평가 중', canary: '카나리', rollout: '배포 중', done: '배포 완료', rejected: '평가 미달' })[x.phase]}</td><td>${x.episodes}</td><td>${x.loss.at(-1) ?? '-'}</td><td>${x.val != null ? x.val + '%' : '-'}</td><td>${x.rollout.length}대</td></tr>`).join('')}
         <tr><td><b>v1.0</b></td><td>기본 모델</td><td>-</td><td>-</td><td>86.0%</td><td>${robots.length}대</td></tr></tbody></table></div>
-      <div><h4>로봇별 에피소드 <small>${shared ? '공유 페이지에서는 다운로드할 수 없습니다 (맥 앱·웹 버전에서)' : '⬇ 전체 = 보관 에피소드(최근 30개), ⬇ 1개 = 최근 에피소드 — zip(메타·스텝 JSONL·카메라 JPEG)'}</small></h4>
+      <div><h4>로봇별 에피소드 <small>${shared ? '공유 페이지에서는 다운로드할 수 없습니다 (맥 앱·웹 버전에서)' : '⬇ 전체 = 보관 에피소드(최근 30개), ⬇ 1개 = 최근 에피소드 — zip(메타·스텝 JSONL·카메라 영상 ' + (epRec.video ? 'MP4' : 'JPEG — 서버 ffmpeg가 없어 사진') + ')'}</small></h4>
         <table class="vla-t"><thead><tr><th>ID</th><th>셀 · 로봇</th><th>모델</th><th>보관 / 누적</th><th>성공률</th><th>최근 지시</th><th></th></tr></thead><tbody>
         ${robots.map((R) => { const eps = epRec.list(R.uid), st = P.robotStats.get(R.uid), le = eps.at(-1), dis = !eps.length || shared ? 'disabled' : ''; return `<tr><td><b class="uidc">${R.uid}</b></td><td>${escV(R.st.name.replace(/\s*\(.*\)$/, ''))} · ${kindKo(R.r.kind)}</td><td>${P.versionOf(R.uid)}</td><td>${eps.length} / ${st?.n ?? 0}</td><td>${st?.n ? Math.round((st.ok / st.n) * 100) + '%' : '-'}</td><td class="ins" title="${escV(le?.instruction)}">${escV(le?.instruction ?? '-')}</td><td class="dl"><button type="button" data-dl="${R.uid}" ${dis}>⬇ 전체</button><button type="button" data-dl="${R.uid}" data-one="1" ${dis}>⬇ 1개</button></td></tr>`; }).join('')}</tbody></table></div>
     </div>`);

@@ -83,3 +83,30 @@ export async function convertClip(buf, fps = 8) {
   try { fs.writeFileSync(i, buf); await run(['-fflags', '+genpts', '-i', i, '-an', ...H264(fps, null, 23), o]); return fs.readFileSync(o); }
   finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
+
+// ── VLA 에피소드: 카메라 프레임(JPEG, 시각 제각각) → MP4 (H.264, 고정 fps) ─────────────────
+// 무압축 zip(js/aasx.js zipStore) 읽기: 로컬 파일 헤더를 차례로 — 이름 → 바이트
+export function readStoredZip(buf) {
+  const out = new Map(); let p = 0;
+  while (p + 30 <= buf.length && buf.readUInt32LE(p) === 0x04034b50) {
+    const size = buf.readUInt32LE(p + 18), nl = buf.readUInt16LE(p + 26), xl = buf.readUInt16LE(p + 28);
+    const name = buf.toString('utf8', p + 30, p + 30 + nl), start = p + 30 + nl + xl;
+    out.set(name, buf.subarray(start, start + size)); p = start + size;
+  }
+  return out;
+}
+// frames: [{ name, data, dur(초) }] — ffmpeg concat으로 프레임마다 머무는 시간을 지키고, fps 고정 영상으로 (빠진 프레임은 앞 프레임 반복)
+export async function framesToMp4(frames, fps = 5) {
+  if (!findFfmpeg()) throw new Error('ffmpeg 없음');
+  if (!frames.length) throw new Error('프레임 없음');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jin3d-ep-'));
+  try {
+    const list = [];
+    frames.forEach((f, i) => { const n = `f${String(i).padStart(5, '0')}.jpg`; fs.writeFileSync(path.join(tmp, n), f.data); list.push(`file '${n}'`, `duration ${Math.max(1 / fps, f.dur).toFixed(4)}`); });
+    list.push(`file 'f${String(frames.length - 1).padStart(5, '0')}.jpg'`);   // concat: 마지막 프레임 길이가 지켜지도록 한 번 더
+    fs.writeFileSync(path.join(tmp, 'list.txt'), list.join('\n') + '\n');
+    const o = path.join(tmp, 'out.mp4');
+    await run(['-f', 'concat', '-safe', '0', '-i', path.join(tmp, 'list.txt'), '-fps_mode', 'cfr', '-r', String(fps), '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2:out_range=tv,format=yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-color_range', 'tv', '-movflags', '+faststart', '-an', o]);
+    return fs.readFileSync(o);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
