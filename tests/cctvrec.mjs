@@ -16,7 +16,7 @@ const r2 = await fetch(`${base}/api/cctv?id=run-test_cctv_0001&ext=json`, { meth
 check('구간 영상·색인 저장', r1.ok && r2.ok && fs.existsSync(path.join(dir, 'cctv', 'run-test_cctv_0001.webm')) && fs.existsSync(path.join(dir, 'cctv', 'run-test_cctv_0001.json')));
 check('저장한 영상 바이트 그대로', fs.readFileSync(path.join(dir, 'cctv', 'run-test_cctv_0001.webm')).equals(Buffer.from(webm)));
 const ls = await (await fetch(`${base}/api/cctv`)).json();
-check('목록 (구간 수 · 용량 · 보관 개수)', ls.count === 1 && ls.bytes === webm.length && ls.keep > 0, `${ls.count}구간 · 보관 ${ls.keep}구간`);
+check('목록 (구간 수 · 실제 용량 · 보관 한도)', ls.count === 1 && ls.webmBytes >= webm.length && ls.bytes === ls.webmBytes + ls.mp4Bytes + ls.camBytes && ls.keep > 0 && ls.maxBytes > 0, `${ls.count}구간 · 보관 ${ls.keep}구간 · 최대 ${(ls.maxBytes / 1073741824).toFixed(0)}GB`);
 const bad = await fetch(`${base}/api/cctv?id=../../etc&ext=webm`, { method: 'POST', body: webm }), bad2 = await fetch(`${base}/api/cctv?id=ok_1&ext=exe`, { method: 'POST', body: webm });
 check('잘못된 이름·확장자 거부 (경로 탈출 방지)', bad.status === 400 && bad2.status === 400);
 server?.close?.(); fs.rmSync(dir, { recursive: true, force: true });

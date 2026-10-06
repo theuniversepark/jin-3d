@@ -77,13 +77,55 @@ function listEpisodes(res) {
 
 // CCTV 자동 녹화(NVR) 구간 저장소 — POST /api/cctv?id=run-..._cctv_0001&ext=webm|json → data/cctv/<id>.<ext>
 // 보관 기간: 구간 파일이 576개(5분 구간 약 48시간)를 넘으면 오래된 것부터 지운다
-const CCTV_KEEP = 576;
-// 오래된 구간 지우기: 영상(WebM·MP4) · 색인 · 변환 결과 · 카메라별 MP4 폴더
-// MP4(전체 + 카메라별)는 더 짧게 보관: 144구간(5분 구간 약 12시간, JIN3D_MP4_KEEP으로 변경) — 원본 WebM은 576구간
-const MP4_KEEP = Number(process.env.JIN3D_MP4_KEEP) || 144;
-function pruneMp4(dir) {
-  const mp4s = fs.readdirSync(dir).filter((f) => f.endsWith('.mp4.json')).map((f) => ({ id: f.replace(/\.mp4\.json$/, ''), t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.t - b.t);
-  for (const m of mp4s.slice(0, Math.max(0, mp4s.length - MP4_KEEP))) { for (const f of [`${m.id}.mp4`, `${m.id}.mp4.json`]) fs.rmSync(path.join(dir, f), { force: true }); fs.rmSync(path.join(dir, m.id), { recursive: true, force: true }); }
+// 녹화 영상 보관 한도 (종류별, 환경 변수로 변경):
+//   원본 WebM 구간 수 — CCTV JIN3D_CCTV_KEEP · 로봇 카메라 JIN3D_ROBOTCAM_KEEP (기본 576구간 ≈ 5분 구간 48시간)
+//   MP4(전체 + 카메라별) 구간 수 — JIN3D_MP4_KEEP (기본 144구간 ≈ 12시간)
+//   전체 용량(WebM + MP4 + 색인) — CCTV JIN3D_CCTV_MAX_MB (기본 4GB) · 로봇 카메라 JIN3D_ROBOTCAM_MAX_MB (기본 8GB)
+//   용량을 넘으면 오래된 구간의 MP4부터 지우고, 그래도 넘으면 오래된 구간을 통째로 지운다
+export const VIDEO_LIMITS = () => ({
+  cctv: { keep: Number(process.env.JIN3D_CCTV_KEEP) || 576, mp4Keep: Number(process.env.JIN3D_MP4_KEEP) || 144, maxBytes: (Number(process.env.JIN3D_CCTV_MAX_MB) || 4096) * 1048576 },
+  robotcam: { keep: Number(process.env.JIN3D_ROBOTCAM_KEEP) || 576, mp4Keep: Number(process.env.JIN3D_MP4_KEEP) || 144, maxBytes: (Number(process.env.JIN3D_ROBOTCAM_MAX_MB) || 8192) * 1048576 },
+});
+const fsize = (f) => { try { return fs.statSync(f).size; } catch { return 0; } };
+const dsize = (d) => { let n = 0, c = 0; try { for (const f of fs.readdirSync(d)) { n += fsize(path.join(d, f)); c++; } } catch { /* 없음 */ } return { n, c }; };
+// 구간 목록 (오래된 순): 원본 · 전체 MP4 · 카메라별 MP4 크기
+export function videoSegments(kind) {
+  const dir = path.join(DATA_DIR(), kind); let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const ids = new Set(names.filter((f) => f.endsWith('.webm') || (f.endsWith('.json') && !f.endsWith('.mp4.json'))).map((f) => f.replace(/\.(webm|json)$/, '')));
+  return [...ids].map((id) => {
+    const w = path.join(dir, `${id}.webm`), cam = dsize(path.join(dir, id));
+    let t = 0; try { t = fs.statSync(fs.existsSync(w) ? w : path.join(dir, `${id}.json`)).mtimeMs; } catch { /* 없음 */ }
+    return { id, t, webm: fsize(w) + fsize(path.join(dir, `${id}.json`)), mp4: fsize(path.join(dir, `${id}.mp4`)) + fsize(path.join(dir, `${id}.mp4.json`)), cam: cam.n, camFiles: cam.c, hasMp4: fs.existsSync(path.join(dir, `${id}.mp4.json`)) };
+  }).sort((a, b) => a.t - b.t);
+}
+function dropMp4(dir, id) { for (const f of [`${id}.mp4`, `${id}.mp4.json`]) fs.rmSync(path.join(dir, f), { force: true }); fs.rmSync(path.join(dir, id), { recursive: true, force: true }); }
+export function pruneVideos(kind) {
+  const L = VIDEO_LIMITS()[kind], dir = path.join(DATA_DIR(), kind), out = { segments: 0, mp4: 0 };
+  let segs = videoSegments(kind);
+  for (const s of segs.slice(0, Math.max(0, segs.length - L.keep))) { dropSegment(dir, s.id); out.segments++; }   // 원본 구간 수
+  segs = segs.slice(Math.max(0, segs.length - L.keep));
+  const withMp4 = segs.filter((s) => s.hasMp4 || s.cam);
+  for (const s of withMp4.slice(0, Math.max(0, withMp4.length - L.mp4Keep))) { dropMp4(dir, s.id); s.mp4 = s.cam = 0; s.hasMp4 = false; out.mp4++; }   // MP4 구간 수
+  let total = segs.reduce((a, s) => a + s.webm + s.mp4 + s.cam, 0);
+  for (const s of segs) { if (total <= L.maxBytes) break; if (s.mp4 + s.cam > 0) { dropMp4(dir, s.id); total -= s.mp4 + s.cam; s.mp4 = s.cam = 0; out.mp4++; } }   // 용량: 오래된 MP4부터
+  for (const s of segs) { if (total <= L.maxBytes) break; dropSegment(dir, s.id); total -= s.webm; out.segments++; }   // 그래도 넘으면 오래된 구간 통째로
+  return out;
+}
+// GET /api/cctv · /api/robotcam → 실제 용량(원본 + MP4 + 카메라별) · 구간 수 · 한도
+function videoStatus(kind) {
+  const segs = videoSegments(kind), L = VIDEO_LIMITS()[kind];
+  const webm = segs.reduce((a, s) => a + s.webm, 0), mp4 = segs.reduce((a, s) => a + s.mp4, 0), cam = segs.reduce((a, s) => a + s.cam, 0);
+  return { dir: path.join(DATA_DIR(), kind), count: segs.length, mp4Count: segs.filter((s) => s.hasMp4).length, noMp4: segs.filter((s) => !s.hasMp4).length, camFiles: segs.reduce((a, s) => a + s.camFiles, 0),
+    bytes: webm + mp4 + cam, webmBytes: webm, mp4Bytes: mp4, camBytes: cam, keep: L.keep, mp4Keep: L.mp4Keep, maxBytes: L.maxBytes, oldest: segs[0]?.t ?? null, newest: segs.at(-1)?.t ?? null };
+}
+// 시작 때: MP4가 없는 구간(변환 기능 이전 녹화 등)을 차례로 변환하고 한도 정리
+export function backfillVideos() {
+  for (const kind of ['cctv', 'robotcam']) {
+    const dir = path.join(DATA_DIR(), kind);
+    if (ffmpegInfo().available) for (const s of videoSegments(kind)) if (!s.hasMp4 && fs.existsSync(path.join(dir, `${s.id}.webm`)) && fs.existsSync(path.join(dir, `${s.id}.json`))) queueConvert(dir, s.id).then(() => pruneVideos(kind)).catch(() => {});
+    pruneVideos(kind);
+  }
 }
 function dropSegment(dir, id) {
   for (const f of [`${id}.webm`, `${id}.json`, `${id}.mp4`, `${id}.mp4.json`]) fs.rmSync(path.join(dir, f), { force: true });
@@ -122,9 +164,8 @@ async function saveCctv(req, res, url) {
     const dir = path.join(DATA_DIR(), 'cctv');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, `${id}.${ext}`), buf);
-    const vids = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')).map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.t - b.t);
-    for (const v of vids.slice(0, Math.max(0, vids.length - CCTV_KEEP))) dropSegment(dir, v.f.replace(/\.webm$/, ''));
-    if (ext === 'json' && ffmpegInfo().available) queueConvert(dir, id).then(() => pruneMp4(dir)).catch(() => {});   // 색인까지 받으면 MP4로 변환 (전체 + 카메라별)
+    pruneVideos('cctv');
+    if (ext === 'json' && ffmpegInfo().available) queueConvert(dir, id).then(() => pruneVideos('cctv')).catch(() => {});   // 색인까지 받으면 MP4로 변환 (전체 + 카메라별) → 한도 정리
     return send(res, 200, { ok: true, bytes: buf.length });
   } catch (e) { return send(res, 400, { error: e.message }); }
 }
@@ -135,16 +176,10 @@ async function saveRobotcam(req, res, url) {
   try {
     const buf = await readRaw(req, 96 * 1024 * 1024), dir = path.join(DATA_DIR(), 'robotcam');
     fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, `${id}.${ext}`), buf);
-    const vids = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')).map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.t - b.t);
-    for (const v of vids.slice(0, Math.max(0, vids.length - CCTV_KEEP))) dropSegment(dir, v.f.replace(/\.webm$/, ''));
-    if (ext === 'json' && ffmpegInfo().available) queueConvert(dir, id).then(() => pruneMp4(dir)).catch(() => {});   // 색인까지 받으면 MP4로 변환 (전체 + 카메라별)
+    pruneVideos('robotcam');
+    if (ext === 'json' && ffmpegInfo().available) queueConvert(dir, id).then(() => pruneVideos('robotcam')).catch(() => {});   // 색인까지 받으면 MP4로 변환 (전체 + 카메라별) → 한도 정리
     return send(res, 200, { ok: true, bytes: buf.length });
   } catch (e) { return send(res, 400, { error: e.message }); }
-}
-function listDir(res, sub) {
-  const dir = path.join(DATA_DIR(), sub);
-  let files = []; try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')); } catch { /* 아직 없음 */ }
-  return send(res, 200, { dir, count: files.length, bytes: files.reduce((a, f) => a + fs.statSync(path.join(dir, f)).size, 0), keep: CCTV_KEEP });
 }
 // GET /videos/(cctv|robotcam)/<파일>.webm|json → 저장한 영상 파일 (AAS 영상 링크가 가리키는 주소)
 function serveVideo(res, url) {
@@ -157,12 +192,7 @@ function serveVideo(res, url) {
   fs.createReadStream(f).pipe(res);
 }
 // GET /api/cctv → 저장된 녹화 구간 수·용량
-function listCctv(res) {
-  const dir = path.join(DATA_DIR(), 'cctv');
-  let files = [];
-  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.webm')); } catch { /* 아직 없음 */ }
-  return send(res, 200, { dir, count: files.length, bytes: files.reduce((a, f) => a + fs.statSync(path.join(dir, f)).size, 0), keep: CCTV_KEEP });
-}
+function listCctv(res) { return send(res, 200, videoStatus('cctv')); }
 
 // AIOS 운영 데이터 묶음 저장소 — POST /api/aios?id=run-..._aios_0001 (본문: 운영 데이터셋 zip) → data/aios/<id>.zip
 async function saveAios(req, res, url) {
@@ -268,7 +298,7 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
     if (url.pathname === '/api/cctv' && req.method === 'POST') return saveCctv(req, res, url);
     if (url.pathname === '/api/cctv') return listCctv(res);
     if (url.pathname === '/api/robotcam' && req.method === 'POST') return saveRobotcam(req, res, url);
-    if (url.pathname === '/api/robotcam') return listDir(res, 'robotcam');
+    if (url.pathname === '/api/robotcam') return send(res, 200, videoStatus('robotcam'));
     if (url.pathname.startsWith('/videos/')) return serveVideo(res, url);
     if (url.pathname === '/api/convert') return convertApi(res, url);
     if (url.pathname === '/api/clip-mp4' && req.method === 'POST') return clipMp4(req, res, url);
@@ -312,6 +342,6 @@ export async function startServer({ port = 8765, host = '127.0.0.1' } = {}) {
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, host, () => { setTimeout(() => { try { pruneEpisodes(null, true); pruneAios(); } catch { /* 무시 */ } }, 3000); resolve({ server, port: server.address().port }); });   // 시작 3초 뒤 쌓여 있던 에피소드·AIOS 데이터 정리
+    server.listen(port, host, () => { setTimeout(() => { try { pruneEpisodes(null, true); pruneAios(); backfillVideos(); } catch { /* 무시 */ } }, 3000); resolve({ server, port: server.address().port }); });   // 시작 3초 뒤 쌓여 있던 에피소드·AIOS 데이터·녹화 영상 정리 (MP4 없는 구간 변환)
   });
 }

@@ -912,6 +912,14 @@ cctvBtn.addEventListener('click', () => { if (cctvBtn.classList.contains('on') &
 // ── CCTV 영상 창: 실시간 영상 + AI 검출 + CCTV 에이전트 이벤트 이력 ─────────────────
 const cctvPanel = document.getElementById('cctvPanel'), cctvCv = document.getElementById('cctvCanvas');
 let cctvSel = null, cctvT = 0, cctvOnlyThis = false;
+// 서버 녹화 영상 보관 상태 (CCTV · 로봇 카메라) — 10초마다 가져온다 (원본 + MP4 + 카메라별 MP4 실제 용량, 한도)
+const videoSrv = { t: 0 };
+function refreshVideoSrv() {
+  if (!cctvRec.server || performance.now() - videoSrv.t < 10000) return; videoSrv.t = performance.now();
+  for (const k of ['cctv', 'robotcam']) fetch(`/api/${k}`).then((r) => r.json()).then((j) => { videoSrv[k] = j; }).catch(() => {});
+}
+const gb = (b) => (b >= 1073741824 ? `${(b / 1073741824).toFixed(2)}GB` : `${(b / 1048576).toFixed(0)}MB`);
+const videoSrvText = (k) => { const v = videoSrv[k]; return v ? `서버 보관 ${v.count}구간 · ${gb(v.bytes)} / 한도 ${gb(v.maxBytes)} (원본 ${gb(v.webmBytes)} · MP4 ${v.mp4Count}구간 ${gb(v.mp4Bytes + v.camBytes)}) · 원본 최근 ${v.keep}구간 · MP4 최근 ${v.mp4Keep}구간` : '서버 보관 확인 중…'; };
 function openCctv(id) { cctvSel = id; cctvPanel.hidden = false; cctvT = 1; renderCctvPanel(true); }
 window.__openCctv = openCctv;   // 개발 확인용
 document.getElementById('cctvClose').addEventListener('click', () => { cctvClip.stop(); cctvPanel.hidden = true; cctvSel = null; });
@@ -946,7 +954,7 @@ function renderCctvPanel(force) {
     <button type="button" data-cctv="rec" class="${cctvClip.active ? 'rec' : ''}" ${shared ? 'disabled' : ''} title="이 카메라 영상을 녹화 — 다시 누르면 정지하고 로컬 파일로 저장 (서버에 ffmpeg가 있으면 MP4, 없으면 WebM)">${cctvClip.active ? `⏹ 녹화 정지·저장 (${Math.floor(cctvClip.secs)}초)` : '⏺ 이 카메라 녹화'}</button>
     <button type="button" data-cctv="snap" ${shared ? 'disabled' : ''} title="지금 화면(AI 오버레이 포함)을 JPEG 파일로 저장">📸 스냅샷</button>
     <button type="button" data-cctv="nvr" ${shared || !R.kept ? 'disabled' : ''} title="자동 녹화(전체 CCTV 분할 영상)의 가장 최근 구간과 카메라 배치 색인(JSON)을 로컬 파일로 저장 — 서버에 ffmpeg가 있으면 MP4">⬇ 전체 CCTV 최근 녹화${cctvRec.ffmpeg ? ' (MP4)' : ''}</button>
-    <small>${shared ? '공유 페이지에서는 파일 저장이 막혀 있습니다 — 맥 앱·웹 버전에서 저장' : !R.on ? '이 브라우저는 영상 녹화를 지원하지 않습니다' : `<b class="cc-rec">● 자동 녹화</b>${cctvRec.ffmpeg ? ` · MP4 저장 (ffmpeg ${ffmpegVer ?? ''} — 전체 + 카메라별)` : ' · WebM'}${cctvClip.converting ? ' · 개별 녹화 MP4 변환 중…' : ''} · 전체 ${sim.cctv.cams.length}대 · ${CCTV_REC.fps}fps · 구간 #${R.seq} ${Math.floor(R.cur / 60)}:${String(Math.floor(R.cur % 60)).padStart(2, '0')} / ${CCTV_REC.segS / 60}분 · ${R.server ? `서버 저장 ${R.saved}구간 ${mb(R.bytes)} (data/cctv/)` : `브라우저 보관 ${R.kept}구간`}${cctvClip.last ? ` · 마지막 저장 ${cctvClip.last.name}` : ''}`}</small></div>`);
+    <small>${shared ? '공유 페이지에서는 파일 저장이 막혀 있습니다 — 맥 앱·웹 버전에서 저장' : !R.on ? '이 브라우저는 영상 녹화를 지원하지 않습니다' : `<b class="cc-rec">● 자동 녹화</b>${cctvRec.ffmpeg ? ` · MP4 저장 (ffmpeg ${ffmpegVer ?? ''} — 전체 + 카메라별)` : ' · WebM'}${cctvClip.converting ? ' · 개별 녹화 MP4 변환 중…' : ''} · 전체 ${sim.cctv.cams.length}대 · ${CCTV_REC.fps}fps · 구간 #${R.seq} ${Math.floor(R.cur / 60)}:${String(Math.floor(R.cur % 60)).padStart(2, '0')} / ${CCTV_REC.segS / 60}분 · ${R.server ? (refreshVideoSrv(), videoSrvText('cctv')) : `브라우저 보관 ${R.kept}구간`}${cctvClip.last ? ` · 마지막 저장 ${cctvClip.last.name}` : ''}`}</small></div>`);
   const cnt = {}; for (const d of res.dets) cnt[d.cls] = (cnt[d.cls] ?? 0) + 1;
   setHTML(document.getElementById('cctvDet'), dark
     ? `<div class="cc-models">${Object.entries(AI_MODELS).map(([k, m]) => `<span class="cc-m${res.dets.some((d) => d.model === k) ? ' on' : ''}" style="--c:${m.color}" title="${escV(m.desc)}">${escV(m.name)}</span>`).join('')}</div>
@@ -1111,6 +1119,7 @@ function frame() {
     const ref0 = view.telemetry.ref, refKey = JSON.stringify(ref0);
     if (rbCam.key !== refKey) { rbCam.key = refKey; rbCam.sel = 'head'; }
     const camList = camWall.camsOf(ref0), tabs = document.getElementById('rbCamTabs');
+    { const el = document.getElementById('rbRec'); if (el) { if (robotRec.server) refreshVideoSrv(); const h = robotRec.on ? `🎥 로봇 카메라 자동 녹화 (${robotRec.stats().cams}대) · ${robotRec.server ? videoSrvText('robotcam') : '브라우저 보관'}` : ''; if (el.textContent !== h) el.textContent = h; } }
     if (tabs) { const h = camList.length ? camList.map(([k, l]) => `<button type="button" data-rbcam="${k}" class="${rbCam.sel === k ? 'on' : ''}">${l.replace(' 카메라', '').replace('스테레오', '')}</button>`).join('') : ''; if (tabs.dataset.h !== h) { tabs.innerHTML = h; tabs.dataset.h = h; } tabs.hidden = !camList.length; }
     const shown = modeKey === 'dark' && box && cv && camWall.renderRobotView(camList.length ? { ...ref0, cam: rbCam.sel } : ref0, cv, (() => { const t = Math.floor(sim.time) + 8 * 3600; return [t / 3600 % 24, t / 60 % 60, t % 60].map((v) => String(Math.floor(v)).padStart(2, '0')).join(':'); })());
     if (box) box.hidden = !shown;

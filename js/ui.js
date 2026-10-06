@@ -180,7 +180,7 @@ export class UI {
     el.classList.remove('hidden'); el.classList.add('robot');
     el.innerHTML = `<h3><span id="rbTitle">로봇</span><button data-act="close">✕</button></h3>
       <div class="rb-status" id="rbStatus"></div>
-      <div class="rb-cam" id="rbCamBox" hidden><div class="rb-camtabs" id="rbCamTabs"></div><canvas id="rbCam" width="480" height="270"></canvas></div>
+      <div class="rb-cam" id="rbCamBox" hidden><div class="rb-camtabs" id="rbCamTabs"></div><canvas id="rbCam" width="480" height="270"></canvas><small class="rb-rec" id="rbRec"></small></div>
       <div id="rbJoints"></div>
       <canvas id="rbChart" width="640" height="150"></canvas>
       <div id="rbSections"></div>

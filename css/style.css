@@ -810,3 +810,4 @@ em.up { color: var(--good); } em.dn { color: var(--bad); }
 .rb-save-row #rbVer { flex: 0 0 auto; }
 .dh-ver { font-size: 12px; color: var(--ink2); margin: 4px 0 6px; display: flex; align-items: center; gap: 6px; }
 .dh-ver select { background: rgba(255, 255, 255, 0.06); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 2px 6px; }
+.rb-rec { display: block; font-size: 10.5px; color: var(--ink2); margin-top: 3px; line-height: 1.4; }
