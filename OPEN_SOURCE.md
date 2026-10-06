@@ -24,8 +24,8 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 
 | 이름 | 라이선스 | 출처 | 쓰인 곳 |
 |---|---|---|---|
-| Blender 5.2 | GPL-2.0-or-later (프로그램) — 만든 결과물(모델·렌더)은 만든 사람의 것 | https://www.blender.org | `blender/build_assets.py`로 AMR·AGV·지게차·드론·휴머노이드·사족보행·6축 팔·AMMR·화물트럭·갠트리·e-axle·도어트림·조립·체결 부품·정비실 비품 모델링과 기본 도형 라이브러리(`tools/collect-primitives.cjs`로 모은 치수 279종) → `assets/blender/*.glb`·미리보기 렌더 (Blender 프로그램은 앱에 포함하지 않음) |
-| aas-core3.0 (Python) | MIT | https://github.com/aas-core-works/aas-core3.0-python | 내보낸 AAS JSON·XML 표준 적합성 검증 |
+| Blender 5.2 | GPL-2.0-or-later (프로그램) — 만든 결과물(모델·렌더)은 만든 사람의 것 | https://www.blender.org | `blender/build_assets.py`로 AMR·AGV·지게차·드론·휴머노이드·사족보행·6축 팔·AMMR·화물트럭·갠트리·e-axle·도어트림·조립·체결 부품·정비실 비품 모델링과 기본 도형 라이브러리(`tools/collect-primitives.cjs`로 모은 치수 284종) → `assets/blender/*.glb`·미리보기 렌더 (Blender 프로그램은 앱에 포함하지 않음) |
+| aas-core3.0 (Python) | MIT | https://github.com/aas-core-works/aas-core3.0-python | 내보낸 AAS JSON·XML 표준 적합성 검증 (메타모델 v3.0으로 저장한 파일 — v3.1 기본 파일은 BaSyx SDK로 검증) |
 | Eclipse BaSyx Python SDK 2.2 · Compliance Tool | MIT | https://github.com/eclipse-basyx/basyx-python-sdk | 내보낸 AASX·AAS JSON·XML(메타모델 v3.1)이 BaSyx로 엄격 파싱되는지 검증 (`tests/aasbasyx.mjs`, 별도 빌드한 Jin-AASX 가상환경 사용 · 앱에 포함하지 않음) |
 | Node.js · npm | MIT 등 | https://nodejs.org | 서버 실행, 시뮬레이션 자동 시험(`npm test`) |
 | Python 3 | PSF | https://python.org | 개발 보조 스크립트, AAS 검증 |
@@ -53,7 +53,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 
 | 표준 | 쓰인 곳 |
 |---|---|
-| IDTA Asset Administration Shell Part 1 v3.0 (메타모델) | 설비·로봇 자산 모델 (JSON·XML·RDF) |
+| IDTA Asset Administration Shell Part 1 메타모델 — **v3.1(기본)** · v3.0(저장 옵션) (IDTA-01001-3-1 · 3-0) | 설비·로봇 자산 모델 (JSON·XML·RDF), 로봇 카메라·CCTV 영상 링크 서브모델 `VideoRecordings` (`js/aas.js`) |
 | IDTA AAS Part 5 (AASX 패키지) · ISO/IEC 29500-2 (OPC 패키징) | 로봇별 누적 데이터 `.aasx` |
 | IDTA 02008 Time Series Data | 시계열 서브모델 (InternalSegment·ExternalSegment) |
 | IDTA 02006 Digital Nameplate (ZVEI 2.0) · IDTA 02003 Technical Data (ZVEI 1.2) | 명판·기술 데이터 서브모델 |
@@ -63,8 +63,11 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 | W3C RDF 1.1 Turtle | `.ttl` 내보내기 |
 | IEC 60204-1 (정지 카테고리 0·2) · ISO/TS 15066 (협동 로봇 속도 제한) | 비상정지·보호정지·안전 감속 명령 정의 |
 | Odoo 외부 API (JSON-RPC `/jsonrpc`, execute_kw) · 데이터 모델 purchase.order · stock.picking · stock.quant · maintenance.request | Odoo ERP 연동 (`js/odoo.js`, `server/odoo-gateway.mjs`, 직접 작성 — Odoo 소스·라이브러리는 포함하지 않음. Odoo Community는 LGPL v3로 사용자가 따로 설치·운영) |
+| W3C MediaStream Recording (MediaRecorder) · `HTMLCanvasElement.captureStream` · WebM(Matroska) · VP9/VP8 | 로봇 카메라·CCTV 영상 자동 녹화·개별 녹화 (`js/robotrec.js`, `js/cctvrec.js` — 브라우저·Electron 내장 기능) |
+| ITU-T H.264 / MPEG-4 AVC · ISO/IEC 14496-12·14 (MP4) | ffmpeg로 변환한 MP4 영상(전체 분할·카메라별) (`server/video-convert.mjs`) |
 | libpcap 파일 형식 (tcpdump.org) · IETF RFC 791(IPv4) · RFC 9293(TCP) · OASIS MQTT 3.1.1 | 패킷 덤프 `.pcap` 생성 (`js/pcap.js`, 직접 작성 — Wireshark·tcpdump는 분석용 외부 도구이며 포함하지 않음) |
-| 3GPP TR 38.901 (InF 실내 공장 채널 모델) · TS 38.211 (PCI = 3·SSS + PSS) · TS 38.331 (A3 이벤트·TTT) · TS 38.300 (Xn 핸드오버·PDCP 포워딩) | Private 5G 기지국 배치·PCI·핸드오버 시뮬레이션 (`js/net5g.js`) |
+| 3GPP TR 38.901 (InF 실내 공장 채널 모델) · TS 38.211 (PCI = 3·SSS + PSS) · TS 38.331 (A3 이벤트·TTT) · TS 38.300 (Xn 핸드오버) · Rel-16 DAPS 핸드오버 (끊김 0ms) | Private 5G 기지국 배치·PCI·핸드오버 시뮬레이션 (`js/net5g.js`) |
+| 3GPP TS 22.104 (공장 자동화 서비스 요구) · TR 38.824 (URLLC — TDD 정렬·HARQ·설정 그랜트) · SON MLB (이동성 부하 분산) | 5G 지연 10ms(p99) 모델 · 기지국당 임계 대수 · 부하 분산 핸드오버·수락 제어 (`js/net5g.js`) |
 
 ## 5. 참고한 AI 알고리즘 (모델·가중치는 포함하지 않음 — 출력 형식만 재현)
 
@@ -82,7 +85,7 @@ CCTV 영상 AI 파이프라인(`js/cctv.js` `AI_MODELS`, `js/cctvview.js`)은 �
 
 **로봇 외형 참고 (상표·디자인)** — 휴머노이드(Boston Dynamics 전동식 Atlas), 사족보행(Boston Dynamics Spot), 6축 팔(Rainbow Robotics RB20-1900), AMMR(Rainbow Robotics RB-Y1)은 각 제품의 **분위기만 참고해 Blender로 새로 모델링한 독자 디자인**입니다. 제조사의 3D 데이터·도면·이미지를 쓰지 않았고 로고·상표를 넣지 않았으며, 각 제품명·상표는 해당 회사의 것입니다(이 저장소와 제휴 관계 없음).
 
-**FACOS(공장 운영 SW) 전체** — 시뮬레이션 엔진, 운영 에이전트, 오케스트레이터, 상위 명령·지시 게이트, 대화 기반 해석기, 출하·입고 트럭·물류 창고·드론, 설비 현황판, VLA 조립 동작(역기구학), VLA 에피소드 기록·zip 데이터셋·학습·배포 파이프라인, AIOS 공장 운영 AI(운영 데이터셋·정책 학습·트윈 검증·오케스트레이터 배포), 로봇 카메라 영상(렌더 타깃), CCTV 사각지대 배치·CCTV 에이전트·전광판·AI 오버레이(위 5절 알고리즘의 출력 형식 재현), Private 5G 기지국 배치·핸드오버 시뮬레이션, MQTT/TCP/IP 패킷 덤프(pcap), Blender 모델링 스크립트와 그 결과 모델(assets/blender), Odoo ERP 연동(발주·재고·설비보전), AAS·AASX·OPC UA 메시지 생성기, 3D 모델(설비·로봇·트럭·드론 등), 화면 UI는 이 저장소에서 직접 작성했습니다. 외부 3D 모델 파일이나 외부 이미지는 위 로고 외에는 쓰지 않습니다.
+**FACOS(공장 운영 SW) 전체** — 시뮬레이션 엔진, 운영 에이전트, 오케스트레이터, 상위 명령·지시 게이트, 대화 기반 해석기, 출하·입고 트럭·물류 창고·드론, 설비 현황판, VLA 조립 동작(역기구학), VLA 에피소드 기록·zip 데이터셋·학습·배포 파이프라인, AIOS 공장 운영 AI(운영 데이터셋·정책 학습·트윈 검증·오케스트레이터 배포), 로봇 카메라 영상(렌더 타깃), CCTV 사각지대 배치·CCTV 에이전트·전광판·AI 오버레이(위 5절 알고리즘의 출력 형식 재현), Private 5G 기지국 배치·핸드오버 시뮬레이션, MQTT/TCP/IP 패킷 덤프(pcap), Blender 모델링 스크립트와 그 결과 모델(assets/blender), Odoo ERP 연동(발주·재고·설비보전), AAS·AASX·OPC UA 메시지 생성기, KPI 영향 분석·개선 제안·디지털트윈 검증, 혼합형 다중 에이전트(반사 계층·도메인 에이전트·메인 조정자)와 구조 비교, 문제 해결 우선순위(안전 우선), 진로 위 현장 이벤트 우회·대기, 로봇 카메라·CCTV 영상 자동 녹화와 AAS 영상 링크, 5G 지연 10ms 모델·부하 분산, 3D 모델(설비·로봇·트럭·드론 등), 화면 UI는 이 저장소에서 직접 작성했습니다. 외부 3D 모델 파일이나 외부 이미지는 위 로고 외에는 쓰지 않습니다.
 
 FACOS는 공장 운영용 오픈소스 프레임워크(ROS 2·Open-RMF·Eclipse BaSyx·Node-RED 등)를 쓰지 않고 이 저장소에서 직접 작성했습니다. 위 1절 라이브러리는 3D 화면·앱 실행·MQTT 전송·Claude API 호출·첨부 파일 읽기에만 쓰이고, 판단·운영 로직(오케스트레이터·에이전트·셀 게이트·명령 센터·VLA·AIOS·CCTV 에이전트·Private 5G)은 모두 직접 작성한 코드입니다. VLA·AIOS 학습은 신경망이 아니라 규칙 기반 정책 탐색이며, 효과는 시뮬레이션에서 측정한 값입니다.
 
