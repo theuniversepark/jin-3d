@@ -115,32 +115,42 @@ export class ImpactTracker {
   closeStop(st) { const e = this.open.get(st); if (e) e.t1 = this.sim.time; this.open.delete(st); }
   snapshot() {
     const s = this.sim;
-    this.snaps.push({ t: s.time, w: { ...this.w }, wipInt: { ...this.wipInt }, kwh: { ...this.kwh }, good: s.stats.good, bad: s.stats.rejected + s.stats.escaped, energy: s.stats.energy, wipTot: s.stats.wipInt, hz: this.hzMoverSec });
+    this.snaps.push({ t: s.time, w: { ...this.w }, wipInt: { ...this.wipInt }, kwh: { ...this.kwh }, good: s.stats.good, bad: s.stats.rejected + s.stats.escaped, energy: s.stats.energy, wipTot: s.stats.wipInt, hz: this.hzMoverSec, n: { ...this.n } });
     if (this.snaps.length > SNAP_KEEP) this.snaps.shift();
   }
   // 구간 [t0, now] 누적값 (window 초 · 0이면 처음부터)
+  now() { const s = this.sim; return { t: s.time, w: this.w, wipInt: this.wipInt, kwh: this.kwh, good: s.stats.good, bad: s.stats.rejected + s.stats.escaped, energy: s.stats.energy, wipTot: s.stats.wipInt, hz: this.hzMoverSec, n: this.n }; }
+  at(t) { return [...this.snaps].reverse().find((x) => x.t <= t) ?? this.snaps[0]; }
+  diff(base, now) {
+    const d = (a, b) => Object.fromEntries(KEYS.map((k) => [k, a[k] - (b?.[k] ?? 0)]));
+    return { t0: base.t, t: now.t, w: d(now.w, base.w), wipInt: d(now.wipInt, base.wipInt), kwh: d(now.kwh, base.kwh), good: now.good - base.good, bad: now.bad - base.bad, energy: now.energy - base.energy, wipTot: now.wipTot - base.wipTot, hz: now.hz - base.hz, n: d(now.n, base.n) };
+  }
   span(window = 0) {
-    const s = this.sim, now = { t: s.time, w: this.w, wipInt: this.wipInt, kwh: this.kwh, good: s.stats.good, bad: s.stats.rejected + s.stats.escaped, energy: s.stats.energy, wipTot: s.stats.wipInt, hz: this.hzMoverSec };
-    const base = window > 0 ? [...this.snaps].reverse().find((x) => x.t <= s.time - window) ?? this.snaps[0] : null;
-    if (!base) return { ...now, t0: 0 };
-    const d = (a, b) => Object.fromEntries(KEYS.map((k) => [k, a[k] - (b[k] ?? 0)]));
-    return { t0: base.t, t: now.t, w: d(now.w, base.w), wipInt: d(now.wipInt, base.wipInt), kwh: d(now.kwh, base.kwh), good: now.good - base.good, bad: now.bad - base.bad, energy: now.energy - base.energy, wipTot: now.wipTot - base.wipTot, hz: now.hz - base.hz };
+    const now = this.now(), base = window > 0 ? this.at(now.t - window) : null;
+    return base ? this.diff(base, now) : { ...now, t0: 0 };
+  }
+  // 구간 [a, b] 원인별 손실 (적용 전/후 실측 해석용)
+  rangeRows(a, b) {
+    const A = this.at(a), B = b >= this.sim.time ? this.now() : this.at(b);
+    if (!A || !B || B.t - A.t < 60) return null;
+    return this.fromSpan(this.diff(A, B)).rows;
   }
 
   // 원인별 영향 (window: 최근 N초, 0 = 전체)
-  report(window = 0) {
-    const s = this.sim, sp = this.span(window), T = Math.max(1, sp.t - sp.t0), ic = s.idealCycle;
+  report(window = 0) { return { window, ...this.fromSpan(this.span(window)) }; }
+  fromSpan(sp) {
+    const s = this.sim, T = Math.max(1, sp.t - sp.t0), ic = s.idealCycle;
     const ideal = T / ic, loss = Math.max(0, ideal - sp.good), qU = Math.min(loss, sp.bad), rem = loss - qU;
     const W = { ...sp.w, quality: 0 }, sumW = KEYS.reduce((a, k) => a + W[k], 0) || 1;
     const units = Object.fromEntries(KEYS.map((k) => [k, k === 'quality' ? qU : (rem * W[k]) / sumW]));
     const H = T / 3600, E = sp.energy, good = Math.max(1, sp.good);
     const rows = KEYS.map((k) => {
       const u = units[k], kwh = sp.kwh[k];
-      return { key: k, ...CAUSES[k], units: u, uph: u / H, oeePts: (u * ic) / T, wip: sp.wipInt[k] / T, kwh, kwhUnitGain: E / good - (E - kwh) / (good + u), count: k === 'quality' ? sp.bad : this.n[k] };
+      return { key: k, ...CAUSES[k], units: u, uph: u / H, oeePts: (u * ic) / T, wip: sp.wipInt[k] / T, kwh, kwhUnitGain: E / good - (E - kwh) / (good + u), count: k === 'quality' ? sp.bad : sp.n[k] };
     }).sort((a, b) => b.oeePts - a.oeePts);
     const oee = Math.min(1, (sp.good * ic) / T), uph = sp.good / H, avgWip = sp.wipTot / T, avgKW = E / H, kwhPerUnit = E / good;
     return {
-      window, T, ideal, loss, good: sp.good, rows, unitPerW: rem / sumW,
+      T, ideal, loss, good: sp.good, rows, unitPerW: rem / sumW,
       kpi: { uph, uphIdeal: 3600 / ic, oee, avgWip, avgKW, kwhPerUnit, energy: E, wasteKwh: KEYS.reduce((a, k) => a + sp.kwh[k], 0) },
       hazardMoverSec: sp.hz,
       events: this.events.filter((e) => (e.t1 ?? s.time) >= sp.t0).slice(0, 25).map((e) => ({ ...e, units: e.w * (rem / sumW), dur: (e.t1 ?? (e.ev ? (e.ev.cleared ? e.ev.tClear : s.time) : s.time)) - e.t0, open: e.ev ? !e.ev.cleared : e.t1 == null, affected: e.ev?.affected?.size ?? 0 })),
@@ -162,6 +172,143 @@ export const LEVERS = {
 };
 const AIOS_KEYS = ['amrStage', 'ecoWait', 'orchLatency'];
 const fmtV = (k, v) => `${k === 'releaseMargin' || k === 'cpkMin' ? v.toFixed(2) : r1(v)}${LEVERS[k].unit}`;
+
+// ── 트윈 검증 · 실측 해석: 원인별 손실 변화로 "왜 좋아졌나 / 왜 나빠졌나"를 설명 ─────────────────
+// 레버가 직접 움직이는 손실 원인 (나머지 원인의 변화는 레버와 무관한 외란으로 본다)
+const LEVER_KEYS = {
+  pmThreshold: ['failure', 'pm'], alarmDelay: ['failure'], orchLatency: ['failure', 'pm', 'cal', 'hazard'], reorderPoint: ['supply', 'parts'],
+  releaseMargin: ['flow', 'speed'], releaseInterval: ['flow', 'speed'], amrStage: ['flow'], ecoWait: [], cpkMin: ['quality', 'cal'],
+};
+// 레버 방향별 작동 원리 (up: 값을 올림 · down: 값을 내림)
+const LEVER_MECH = {
+  pmThreshold: { up: '정비 시작 건강도를 올리면 고장 전에 계획 정비로 세움 — 고장(긴급수리) 손실↓ 대신 예지정비 정지 횟수↑', down: '정비를 늦추면 계획 정비 정지↓ 대신 고장 위험↑' },
+  alarmDelay: { up: '고장 발견이 늦어져 고장 1건당 정지 시간↑', down: '고장 발견·호출이 빨라져 고장 1건당 정지 시간↓' },
+  orchLatency: { up: '판단·출동이 늦어져 고장·정비·진로 이벤트 대기↑', down: '보고 → 판단 → 출동이 빨라져 고장·정비·진로 이벤트 대기↓' },
+  reorderPoint: { up: '재주문을 일찍 걸어 투입구 재고 유지 — 자재 공급 대기↓ 대신 재고↑', down: '재고를 줄이면 공급 차질 때 투입 중단(자재 대기)↑' },
+  releaseMargin: { up: '투입 간격이 길어져 재공·막힘↓ 대신 병목 셀 자재 대기(흐름 손실)↑ 가능', down: '투입 간격이 짧아져 병목 셀 자재 대기↓ 대신 재공↑ · 앞 셀 막힘(흐름 대기)↑ 가능' },
+  releaseInterval: { up: '투입 간격이 길어져 재공↓ 대신 자재 대기(흐름 손실)↑ 가능', down: '투입 간격이 짧아져 자재 대기↓ 대신 재공↑ · 막힘↑ 가능' },
+  amrStage: { up: '다음 AMR을 투입 스테이션에 미리 대기 — 투입 대기↓ 대신 운송 가능한 AMR 수↓ (다른 구간 운송 지연)', down: '선행 대기 AMR을 줄여 운송 가용 대수↑ 대신 투입 대기↑' },
+  ecoWait: { up: '절전 진입이 늦어져 대기 전력↑', down: '대기 셀이 일찍 절전해 대기 전력↓ — 짧은 대기가 잦으면 재기동 지연으로 사이클 손실 가능' },
+  cpkMin: { up: '재보정을 더 일찍 걸어 불량↓ 대신 재보정 정지↑', down: '재보정을 줄여 정지↓ 대신 불량↑' },
+};
+const mechOf = (p) => LEVER_MECH[p.lever]?.[p.to > p.from ? 'up' : 'down'] ?? '';
+const pp = (v) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(2)}%p`;
+const sgn = (v, d = 1) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(d)}`;
+// 원인별 OEE 손실 변화 (%p, +면 손실 증가 = 나빠짐)
+function causeDelta(before, after) {
+  const B = Object.fromEntries((before ?? []).map((r) => [r.key, r])), A = Object.fromEntries((after ?? []).map((r) => [r.key, r]));
+  return KEYS.map((k) => {
+    const b = B[k] ?? { oeePts: 0, wip: 0, kwh: 0, count: 0 }, a = A[k] ?? { oeePts: 0, wip: 0, kwh: 0, count: 0 };
+    return { key: k, label: CAUSES[k].label, icon: CAUSES[k].icon, cur: b.oeePts * 100, cand: a.oeePts * 100, d: (a.oeePts - b.oeePts) * 100, dWip: a.wip - b.wip, dKwh: a.kwh - b.kwh, nCur: b.count ?? 0, nCand: a.count ?? 0 };
+  });
+}
+// 시드 평균 원인별 손실
+function avgRows(list) {
+  const n = list.length || 1, out = Object.fromEntries(KEYS.map((k) => [k, { key: k, oeePts: 0, wip: 0, kwh: 0, count: 0 }]));
+  for (const rows of list) for (const r of rows) { const o = out[r.key]; o.oeePts += r.oeePts / n; o.wip += r.wip / n; o.kwh += r.kwh / n; o.count += (r.count ?? 0) / n; }
+  return Object.values(out);
+}
+const causeTxt = (c, who = ['현재', '제안']) => `${c.icon} ${c.label} ${pp(c.d)} (${who[0]} ${c.cur.toFixed(2)} → ${who[1]} ${c.cand.toFixed(2)}%p${Math.round(c.nCur) !== Math.round(c.nCand) ? ` · ${Math.round(c.nCur)} → ${Math.round(c.nCand)}건` : ''})`;
+// KPI 변화 → 종합 점수 (트윈 판정과 실측 판정이 같은 기준)
+function kpiScore(dU, dO, dW, dE) {
+  const parts = [{ k: 'UPH', v: dU, txt: `UPH ${sgn(dU * 100)}%` }, { k: 'OEE', v: dO, txt: `OEE ${sgn(dO * 100, 2)}%p` }, { k: 'WIP', v: -dW * 0.25, txt: `WIP ${sgn(dW * 100)}%` }, { k: 'POWER', v: -dE * 0.5, txt: `kWh/개 ${sgn(dE * 100)}%` }];
+  return { score: parts.reduce((a, x) => a + x.v, 0), parts };
+}
+// 트윈 검증 결과의 원인 — 판정 방향의 원인별 손실 변화 + 상쇄분 + 작동 원리
+function explainTwin(p, T, causes, sc) {
+  const up = causes.filter((c) => c.d > 0.05).sort((a, b) => b.d - a.d), down = causes.filter((c) => c.d < -0.05).sort((a, b) => a.d - b.d);
+  const drv = [...sc.parts].sort((a, b) => (T.recommend === 'hold' ? a.v - b.v : b.v - a.v))[0];
+  const L = [];
+  if (T.recommend === 'hold') {
+    L.push(`판정을 가른 KPI: ${drv.txt} (종합 점수 ${sgn(sc.score * 100, 2)})`);
+    if (up.length) L.push(`나빠진 원인: ${up.slice(0, 3).map((c) => causeTxt(c)).join(' · ')}`);
+    else if (drv.k === 'WIP') L.push(`손실 원인은 거의 그대로인데 재공이 늘어 WIP 페널티가 커졌습니다 (평균 재공 ${T.wipCur.toFixed(1)} → ${T.wipCand.toFixed(1)}개)`);
+    else if (drv.k === 'POWER') L.push(`생산은 비슷한데 전력이 늘었습니다 (${T.kwCur.toFixed(1)} → ${T.kwCand.toFixed(1)}kW · ${(T.kwhCur * 1000).toFixed(1)} → ${(T.kwhCand * 1000).toFixed(1)}Wh/개)`);
+    if (down.length) L.push(`일부 개선(상쇄됨): ${down.slice(0, 2).map((c) => causeTxt(c)).join(' · ')}`);
+  } else if (T.recommend === 'apply') {
+    L.push(`판정을 가른 KPI: ${drv.txt} (종합 점수 ${sgn(sc.score * 100, 2)})`);
+    if (down.length) L.push(`개선된 원인: ${down.slice(0, 3).map((c) => causeTxt(c)).join(' · ')}`);
+    else if (drv.k === 'WIP') L.push(`손실 원인은 그대로인데 재공이 줄었습니다 (평균 재공 ${T.wipCur.toFixed(1)} → ${T.wipCand.toFixed(1)}개)`);
+    else if (drv.k === 'POWER') L.push(`생산은 같고 전력이 줄었습니다 (${T.kwCur.toFixed(1)} → ${T.kwCand.toFixed(1)}kW · ${(T.kwhCur * 1000).toFixed(1)} → ${(T.kwhCand * 1000).toFixed(1)}Wh/개)`);
+    if (up.length) L.push(`대가(늘어난 손실): ${up.slice(0, 2).map((c) => causeTxt(c)).join(' · ')}`);
+  } else {
+    const lk = LEVER_KEYS[p.lever] ?? [], tgt = causes.filter((c) => lk.includes(c.key)), tgtLoss = tgt.reduce((a, c) => a + c.cur, 0);
+    const why = up.length && down.length ? `개선(${down[0].icon} ${down[0].label} ${pp(down[0].d)})과 악화(${up[0].icon} ${up[0].label} ${pp(up[0].d)})가 서로 상쇄`
+      : !lk.length ? `대기 전력 절감 폭이 작음 (${(T.kwhCur * 1000).toFixed(1)} → ${(T.kwhCand * 1000).toFixed(1)}Wh/개) — 셀 대기 시간이 대부분 절전 진입 대기보다 짧거나 길어서 기준을 바꿔도 절전 시간이 거의 같음`
+      : tgtLoss < 0.3 ? `이 레버가 줄이려는 손실(${tgt.map((c) => c.label).join('·')})이 트윈 30분 동안 OEE ${tgtLoss.toFixed(2)}%p로 작음`
+      : `레버가 겨냥한 손실(${tgt.map((c) => `${c.label} ${pp(c.d)}`).join(' · ')})이 거의 그대로`;
+    L.push(`효과가 작은 이유: ${why} (종합 점수 ${sgn(sc.score * 100, 2)})`);
+  }
+  const m = mechOf(p); if (m) L.push(`작동 원리: ${m}`);
+  return L;
+}
+// 실측 시점 운영 상태 (트윈 조건과 다른 점을 찾기 위해)
+function fieldCtx(s) {
+  const P = s.processing ?? [], f = s.fleet;
+  return {
+    t: s.time, health: P.length ? P.reduce((a, st) => a + st.health, 0) / P.length : 100, lowHealth: P.filter((st) => st.health < 60).length,
+    raw: s.rawStock, supply: !!s.supplyDisrupted, wip: s.wip?.() ?? 0, hzOpen: (s.fieldEvents ?? []).filter((e) => !e.cleared).length,
+    fleet: f ? { amr: f.amr.scale, agv: f.agv.scale, paused: f.amr.paused || f.agv.paused, out: [...(s.carriers ?? []), ...(s.vehicles ?? [])].filter((v) => v.outOfService).length } : null,
+  };
+}
+// 실측 결과 해석 — 트윈 판정 × 실측 판정 4가지 경우마다 "왜 그렇게 나왔나"
+function explainActual(p, verdict, sc, causes, ctxB, ctxA, s) {
+  const tw = p.twin?.recommend ?? null, lk = LEVER_KEYS[p.lever] ?? [], L = [];
+  const twinBy = Object.fromEntries((p.twin?.causes ?? []).map((c) => [c.key, c]));
+  const better = causes.filter((c) => c.d < -0.05).sort((a, b) => a.d - b.d), worse = causes.filter((c) => c.d > 0.05).sort((a, b) => b.d - a.d);
+  const who = ['적용 전', '후'];
+  const head = !tw ? (verdict === 'good' ? '트윈 검증 없이 적용 — 실측 개선' : verdict === 'bad' ? '트윈 검증 없이 적용 — 실측 악화' : '트윈 검증 없이 적용 — 실측 변화 작음')
+    : tw === 'hold' ? (verdict === 'good' ? '트윈은 악화를 예측했지만 실측은 좋아졌습니다' : verdict === 'bad' ? '트윈 예측대로 실측도 나빠졌습니다' : '트윈은 악화를 예측했지만 실측 변화는 작습니다')
+    : tw === 'apply' ? (verdict === 'good' ? '트윈 예측대로 실측도 좋아졌습니다' : verdict === 'bad' ? '트윈은 개선을 예측했지만 실측은 나빠졌습니다' : '트윈은 개선을 예측했지만 실측 변화는 작습니다')
+    : (verdict === 'good' ? '트윈은 효과가 작다고 봤지만 실측은 좋아졌습니다' : verdict === 'bad' ? '트윈은 효과가 작다고 봤지만 실측은 나빠졌습니다' : '트윈 예측대로 실측 변화가 작습니다');
+  L.push(`실측 판정을 가른 KPI: ${[...sc.parts].sort((a, b) => (verdict === 'bad' ? a.v - b.v : b.v - a.v))[0].txt} (종합 점수 ${sgn(sc.score * 100, 2)})`);
+  // ① 실측에서 실제로 움직인 손실 원인 (레버 효과 / 외란 구분)
+  const EXT = ['failure', 'supply', 'hazard', 'command', 'parts', 'pm', 'cal'];
+  const tag = (c) => `${causeTxt(c, who)}${lk.includes(c.key) ? ' [레버 효과]' : EXT.includes(c.key) ? ' [외란]' : ' [라인 변동]'}`;
+  if (verdict !== 'bad' && better.length) L.push(`실측에서 줄어든 손실: ${better.slice(0, 3).map(tag).join(' · ')}`);
+  if (verdict !== 'good' && worse.length) L.push(`실측에서 늘어난 손실: ${worse.slice(0, 3).map(tag).join(' · ')}`);
+  // ② 트윈 예측과 실측이 가장 크게 어긋난 원인
+  if (p.twin?.causes) {
+    const gap = causes.map((c) => ({ ...c, tw: twinBy[c.key]?.d ?? 0, g: c.d - (twinBy[c.key]?.d ?? 0) }));
+    const surprise = verdict === 'good' ? gap.sort((a, b) => a.g - b.g)[0] : verdict === 'bad' ? gap.sort((a, b) => b.g - a.g)[0] : null;
+    if (surprise && Math.abs(surprise.g) > 0.1) L.push(`트윈과 가장 다른 원인: ${surprise.icon} ${surprise.label} — 트윈 ${pp(surprise.tw)} 예측 · 실측 ${pp(surprise.d)}${lk.includes(surprise.key) ? '' : ' (이 레버와 무관한 원인 → 외란 차이)'}`);
+  }
+  // ③ 레버와 무관한 외란: 적용 전/후 10분의 발생 건수 차이
+  const ext = causes.filter((c) => !lk.includes(c.key) && EXT.includes(c.key) && Math.round(c.nCur) !== Math.round(c.nCand));
+  const extShow = ext.filter((c) => verdict === 'flat' || (verdict === 'good') === (c.nCand < c.nCur));
+  for (const c of extShow.slice(0, 3)) {
+    const fewer = c.nCand < c.nCur;
+    L.push(`외란: ${c.icon} ${c.label} 적용 전 10분 ${Math.round(c.nCur)}건 → 적용 후 ${Math.round(c.nCand)}건 — ${fewer ? '적용 후 구간이 더 조용해 레버 효과보다 좋아 보일 수 있음' : '레버와 무관하게 적용 후 구간 손실을 키움'}`);
+  }
+  if (ctxB?.supply !== ctxA?.supply) L.push(`외란: 자재 공급 차질 ${ctxB?.supply ? '적용 전 진행 → 적용 후 해소' : '적용 후 발생'}`);
+  // ④ 트윈과 실제 현장의 조건 차이 (경우별로 그 결과를 설명하는 쪽)
+  const diff = [];
+  diff.push(`트윈은 새로 시작한 라인(재공 0 · 설비 건강도 시드별 무작위)에서 30분 × 시드 ${TWIN_SEEDS.length} 평균 — 실제는 적용 시점 설비 평균 건강도 ${ctxB.health.toFixed(0)}%(60% 미만 ${ctxB.lowHealth}대) · 재공 ${ctxB.wip}개 · 투입구 재고 ${ctxB.raw}개에서 출발한 10분`);
+  const fb = ctxB.fleet; if (fb && (Math.abs(fb.amr - 1) > 0.01 || Math.abs(fb.agv - 1) > 0.01 || fb.paused || fb.out)) diff.push(`AMR·AGV 관제 설정(AMR ${Math.round(fb.amr * 100)}% · AGV ${Math.round(fb.agv * 100)}%${fb.out ? ` · 운행 제외 ${fb.out}대` : ''}${fb.paused ? ' · 정지 중' : ''})은 트윈에 반영되지 않음`);
+  const good = Math.max(1, (p.after?.uph ?? 0) * (VERIFY_S / 3600)); diff.push(`실측 10분 양품 약 ${Math.round(good)}개 — 우연 변동만으로 UPH ±${(100 / Math.sqrt(good)).toFixed(1)}% 정도 흔들림`);
+  const slow = ['pmThreshold', 'cpkMin', 'reorderPoint'].includes(p.lever), wipLever = ['releaseMargin', 'releaseInterval', 'amrStage'].includes(p.lever);
+  if (tw === 'hold' && verdict === 'good') {
+    if (wipLever) diff.push('트윈이 본 부작용(재공 누적 · 막힘)은 시간이 지나며 커지는데, 10분 실측은 효과가 먼저 나타나는 초기 구간이라 아직 반영되지 않았을 수 있음');
+    if (slow) diff.push('트윈 30분에서는 늘어난 정비·재보정 정지가 먼저 보였지만, 실제 라인은 건강도가 낮은 설비가 많아 고장 예방 효과가 바로 나타남');
+    L.push(`실측에서 좋게 나온 이유: ${better.some((c) => lk.includes(c.key)) ? '레버가 겨냥한 손실이 실제로 줄었고, ' : ''}${ext.some((c) => c.nCand < c.nCur) ? '적용 후 외란이 줄어든 영향이 겹쳤습니다' : '현장 조건이 트윈 출발 조건과 달랐습니다'}`);
+  } else if (tw === 'apply' && verdict === 'bad') {
+    if (slow) diff.push('정비·재보정·재고 레버는 효과가 늦게 나타남 — 적용 직후엔 정비 정지·재고 보충 같은 비용이 먼저 들어가고 고장·불량·결품 감소는 수십 분 뒤 나타남');
+    if (wipLever) diff.push('투입·배차를 바꾼 직후 라인 재공이 새 간격에 맞춰 재배치되는 과도기 — 트윈은 처음부터 새 값으로 운영');
+    L.push(`실측에서 트윈과 달리 나쁘게 나온 이유: ${ext.some((c) => c.nCand > c.nCur) ? '트윈에 없던 외란이 적용 후 구간에 발생했고, ' : ''}${slow || wipLever ? '레버 효과가 나타나기 전 과도기를 측정했을 가능성이 큽니다' : '실제 설비 상태가 트윈 출발 조건과 달랐습니다'}`);
+  } else if (tw === 'apply' && verdict === 'good') {
+    const hit = better.filter((c) => lk.includes(c.key) && (twinBy[c.key]?.d ?? 0) < 0);
+    L.push(`실측에서 좋게 나온 이유: ${hit.length ? `트윈과 같은 원인(${hit.map((c) => `${c.icon} ${c.label} 트윈 ${pp(twinBy[c.key].d)} · 실측 ${pp(c.d)}`).join(', ')})에서 손실이 줄어 메커니즘이 확인됨` : '트윈이 예측한 KPI 개선이 실측에서도 나타남'}${ext.some((c) => c.nCand < c.nCur) ? ' — 단, 적용 후 외란이 줄어든 몫도 섞여 있음' : ''}`);
+  } else if (tw === 'hold' && verdict === 'bad') {
+    const hit = worse.filter((c) => (twinBy[c.key]?.d ?? 0) > 0);
+    L.push(`실측에서 나쁘게 나온 이유: ${hit.length ? `트윈이 경고한 원인(${hit.map((c) => `${c.icon} ${c.label}`).join(', ')})이 실제로도 늘어남` : '트윈이 예측한 KPI 악화가 실측에서도 나타남'}`);
+  } else if (verdict === 'good') L.push(`실측에서 좋게 나온 이유: ${better.length ? `${better[0].icon} ${better[0].label} 손실 ${pp(better[0].d)}${lk.includes(better[0].key) ? ' (레버 효과)' : ' (외란 감소)'}` : 'KPI 전반이 소폭 개선'}`);
+  else if (verdict === 'bad') L.push(`실측에서 나쁘게 나온 이유: ${worse.length ? `${worse[0].icon} ${worse[0].label} 손실 ${pp(worse[0].d)}${lk.includes(worse[0].key) ? ' (레버 부작용)' : ' (외란 증가)'}` : 'KPI 전반이 소폭 악화'}`);
+  for (const d of diff) L.push(`조건 차이: ${d}`);
+  // ⑤ 권고
+  const extBad = ext.some((c) => c.nCand > c.nCur) || (!ctxB?.supply && ctxA?.supply), extGood = ext.some((c) => c.nCand < c.nCur);
+  L.push(`권고: ${verdict === 'bad' ? (extBad || (tw === 'apply' && slow) ? '외란·과도기 영향 가능성이 커서 유지하고 다음 10~30분을 다시 확인' : '되돌리기 검토') : verdict === 'good' ? (tw === 'hold' && extGood ? '외란 감소 덕일 수 있어 30분 더 관찰한 뒤 유지 여부 결정' : '유지') : '유지하되 30분 구간으로 다시 확인'}`);
+  return { head, lines: L };
+}
 
 // 원인별 손실 → 제안 규칙 (pts: OEE %p, 근거 문장은 측정값으로 채움)
 function rules(s, R) {
@@ -258,7 +405,7 @@ export class Advisor {
         r.sim.step(0.1); r.agent.update(0.1);
         while (r.evs.length && r.sim.time >= r.evs[0].at) { const e = r.evs.shift(); r.sim.injectFieldEvent(e.type, e.x, e.z); }
       }
-      if (r.sim.time >= TWIN_S - 1e-6) { const k = r.sim.kpi(); r.res = { good: k.good, oee: k.OEE, wip: k.avgWip, kwh: k.energy }; r.sim = r.agent = null; J.i++; }
+      if (r.sim.time >= TWIN_S - 1e-6) { const k = r.sim.kpi(); r.res = { good: k.good, oee: k.OEE, wip: k.avgWip, kwh: k.energy }; r.rows = r.sim.impact.report(0).rows.map(({ key, oeePts, wip, kwh, count }) => ({ key, oeePts, wip, kwh, count })); r.sim = r.agent = null; J.i++; }
     }
     J.p.progress = (J.i + (J.runs[J.i]?.sim ? J.runs[J.i].sim.time / TWIN_S : 0)) / J.runs.length;
     if (J.i < J.runs.length) return;
@@ -267,8 +414,11 @@ export class Advisor {
     const T = { uphCur: c.good / h, uphCand: d.good / h, oeeCur: c.oee, oeeCand: d.oee, wipCur: c.wip, wipCand: d.wip, kwhCur: c.kwh / Math.max(1, c.good), kwhCand: d.kwh / Math.max(1, d.good), kwCur: c.kwh / h, kwCand: d.kwh / h };
     // 판정: 목표 KPI 개선 + 다른 KPI 크게 나빠지지 않음
     const dU = (T.uphCand - T.uphCur) / Math.max(1, T.uphCur), dO = T.oeeCand - T.oeeCur, dW = (T.wipCand - T.wipCur) / Math.max(0.5, T.wipCur), dE = (T.kwhCand - T.kwhCur) / Math.max(1e-6, T.kwhCur);
-    const score = dU * 1 + dO * 1 - dW * 0.25 - dE * 0.5;
+    const sc = kpiScore(dU, dO, dW, dE), score = sc.score;
     T.recommend = score > 0.002 && dU > -0.02 ? 'apply' : score > -0.002 ? 'neutral' : 'hold';
+    T.score = score;
+    T.causes = causeDelta(avgRows(J.runs.filter((r) => r.who === 'cur').map((r) => r.rows)), avgRows(J.runs.filter((r) => r.who === 'cand').map((r) => r.rows)));
+    T.why = explainTwin(J.p, T, T.causes, sc);
     Object.assign(J.p, { twin: T, status: 'verified' });
     this.job = null;
   }
@@ -280,6 +430,7 @@ export class Advisor {
     LEVERS[p.lever].set(s, p.to);
     if (AIOS_KEYS.includes(p.lever) && s.aios?.policy) s.aios.policy[p.lever] = p.to;   // AIOS 기준 정책도 맞춘다
     p.status = 'applied'; p.tApply = s.time; p.before = this.windowKpi(s.time - VERIFY_S, s.time);
+    p.beforeRows = this.tr.rangeRows(s.time - VERIFY_S, s.time); p.ctxB = fieldCtx(s); p.actual = null;
     s.log('act', `개선안 적용 · ${p.title}`, { obs: p.why, dec: '운영자 승인 (의사결정 지원)', act: `${LEVERS[p.lever].label} ${fmtV(p.lever, p.from)} → ${fmtV(p.lever, p.to)}` });
     this.log.unshift({ t: s.time, act: '적용', title: p.title, change: `${fmtV(p.lever, p.from)} → ${fmtV(p.lever, p.to)}` });
     return true;
@@ -312,7 +463,13 @@ export class Advisor {
   measure(p) {
     p.after = this.windowKpi(p.tApply, p.tApply + VERIFY_S); p.measured = true;
     const b = p.before, a = p.after;
-    if (b && a) this.sim.log('ok', `개선안 실측 · ${p.title}`, { obs: `적용 전 10분 UPH ${Math.round(b.uph)} · OEE ${(b.oee * 100).toFixed(1)}% · WIP ${b.wip.toFixed(1)} · ${b.kw.toFixed(0)}kW → 적용 후 UPH ${Math.round(a.uph)} · OEE ${(a.oee * 100).toFixed(1)}% · WIP ${a.wip.toFixed(1)} · ${a.kw.toFixed(0)}kW` });
+    if (b && a) {
+      const sc = kpiScore((a.uph - b.uph) / Math.max(1, b.uph), a.oee - b.oee, (a.wip - b.wip) / Math.max(0.5, b.wip), (a.kwhUnit - b.kwhUnit) / Math.max(1e-6, b.kwhUnit));
+      const verdict = sc.score > 0.002 && a.uph >= b.uph * 0.98 ? 'good' : sc.score < -0.002 ? 'bad' : 'flat';
+      const causes = causeDelta(p.beforeRows, this.tr.rangeRows(p.tApply, p.tApply + VERIFY_S));
+      p.actual = { verdict, score: sc.score, causes, ...explainActual(p, verdict, sc, causes, p.ctxB ?? fieldCtx(this.sim), fieldCtx(this.sim), this.sim) };
+    }
+    if (b && a) this.sim.log('ok', `개선안 실측 · ${p.title}`, { dec: p.actual?.head, obs: `적용 전 10분 UPH ${Math.round(b.uph)} · OEE ${(b.oee * 100).toFixed(1)}% · WIP ${b.wip.toFixed(1)} · ${b.kw.toFixed(0)}kW → 적용 후 UPH ${Math.round(a.uph)} · OEE ${(a.oee * 100).toFixed(1)}% · WIP ${a.wip.toFixed(1)} · ${a.kw.toFixed(0)}kW` });
   }
 }
 export { fmtV };
@@ -340,8 +497,9 @@ export function impactMarkdown(sim, window = 0) {
     L.push(`- 근거: ${p.why}`);
     if (p.lever) L.push(`- 변경: ${LEVERS[p.lever].label} ${fmtV(p.lever, p.from)} → ${fmtV(p.lever, p.to)}`);
     L.push(`- 기대 효과: ${p.expect}${p.est ? ` — 추정 ${p.est}` : ''}`, `- 부작용: ${p.trade}`);
-    if (p.twin) { const t = p.twin; L.push(`- 트윈 검증 (30분 × 시드 3): UPH ${Math.round(t.uphCur)} → ${Math.round(t.uphCand)} · OEE ${pct(t.oeeCur)} → ${pct(t.oeeCand)} · WIP ${n1(t.wipCur)} → ${n1(t.wipCand)} · ${t.kwhCur.toFixed(3)} → ${t.kwhCand.toFixed(3)}kWh/개 — ${{ apply: '적용 권장', neutral: '효과 미미', hold: '보류 권장' }[t.recommend]}`); }
-    if (p.after && p.before) L.push(`- 실측 (적용 전/후 10분): UPH ${Math.round(p.before.uph)} → ${Math.round(p.after.uph)} · OEE ${pct(p.before.oee)} → ${pct(p.after.oee)} · WIP ${n1(p.before.wip)} → ${n1(p.after.wip)} · ${p.before.kw.toFixed(0)} → ${p.after.kw.toFixed(0)}kW`);
+    if (p.twin) { const t = p.twin; L.push(`- 트윈 검증 (30분 × 시드 3): UPH ${Math.round(t.uphCur)} → ${Math.round(t.uphCand)} · OEE ${pct(t.oeeCur)} → ${pct(t.oeeCand)} · WIP ${n1(t.wipCur)} → ${n1(t.wipCand)} · ${t.kwhCur.toFixed(3)} → ${t.kwhCand.toFixed(3)}kWh/개 — ${{ apply: '적용 권장', neutral: '효과 미미', hold: '보류 권장' }[t.recommend]}`); for (const w of t.why ?? []) L.push(`  - ${w}`); }
+    if (p.after && p.before) L.push(`- 실측 (적용 전/후 10분): UPH ${Math.round(p.before.uph)} → ${Math.round(p.after.uph)} · OEE ${pct(p.before.oee)} → ${pct(p.after.oee)} · WIP ${n1(p.before.wip)} → ${n1(p.after.wip)} · ${p.before.kw.toFixed(0)} → ${p.after.kw.toFixed(0)}kW${p.actual ? ` — ${p.actual.head}` : ''}`);
+    for (const w of p.actual?.lines ?? []) L.push(`  - ${w}`);
     L.push('');
   }
   if (A.log.length) { L.push('## 5. 의사결정 이력', ''); for (const x of A.log.slice(0, 20)) L.push(`- ${hm(x.t)} · ${x.act} · ${x.title}${x.change ? ` (${x.change})` : ''}`); }

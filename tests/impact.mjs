@@ -34,12 +34,24 @@ const B = run('smart', 3, 3600, false).s, A = B.impact.advisor;
 check('손실이 큰 원인에 개선 제안', A.items.length > 0 && A.items.every((p) => p.why && p.expect && p.kpi.length), A.items.map((p) => p.title).join(' · '));
 const p = A.items.find((x) => x.lever === 'amrStage') ?? A.items.find((x) => x.lever);
 A.verify(p.id); A.work();
+check('트윈 검증 원인 — 원인별 손실 변화 · 작동 원리', p.twin.causes?.length === 10 && p.twin.why?.length >= 2 && p.twin.why.some((w) => w.startsWith('작동 원리')), p.twin.why[1] ?? '');
 check('디지털트윈 검증 (현재 vs 제안)', p.status === 'verified' && p.twin && p.twin.uphCur > 0 && ['apply', 'neutral', 'hold'].includes(p.twin.recommend), `${p.title}: UPH ${Math.round(p.twin.uphCur)} → ${Math.round(p.twin.uphCand)} · ${p.twin.recommend}`);
 const from = LEVERS[p.lever].get(B);
 A.apply(p.id);
 check('적용 → 운영값 변경 · 오케스트레이터 로그', LEVERS[p.lever].get(B) === p.to && p.status === 'applied' && A.log[0].act === '적용', `${LEVERS[p.lever].label} ${from} → ${LEVERS[p.lever].get(B)}`);
 const ag2 = new FactoryAgent(B); for (let t = 0; t < 620; t += 0.1) { B.step(0.1); ag2.update(0.1); }
 check('적용 후 10분 실측 효과', p.measured && p.after && p.before, p.after ? `UPH ${Math.round(p.before.uph)} → ${Math.round(p.after.uph)}` : '');
+check('실측 해석 — 실측 판정 · 원인 · 조건 차이 · 권고', p.actual && ['good', 'bad', 'flat'].includes(p.actual.verdict) && p.actual.lines.some((l) => l.startsWith('조건 차이')) && p.actual.lines.at(-1).startsWith('권고'), `${p.actual?.head}`);
+// 트윈 판정 × 실측 판정 4가지: 적용 전 기준을 바꿔 실측 판정을 강제
+const real = { ...p.before }, cases = [['hold', 'good', '트윈은 악화를 예측했지만 실측은 좋아졌습니다', '실측에서 좋게 나온 이유'], ['apply', 'bad', '트윈은 개선을 예측했지만 실측은 나빠졌습니다', '실측에서 트윈과 달리 나쁘게 나온 이유'], ['apply', 'good', '트윈 예측대로 실측도 좋아졌습니다', '실측에서 좋게 나온 이유'], ['hold', 'bad', '트윈 예측대로 실측도 나빠졌습니다', '실측에서 나쁘게 나온 이유']];
+const rec0 = p.twin.recommend;
+for (const [tw, v, head, why] of cases) {
+  p.twin.recommend = tw; p.before = { ...real, uph: v === 'good' ? real.uph * 0.6 : real.uph * 1.6, oee: v === 'good' ? real.oee * 0.6 : Math.min(1, real.oee * 1.6) };
+  A.measure(p);
+  check(`트윈 ${tw} → 실측 ${v}: 이유 설명`, p.actual.verdict === v && p.actual.head === head && p.actual.lines.some((l) => l.startsWith(why)), p.actual.lines.find((l) => l.startsWith(why)));
+}
+p.twin.recommend = rec0; p.before = real; A.measure(p);
+check('리포트에 트윈 원인 · 실측 해석', (() => { const m = impactMarkdown(B, 0); return m.includes('작동 원리') && m.includes('조건 차이'); })());
 A.revert(p.id);
 check('되돌리기 → 원래 운영값', LEVERS[p.lever].get(B) === from && p.status === 'reverted', `${LEVERS[p.lever].get(B)}`);
 const q = A.items.find((x) => x.status === 'new' || x.status === 'verified');

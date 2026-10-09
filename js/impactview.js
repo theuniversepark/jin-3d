@@ -44,6 +44,8 @@ export function impactHTML(sim) {
     ${logs ? `<h3>의사결정 이력</h3><ul class="imp-log">${logs}</ul>` : ''}`;
 }
 
+const expl = (title, lines, cls = '') => `<ul class="imp-expl ${cls}"><b>🔎 ${title}</b>${lines.map((l) => { const i = l.indexOf(': '); return `<li>${i > 0 && i < 24 ? `<b>${l.slice(0, i)}</b>: ${l.slice(i + 2)}` : l}</li>`; }).join('')}</ul>`;
+
 function propCard(sim, p) {
   const A = sim.impact.advisor, L = p.lever && LEVERS[p.lever];
   const chips = p.kpi.map((k) => `<i>${k}</i>`).join('');
@@ -56,6 +58,7 @@ function propCard(sim, p) {
       <span>WIP ${n1(t.wipCur)} → ${n1(t.wipCand)} ${delta(t.wipCur, t.wipCand, 1, true)}</span>
       <span>${t.kwhCur.toFixed(3)} → ${t.kwhCand.toFixed(3)}kWh/개 ${delta(t.kwhCur * 1000, t.kwhCand * 1000, 1, true)}Wh</span>
       <strong class="${rc}">${rl}</strong></div>`;
+    if (t.why?.length) body += expl(t.recommend === 'hold' ? '트윈 검증에서 나빠진 원인' : t.recommend === 'apply' ? '트윈 검증에서 개선된 원인' : '트윈 검증 해석', t.why, t.recommend === 'hold' ? 'bad' : t.recommend === 'apply' ? 'good' : '');
   }
   if (p.status === 'verifying') body += `<div class="imp-prog"><i style="width:${Math.round((p.progress ?? 0) * 100)}%"></i><span>디지털트윈 검증 중 ${Math.round((p.progress ?? 0) * 100)}%</span></div>`;
   if (p.status === 'new' || p.status === 'verified') {
@@ -70,8 +73,10 @@ function propCard(sim, p) {
       <span>UPH ${n0(b.uph)} → ${n0(a.uph)} ${delta(b.uph, a.uph)}</span><span>OEE ${pct(b.oee)} → ${pct(a.oee)} ${delta(b.oee * 100, a.oee * 100, 1)}%p</span>
       <span>WIP ${n1(b.wip)} → ${n1(a.wip)} ${delta(b.wip, a.wip, 1, true)}</span><span>${b.kw.toFixed(0)} → ${a.kw.toFixed(0)}kW ${delta(b.kw, a.kw, 1, true)}</span><small>적용 전 10분 vs 적용 후</small></div>`
       : `<div class="imp-twin"><b>실측 중</b><span>적용 후 ${Math.ceil(left / 60)}분 동안 효과를 측정합니다</span></div>`;
+    if (p.actual) body += expl(`실측 해석 — ${p.actual.head}`, p.actual.lines, p.actual.verdict === 'good' ? 'good' : p.actual.verdict === 'bad' ? 'bad' : '');
     act = `<div class="imp-ask"><span>${hm(p.tApply)} 적용 · ${L.label} ${fmtV(p.lever, p.from)} → ${fmtV(p.lever, p.to)}</span><button data-imp-revert>↩ 되돌리기</button></div>`;
   }
+  if (p.status === 'reverted' && p.actual) body += expl(`실측 해석 — ${p.actual.head}`, p.actual.lines, p.actual.verdict === 'good' ? 'good' : p.actual.verdict === 'bad' ? 'bad' : '');
   return `<div class="imp-card ${p.status}" data-imp-id="${p.id}">
     <div class="imp-ch"><b>${p.title}</b><span class="imp-chips">${chips}</span><small>${STATUS[p.status]}</small></div>
     <div class="imp-why">📊 근거: ${p.why}</div>

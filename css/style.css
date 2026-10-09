@@ -744,6 +744,11 @@ em.up { color: var(--good); } em.dn { color: var(--bad); }
 .imp-twin strong.good { background: rgba(61, 220, 132, 0.18); color: var(--good); }
 .imp-twin strong.mid { background: rgba(245, 184, 46, 0.18); color: var(--warn); }
 .imp-twin strong.bad { background: rgba(255, 90, 90, 0.18); color: var(--bad); }
+.imp-expl { margin: 0; padding: 6px 9px 6px 24px; font-size: 11.5px; line-height: 1.5; color: var(--ink2); background: rgba(55, 160, 255, 0.04); border-radius: 8px; }
+.imp-expl li { margin: 1px 0; }
+.imp-expl b { color: var(--ink); }
+.imp-expl.good { background: rgba(61, 220, 132, 0.06); }
+.imp-expl.bad { background: rgba(255, 90, 90, 0.06); }
 .imp-prog { position: relative; height: 18px; border-radius: 6px; background: rgba(255, 255, 255, 0.06); overflow: hidden; font-size: 11px; }
 .imp-prog i { position: absolute; inset: 0 auto 0 0; background: rgba(55, 160, 255, 0.35); }
 .imp-prog span { position: relative; padding-left: 8px; line-height: 18px; }
