@@ -626,7 +626,7 @@ export class Simulation {
     // 선행 배차(amrStage): 운영 정책(AIOS)이 2 이상이면 다음 AMR을 미리 불러 진입로 끝에서 대기시킨다
     const stage = this.mode.amrStage ?? 1, coming = cs.filter((c) => c.state === 'toSrc' || c.state === 'docking' || c.state === 'atSrc').length;
     if (!this.releaseHold && coming < stage) {
-      const c = cs.filter((c) => c.state === 'park').sort((a, b) => a.x - b.x)[0];
+      const c = cs.filter((c) => c.state === 'park' && !c.outOfService).sort((a, b) => a.x - b.x)[0];   // 운행 제외 AMR(관제)은 배차 안 함
       if (c) {
         c.state = 'toSrc'; c.slot = null;
         // 앞서 출발한 AMR이 투입 위치를 충분히 벗어날 때까지 진입로 끝에서 기다렸다가 들어간다

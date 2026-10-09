@@ -1,5 +1,5 @@
 // AMR·AGV 관제 — 운반 AMR(대상물 운반·복귀)과 자재 공급 AGV의 공통 설정·상태, 상황별 속도 변화, 전체 속도 배율(50~150%)·
-// 전체 정지/시작(AGV는 1초 간격 순차 재출발), 설정 변경 효과의 디지털트윈 예측(현재 설정 vs 기준 설정). 렌더링과 분리되어 헤드리스에서도 같은 동작.
+// 전체 정지/시작(AGV는 1초 간격 순차 재출발), 운행 대수(설치 대수 안에서 운행 제외 지정), 설정 변경 효과의 디지털트윈 예측(현재 설정 vs 기준 설정 · 대수별 비교). 렌더링과 분리되어 헤드리스에서도 같은 동작.
 import { ZONE_AMR } from './line.js';
 
 export const FLEET_RANGE = { min: 0.5, max: 1.5, step: 0.1 };
@@ -23,6 +23,20 @@ export class FleetControl {
   base(f) { return f === 'amr' ? { line: ZONE_AMR.lineSpeed, drive: ZONE_AMR.returnSpeed } : { drive: this.sim.mode.vehicleSpeed }; }
   speeds(f) { const b = this.base(f), k = this[f].scale; return { line: b.line != null ? b.line * k : null, drive: b.drive * k }; }
   // 배율을 이동체·라인(셀 사이 운반 경로)에 반영
+  // 운행 대수: 설치 대수 안에서 N대만 배차한다. 나머지는 '운행 제외' — 하던 일은 마치고 대기·충전 자리에 머문다
+  installed(f) { return this.list(f).length; }
+  active(f) { return this.list(f).filter((m) => !m.outOfService).length; }
+  setActive(f, n, by) {
+    const L = this.list(f), N = L.length; if (!N) return;
+    n = Math.max(f === 'amr' ? 1 : 0, Math.min(N, Math.round(n)));
+    const idle = (m) => (f === 'amr' ? m.state === 'park' : m.idle);
+    // 제외할 차량: 이미 제외된 차 → 지금 쉬는 차(뒤 번호부터) → 일하는 차(뒤 번호부터, 현재 작업 후 제외)
+    const order = [...L].sort((a, b) => (b.outOfService ? 1 : 0) - (a.outOfService ? 1 : 0) || (idle(b) ? 1 : 0) - (idle(a) ? 1 : 0) || L.indexOf(b) - L.indexOf(a));
+    const off = new Set(order.slice(0, N - n));
+    for (const m of L) m.outOfService = off.has(m);
+    this[f].count = n;
+    this.note(`${FLEET_NAMES[f]} 운행 대수 ${n}/${N}대${N - n ? ` (운행 제외 ${N - n}대 — 하던 작업은 마치고 대기)` : ''}`, by);
+  }
   apply() {
     const s = this.sim;
     if (this.hasAMR) {
@@ -70,6 +84,7 @@ export class FleetControl {
     const s = this.sim, K = s.cmd;
     if (K.estopAll || K.pstopAll) return ['명령 정지', 'bad'];
     if (f === 'amr' ? this.amr.paused : this.agvHeld(m)) return [this[f].paused ? '관제 정지' : '순차 출발 대기', 'warn'];
+    if (m.outOfService) { const busy = f === 'amr' ? m.state !== 'park' : !m.idle; return [busy ? '운행 제외 예정 (현재 작업 후)' : '운행 제외', 'idle']; }
     if (m.charging) return ['충전', 'act'];
     if (m.hzWait) return ['현장 이벤트 정지', 'bad'];
     if (m.state === 'line') { const L = m.lineInfo, w = L?.where === 'path' && /대기/.test(L.phase ?? '') && this.speedOf(m) < 0.15; return [L?.where === 'cell' ? '셀 안 정차·작업' : w ? (/입구/.test(L.phase) ? '셀 입구 대기' : '앞차 간격 대기') : '셀 사이 운반', w ? 'warn' : 'ok']; }
@@ -84,6 +99,7 @@ export class FleetControl {
     const lineWait = s.carriers.filter((c) => c.state === 'line' && c.lineInfo?.where === 'path' && /대기/.test(c.lineInfo.phase ?? '') && this.speedOf(c) < 0.15).length;
     return [
       { k: '관제 속도 배율', eff: `AMR ${Math.round(this.amr.scale * 100)}% · AGV ${Math.round(this.agv.scale * 100)}%`, on: this.amr.scale !== 1 || this.agv.scale !== 1, n: null, src: 'AMR·AGV 관제 (이 창)' },
+      { k: '운행 대수 (운행 제외)', eff: '제외 차량은 배차 안 함 — 대기·충전 자리에서 0 m/s', on: this.active('amr') < this.installed('amr') || this.active('agv') < this.installed('agv'), n: (this.installed('amr') - this.active('amr')) + (this.installed('agv') - this.active('agv')), src: 'AMR·AGV 관제' },
       { k: '관제 정지', eff: '0 m/s (해당 차종만)', on: this.amr.paused || this.agv.paused, n: (this.amr.paused ? s.carriers.length : 0) + (this.agv.paused ? s.vehicles.length : 0), src: 'AMR·AGV 관제' },
       { k: '비상정지 · 보호정지', eff: '0 m/s (모든 이동 로봇·라인)', on: K.estopAll || K.pstopAll, n: K.estopAll || K.pstopAll ? all.length : 0, src: '명령 센터 (긴급 명령)' },
       { k: '안전 감속', eff: '25% (AMR 운반 0.4 m/s)', on: K.lineSafe, n: K.lineSafe ? all.length : 0, src: '명령 센터 · 현장 이벤트(연기·무단 진입)' },
@@ -97,7 +113,7 @@ export class FleetControl {
   }
   summary(f) {
     const L = this.list(f), mv = L.filter((m) => this.speedOf(m) > 0.15);
-    return { n: L.length, moving: mv.length, avg: mv.length ? mv.reduce((a, m) => a + this.speedOf(m), 0) / mv.length : 0, max: Math.max(0, ...L.map((m) => this.speedOf(m))), blocked: L.filter((m) => m.blockedOn || m.hzWait).length, battery: L.length ? L.reduce((a, m) => a + (m.battery ?? 100), 0) / L.length : 100 };
+    return { n: L.length, active: L.filter((m) => !m.outOfService).length, moving: mv.length, avg: mv.length ? mv.reduce((a, m) => a + this.speedOf(m), 0) / mv.length : 0, max: Math.max(0, ...L.map((m) => this.speedOf(m))), blocked: L.filter((m) => m.blockedOn || m.hzWait).length, battery: L.length ? L.reduce((a, m) => a + (m.battery ?? 100), 0) / L.length : 100 };
   }
 }
 
@@ -121,27 +137,44 @@ export function fleetAdvice(F) {
       out.push({ f, kind: 'risk', text: `이동 시간이 약 ${Math.round((1 / k - 1) * 100)}% 늘어 ${f === 'amr' ? '셀 사이 운반이 병목이 되면 자재대기·배출대기가 늘고' : '투입구 원자재 공급이 늦어지면 결품 정지가 생기고'} UPH가 떨어질 수 있습니다.` });
     }
   }
+  for (const f of ['amr', 'agv']) {
+    const N = F.installed(f), n = F.active(f); if (!N || n >= N || F[f].paused) continue;
+    const nm = FLEET_NAMES[f];
+    out.push({ f, kind: 'gain', text: `${nm} ${n}/${N}대 운행 — 쉬는 ${N - n}대만큼 대기 전력·통로 혼잡·정비 부담이 줄고, 남은 차량의 이용률이 올라갑니다.` });
+    out.push({ f, kind: 'risk', text: f === 'amr' ? `셀 사이 운반 능력이 약 ${Math.round((1 - n / N) * 100)}% 줄어 — 현재 라인은 AMR 운반이 병목이라 UPH가 거의 비례해 떨어질 수 있습니다. '운행 대수별 비교'로 적정 대수를 확인하세요.` : `자재 공급 AGV가 ${n}대로 줄어 — 입고·공급 차질이 겹치면 투입구 결품 위험이 커집니다${n === 0 ? ' (0대: 자재 공급이 멈춥니다)' : ''}.` });
+  }
   if (!out.length) out.push({ f: null, kind: 'tip', text: '기준 설정(100%)으로 운용 중입니다. 배율을 바꾸면 예상 문제점·기대효과와 디지털트윈 예측을 볼 수 있습니다.' });
   return out;
 }
 
-// 디지털트윈 예측: 같은 라인·단계·시드로 기준 설정(100%, 운행)과 현재 관제 설정을 각각 돌려 비교 (헤드리스)
-export function predictFleet({ Simulation, Agent, mode, line, seed = 7, T = 900, amr, agv }) {
-  const run = (cfg) => {
-    const s = new Simulation(mode, seed, { line, quiet: true }), ag = new Agent(s), F = s.fleet;
-    F.amr.scale = cfg.amr.scale; F.agv.scale = cfg.agv.scale; F.amr.paused = cfg.amr.paused; F.agv.paused = cfg.agv.paused; F.apply();
-    const movers = [...s.carriers, ...(F.hasAGV ? s.vehicles : [])];
-    let near = 0, blockT = 0;
-    for (let t = 0; t < T; t += 0.1) {
-      s.step(0.1); ag.update(0.1);
-      if (Math.round(t * 10) % 5 === 0) for (let i = 0; i < movers.length; i++) for (let j = i + 1; j < movers.length; j++) {
-        const a = movers[i], b = movers[j]; if (a.state === 'line' && b.state === 'line') continue;
-        if (Math.hypot(a.x - b.x, a.z - b.z) < 1.9 && (F.speedOf(a) > 0.3 || F.speedOf(b) > 0.3)) near++;
-      }
-      for (const m of movers) if (m.blockedOn || m.hzWait) blockT += 0.1;
+export function fleetTwin({ Simulation, Agent, mode, line, seed = 7, T = 900 }, cfg) {
+  const s = new Simulation(mode, seed, { line, quiet: true }), ag = new Agent(s), F = s.fleet;
+  F.amr.scale = cfg.amr.scale ?? 1; F.agv.scale = cfg.agv.scale ?? 1; F.amr.paused = !!cfg.amr.paused; F.agv.paused = !!cfg.agv.paused; F.apply();
+  if (cfg.amr.count != null && F.hasAMR) F.setActive('amr', cfg.amr.count);
+  if (cfg.agv.count != null && F.hasAGV) F.setActive('agv', cfg.agv.count);
+  const movers = [...s.carriers, ...(F.hasAGV ? s.vehicles : [])];
+  let near = 0, blockT = 0;
+  for (let t = 0; t < T; t += 0.1) {
+    s.step(0.1); ag.update(0.1);
+    if (Math.round(t * 10) % 5 === 0) for (let i = 0; i < movers.length; i++) for (let j = i + 1; j < movers.length; j++) {
+      const a = movers[i], b = movers[j]; if (a.state === 'line' && b.state === 'line') continue;
+      if (Math.hypot(a.x - b.x, a.z - b.z) < 1.9 && (F.speedOf(a) > 0.3 || F.speedOf(b) > 0.3)) near++;
     }
-    const k = s.kpi(), agvs = F.hasAGV ? s.vehicles : [];
-    return { uph: k.uph, oee: k.OEE, wip: k.avgWip, kwh: k.kwhPerUnit, near, blockT, agvBattery: agvs.length ? agvs.reduce((a, v) => a + v.battery, 0) / agvs.length : null, starve: s.processing.reduce((a, st) => a + (st.c.starved ?? 0), 0) };
-  };
-  return { T, base: run({ amr: { scale: 1, paused: false }, agv: { scale: 1, paused: false } }), cur: run({ amr, agv }) };
+    for (const m of movers) if (m.blockedOn || m.hzWait) blockT += 0.1;
+  }
+  const k = s.kpi(), agvs = F.hasAGV ? s.vehicles : [];
+  return { uph: k.uph, oee: k.OEE, wip: k.avgWip, kwh: k.kwhPerUnit, near, blockT, agvBattery: agvs.length ? agvs.reduce((a, v) => a + v.battery, 0) / agvs.length : null, starve: s.processing.reduce((a, st) => a + (st.c.starved ?? 0), 0) };
+}
+// 디지털트윈 예측: 같은 라인·단계·시드로 기준 설정(100%, 설치 대수 전부 운행)과 현재 관제 설정을 각각 돌려 비교 (헤드리스)
+export function predictFleet({ Simulation, Agent, mode, line, seed = 7, T = 900, amr, agv }) {
+  const o = { Simulation, Agent, mode, line, seed, T };
+  return { T, base: fleetTwin(o, { amr: { scale: 1 }, agv: { scale: 1 } }), cur: fleetTwin(o, { amr, agv }) };
+}
+// 대수별 비교: 현재 속도 설정으로 AMR·AGV 운행 대수를 바꿔 가며 (onStep으로 진행 표시 — 한 번씩 화면에 양보)
+export async function predictFleetCounts({ Simulation, Agent, mode, line, seed = 7, T = 900, amr, agv, amrN = [], agvN = [], onStep }) {
+  const o = { Simulation, Agent, mode, line, seed, T }, rows = { amr: [], agv: [] }, total = amrN.length + agvN.length; let done = 0;
+  const yieldUI = () => new Promise((r) => setTimeout(r, 20));
+  for (const n of amrN) { await yieldUI(); rows.amr.push({ n, ...fleetTwin(o, { amr: { scale: amr.scale, count: n }, agv: { scale: agv.scale, count: agv.count } }) }); onStep?.(++done, total); }
+  for (const n of agvN) { await yieldUI(); rows.agv.push({ n, ...fleetTwin(o, { amr: { scale: amr.scale, count: amr.count }, agv: { scale: agv.scale, count: n } }) }); onStep?.(++done, total); }
+  return rows;
 }

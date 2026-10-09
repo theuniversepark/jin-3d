@@ -3,7 +3,7 @@
 import { zoneLine } from '../js/line.js';
 import { Simulation } from '../js/sim.js';
 import { FactoryAgent } from '../js/agent.js';
-import { fleetAdvice, predictFleet } from '../js/fleet.js';
+import { fleetAdvice, predictFleet, predictFleetCounts } from '../js/fleet.js';
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => { ok ? pass++ : fail++; console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  — ' + info : ''}`); };
 const s = new Simulation('dark', 3, { line: zoneLine(), quiet: true }), ag = new FactoryAgent(s), F = s.fleet;
@@ -27,13 +27,27 @@ check('전체 시작 후 운행 재개', F.summary('amr').moving > 0);
 s.cmd.issue('ESTOP', 'all', null, { by: '테스트' }); run(3);
 check('명령 센터 비상정지가 관제보다 우선 (관제 운행 중이어도 정지)', !F.amr.paused && F.summary('amr').moving === 0 && F.stateOf(s.carriers[0], 'amr')[0] === '명령 정지');
 s.cmd.issue('RESET', 'all', null, { by: '테스트' }); run(5);
+console.log('== 운행 대수');
+{ const t = new Simulation('dark', 3, { line: zoneLine(), quiet: true }), ta = new FactoryAgent(t), G = t.fleet;
+  const go = (sec) => { for (let x = 0; x < sec; x += 0.1) { t.step(0.1); ta.update(0.1); } };
+  go(120); G.setActive('amr', 10); G.setActive('agv', 2);
+  check('운행 대수 지정: AMR 10/16 · AGV 2/4 (나머지 운행 제외)', G.active('amr') === 10 && G.active('agv') === 2 && t.carriers.filter((c) => c.outOfService).length === 6);
+  go(600);
+  const offBusy = t.carriers.filter((c) => c.outOfService && c.state !== 'park').length, agvOffBusy = t.vehicles.filter((v) => v.outOfService && !v.idle && !v.charging).length;
+  check('운행 제외 차량: 하던 일 마친 뒤 배차되지 않음 (10분 뒤 모두 대기)', offBusy === 0 && agvOffBusy === 0, `AMR 일하는 제외 차 ${offBusy} · AGV ${agvOffBusy}`);
+  check('운행 중 AMR만 투입 배차', t.carriers.filter((c) => !c.outOfService).some((c) => c.state !== 'park'));
+  G.setActive('amr', 99); G.setActive('agv', 0);
+  check('범위: AMR 1~설치 대수, AGV 0~설치 대수', G.active('amr') === 16 && G.active('agv') === 0 && (G.setActive('amr', 0), G.active('amr') === 1));
+  check('상황별 규칙에 운행 제외 대수 표시', G.rules().find((r) => r.k.startsWith('운행 대수'))?.n === 15 + 4); }
 console.log('== 상황별 속도 규칙 · 예상 문제점/기대효과 · 예측');
-check('상황별 속도 규칙 10종 (관제·명령·현장 이벤트·간격·양보·진입·충전)', F.rules().length === 10);
+check('상황별 속도 규칙 11종 (관제 배율·운행 대수·관제 정지·명령·현장 이벤트·간격·양보·진입·충전)', F.rules().length === 11);
 F.setScale('amr', 1.3); const adv = fleetAdvice(F);
 check('속도 올림: 기대효과 + 예상 문제점(제동 거리·공존 구역 상한)', adv.some((a) => a.kind === 'gain') && adv.some((a) => a.kind === 'risk' && /제동/.test(a.text)) && adv.some((a) => /상한/.test(a.text)));
 F.setScale('amr', 1); F.pause('amr'); check('정지: 자재대기·UPH 저하 경고 + 재시작 안내', fleetAdvice(F).some((a) => a.kind === 'risk' && /UPH/.test(a.text)) && fleetAdvice(F).some((a) => a.kind === 'tip')); F.resume('amr');
 const P = predictFleet({ Simulation, Agent: FactoryAgent, mode: 'dark', line: zoneLine(), seed: 3, T: 600, amr: { scale: 1, paused: false }, agv: { scale: 1, paused: true } });
 check('디지털트윈 예측: AGV 정지 시 기준 대비 UPH 하락·자재대기 증가', P.cur.uph < P.base.uph && P.cur.starve > P.base.starve, `UPH ${P.base.uph.toFixed(0)} → ${P.cur.uph.toFixed(0)}`);
+{ const C = await predictFleetCounts({ Simulation, Agent: FactoryAgent, mode: 'dark', line: zoneLine(), seed: 3, T: 600, amr: { scale: 1 }, agv: { scale: 1 }, amrN: [6, 16], agvN: [] });
+  check('대수별 비교: AMR 6대보다 16대가 UPH 높음 (운반 병목)', C.amr.length === 2 && C.amr[1].uph > C.amr[0].uph, `6대 ${C.amr[0].uph.toFixed(0)} · 16대 ${C.amr[1].uph.toFixed(0)}`); }
 console.log('== 단계별');
 const sm = new Simulation('smart', 3, { line: zoneLine(), quiet: true }), tr = new Simulation('traditional', 3, { line: zoneLine(), quiet: true });
 check('자동화: AMR·AGV(3대, 2.3 m/s) 관제 · 레거시: 관제 대상 없음', sm.fleet.hasAMR && sm.fleet.hasAGV && sm.fleet.speeds('agv').drive === 2.3 && !tr.fleet.hasAMR && !tr.fleet.hasAGV);

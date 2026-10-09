@@ -32,7 +32,7 @@ import { AI_MODELS } from './cctv.js';
 import { NR, STACK, LAT, UE_LOAD, maxRobots } from './net5g.js';
 import { setAasVersion, AAS_VERSIONS } from './aas.js';
 import { OrchView } from './orchview.js';
-import { FLEET_RANGE, FLEET_NAMES, SHARED_SPACE_LIMIT, fleetAdvice, predictFleet } from './fleet.js';
+import { FLEET_RANGE, FLEET_NAMES, SHARED_SPACE_LIMIT, fleetAdvice, predictFleet, predictFleetCounts } from './fleet.js';
 import { SEC_LAYERS, SEC_KPI, SEC_THREATS, SEC_LANES, SEC_STAGES, SEC_ACTORS } from './security.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
@@ -124,7 +124,7 @@ let sim, agent, agentArch = 'single';   // 에이전트 구조: single · hybrid
 const archPref = {};   // 단계별 운영자 선택 (없으면 MODES[단계].agentArch — 피지컬AI 기본 혼합형)
 let modeKey = 'smart', speed = 3, running = true, labelsOn = true;
 const SEED = 20261001;
-const fleetCfg = { amr: { scale: 1, paused: false }, agv: { scale: 1, paused: false } };   // AMR·AGV 관제 설정 (단계·라인을 바꿔도 유지)
+const fleetCfg = { amr: { scale: 1, paused: false, count: null }, agv: { scale: 1, paused: false, count: null } };   // count: 운행 대수 (null = 설치 대수 전부)   // AMR·AGV 관제 설정 (단계·라인을 바꿔도 유지)
 
 // 공정 라인 구성 — 정밀조립Zone 두 시나리오(도어트림·e-axle)와 사용자 라인을 각각 저장해 다음 실행 때도 유지
 // v4: 정밀조립Zone이 혼류(분기·합류) 구조로 바뀌어 이전 Zone 레시피는 버리고 사용자 라인만 옮긴다
@@ -1340,9 +1340,14 @@ function renderAios(force) {
 
 // ── AMR·AGV 관제 ─────────────────
 // 운반 AMR·자재 공급 AGV의 공통 설정·상태, 상황별 속도 변화, 전체 속도 배율(50~150%)·정지·시작, 설정 변경의 예상 문제점·기대효과와 디지털트윈 예측
-function applyFleetCfg() { const F = sim?.fleet; if (!F) return; for (const f of ['amr', 'agv']) Object.assign(F[f], fleetCfg[f]); F.apply(); }
+function applyFleetCfg() {
+  const F = sim?.fleet; if (!F) return;
+  for (const f of ['amr', 'agv']) { F[f].scale = fleetCfg[f].scale; F[f].paused = fleetCfg[f].paused; }
+  F.apply();
+  for (const f of ['amr', 'agv']) if (fleetCfg[f].count != null && fleetCfg[f].count < F.installed(f)) F.setActive(f, fleetCfg[f].count, '관제 설정 유지');   // 단계마다 설치 대수가 다르면(AGV 3·4대) 그 안으로 맞춘다
+}
 const fleetModal = document.getElementById('fleetModal'), fleetBody = document.getElementById('fleetBody');
-let fleetTimer = null, fleetPred = null, fleetBusy = false;
+let fleetTimer = null, fleetPred = null, fleetBusy = false, fleetCnt = null, fleetCntBusy = null;
 const ms = (v) => (v == null ? '-' : `${v.toFixed(2)} m/s`);
 function renderFleet() {
   const F = sim.fleet, has = { amr: F.hasAMR, agv: F.hasAGV };
@@ -1356,10 +1361,16 @@ function renderFleet() {
         <button type="button" class="ai-btn" data-fl-step="${f}:1" ${C.scale >= FLEET_RANGE.max - 1e-6 ? 'disabled' : ''}>＋10%</button>
         <button type="button" class="ai-btn" data-fl-set="${f}:1">기준 100%</button>
         <button type="button" class="ai-btn ${C.paused ? 'on' : ''}" data-fl-${C.paused ? 'resume' : 'pause'}="${f}">${C.paused ? '▶ 시작' : '⏸ 정지'}</button></div>
+      <div class="ai-bar"><small style="min-width:70px">운행 대수</small><b style="font-size:17px;min-width:70px">${S.active} / ${S.n}대</b>
+        <button type="button" class="ai-btn" data-fl-count="${f}:-1" ${S.active <= (f === 'amr' ? 1 : 0) ? 'disabled' : ''}>－1대</button>
+        <input type="range" min="${f === 'amr' ? 1 : 0}" max="${S.n}" step="1" value="${S.active}" data-fl-crange="${f}" style="flex:1;min-width:120px">
+        <button type="button" class="ai-btn" data-fl-count="${f}:1" ${S.active >= S.n ? 'disabled' : ''}>＋1대</button>
+        <button type="button" class="ai-btn" data-fl-count="${f}:all" ${S.active >= S.n ? 'disabled' : ''}>전체 운행</button>
+        <small>${S.n - S.active ? `운행 제외 ${S.n - S.active}대 — 하던 작업은 마치고 대기·충전 자리에서 대기` : '설치 대수 전부 운행'}</small></div>
       <div class="fc-sub">설정 속도: ${b.line != null ? `셀 사이 운반 ${ms(v.line)} (기준 ${ms(b.line)}) · ` : ''}${f === 'amr' ? '빈 차 복귀' : '주행'} ${ms(v.drive)} (기준 ${ms(b.drive)})${v.drive > SHARED_SPACE_LIMIT ? ` · <b style="color:#ffc65a">공존 구역 권장 상한 ${SHARED_SPACE_LIMIT} m/s 초과</b>` : ''} · 실제 평균 ${ms(S.avg)} · 최고 ${ms(S.max)}${C.paused ? ' · <b style="color:#ff9a9a">관제 정지 중</b>' : ''}</div></div>`; };
   const K = sim.cmd, nmode = sim.mode;
   const common = [
-    ['대수', `${sim.carriers.length}대`, has.agv ? `${sim.vehicles.length}대` : '-'],
+    ['설치 · 운행 대수', `설치 ${F.installed('amr')}대 · 운행 ${F.active('amr')}대`, has.agv ? `설치 ${F.installed('agv')}대 · 운행 ${F.active('agv')}대` : '-'],
     ['기준 속도', `운반 ${ms(F.base('amr').line)} · 복귀 ${ms(F.base('amr').drive)}`, has.agv ? `${ms(F.base('agv').drive)}` : '-'],
     ['현재 설정 속도', `운반 ${ms(F.speeds('amr').line)} · 복귀 ${ms(F.speeds('amr').drive)} (${Math.round(F.amr.scale * 100)}%)`, has.agv ? `${ms(F.speeds('agv').drive)} (${Math.round(F.agv.scale * 100)}%)` : '-'],
     ['운행 상태', F.amr.paused ? '관제 정지' : '운행', has.agv ? (F.agv.paused ? '관제 정지' : '운행') : '-'],
@@ -1385,28 +1396,54 @@ function renderFleet() {
     <h4>설정 변경 — 예상 문제점 · 기대효과 <small>현재 관제 설정 기준</small></h4>
     <table class="vla-t"><tbody>${adv.map((a) => `<tr><td style="white-space:nowrap" class="${ADV[a.kind][1]}">${ADV[a.kind][0]}</td><td>${a.f ? `<b>${FLEET_NAMES[a.f]}</b> · ` : ''}${escV(a.text)}</td></tr>`).join('')}</tbody></table>
     <div class="ai-bar" style="margin-top:8px"><button type="button" class="ai-btn" data-fl-predict ${fleetBusy ? 'disabled' : ''}>🔬 디지털트윈 예측 (15분 · 기준 100% 운행 vs 현재 설정)</button><small>${fleetBusy ? '예측 중…' : P ? `예측 완료 ${fclock(P.at)} — 설정: AMR ${P.cfg.amr} · AGV ${P.cfg.agv}` : '같은 라인·단계로 헤드리스 시뮬레이션 두 번(약 2초)'}</small></div>
-    ${P ? `<table class="vla-t"><thead><tr><th>지표 (15분)</th><th>기준 100%</th><th>현재 설정</th><th>변화</th></tr></thead><tbody>${predRows}</tbody></table>` : ''}
+    ${P ? `<table class="vla-t"><thead><tr><th>지표 (15분)</th><th>기준 100% · 전체 운행</th><th>현재 설정</th><th>변화</th></tr></thead><tbody>${predRows}</tbody></table>` : ''}
+    <div class="ai-bar" style="margin-top:8px"><button type="button" class="ai-btn" data-fl-counts ${fleetCntBusy ? 'disabled' : ''}>📊 운행 대수별 비교 (15분씩 · 현재 속도 설정)</button><small>${fleetCntBusy ? `계산 중… ${fleetCntBusy}` : fleetCnt ? `완료 ${fclock(fleetCnt.at)} — AMR ${fleetCnt.amrScale} · AGV ${fleetCnt.agvScale}` : 'AMR 운행 대수(설치 대수 안에서 4단계)와 AGV 운행 대수별 UPH·재공·대기·자재대기를 비교해 적정 대수를 찾습니다'}</small></div>
+    ${fleetCnt ? fleetCountTables(fleetCnt) : ''}
     <h4>차량별 상태 <small>실제 속도는 주행 거리 변화로 측정</small></h4><div style="max-height:260px;overflow:auto"><table class="vla-t"><thead><tr><th>ID</th><th>종류</th><th>상태</th><th>실제 속도</th><th>설정 속도</th><th>배터리</th><th>작업</th></tr></thead><tbody>
       ${fl.flatMap((f) => F.list(f).map((m) => { const [st, c] = F.stateOf(m, f), v = F.speeds(f); return `<tr><td><b class="uidc">${escV(m.uid ?? m.id)}</b></td><td>${f === 'amr' ? 'AMR' : 'AGV'}</td><td class="${c === 'ok' ? 'p-done' : c === 'bad' ? 'p-rejected' : c === 'warn' ? 'p-train' : ''}">${escV(st)}</td><td>${ms(F.speedOf(m))}</td><td>${ms(m.state === 'line' ? v.line : v.drive)}</td><td>${Math.round(m.battery ?? 100)}%</td><td class="ins" title="${escV(m.lineInfo?.phase ?? m.task ?? '')}">${escV(m.state === 'line' ? m.lineInfo?.phase ?? '' : m.task ?? '대기')}</td></tr>`; })).join('')}</tbody></table></div>
     <h4>관제 이력</h4><table class="vla-t"><tbody>${F.events.slice(0, 8).map((e) => `<tr><td>${fclock(e.t)}</td><td>${escV(e.text)}</td><td>${escV(e.by ?? '관제 운영자')}</td></tr>`).join('') || '<tr><td>아직 없음</td></tr>'}</tbody></table>`);
 }
-function fleetDo(fn) { fn(sim.fleet); for (const f of ['amr', 'agv']) fleetCfg[f] = { scale: sim.fleet[f].scale, paused: sim.fleet[f].paused }; renderFleet(); }
+function fleetDo(fn) { fn(sim.fleet); const F = sim.fleet; for (const f of ['amr', 'agv']) fleetCfg[f] = { scale: F[f].scale, paused: F[f].paused, count: F.installed(f) && F.active(f) < F.installed(f) ? F.active(f) : null }; renderFleet(); }
+// 운행 대수별 비교 표 — 대수마다 UPH·재공·대기·자재대기, 가장 좋은 UPH와 '대수당 UPH 증가'가 줄어드는 지점(적정 대수)을 표시
+function fleetCountTables(C) {
+  const tbl = (f, rows) => {
+    if (!rows.length) return '';
+    const best = Math.max(...rows.map((r) => r.uph)), cur = C.cur[f];
+    // 적정 대수: UPH가 최고치의 98% 이상이 되는 가장 적은 대수
+    const fit = rows.find((r) => r.uph >= best * 0.98)?.n;
+    return `<div><h4>${FLEET_NAMES[f]} 운행 대수별 <small>${f === 'amr' ? `AGV ${C.agvScale} · 현재 운행 대수` : `AMR ${C.amrScale} · 현재 운행 대수`}로 고정 · 적정 = 최고 UPH의 98% 이상인 가장 적은 대수 · 시드 1개 15분 (참고용)</small></h4><table class="vla-t"><thead><tr><th>운행 대수</th><th>UPH</th><th>평균 재공</th><th>kWh/개</th><th>양보·이벤트 대기(초)</th><th>셀 자재대기(초)</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr${r.n === fit ? ' style="background:rgba(61,220,132,.12)"' : ''}><td><b>${r.n}대</b>${r.n === cur ? ' <small>(현재)</small>' : ''}${r.n === fit ? ' <small class="p-done">적정</small>' : ''}</td><td>${r.uph.toFixed(0)}</td><td>${r.wip.toFixed(1)}</td><td>${r.kwh.toFixed(3)}</td><td>${r.blockT.toFixed(0)}</td><td>${r.starve.toFixed(0)}</td></tr>`).join('')}</tbody></table></div>`;
+  };
+  return `<div class="vla-grid">${tbl('amr', C.amr)}${tbl('agv', C.agv)}</div>`;
+}
 fleetBody.addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
   const by = '관제 운영자 · AMR·AGV 관제';
   if (b.dataset.flStep) { const [f, d] = b.dataset.flStep.split(':'); fleetDo((F) => F.setScale(f, F[f].scale + 0.1 * +d, by)); }
   else if (b.dataset.flSet) { const [f, v] = b.dataset.flSet.split(':'); fleetDo((F) => F.setScale(f, +v, by)); }
+  else if (b.dataset.flCount) { const [f, d] = b.dataset.flCount.split(':'); fleetDo((F) => F.setActive(f, d === 'all' ? F.installed(f) : F.active(f) + +d, by)); }
+  else if (b.hasAttribute('data-fl-counts')) {
+    const F = sim.fleet, cfg = { amr: { ...fleetCfg.amr }, agv: { ...fleetCfg.agv } }, Agent = agentArch === 'hybrid' ? HybridAgent : FactoryAgent;
+    const steps = (N, lo) => [...new Set([lo, Math.round(lo + (N - lo) / 3), Math.round(lo + ((N - lo) * 2) / 3), N])].filter((n) => n >= lo && n <= N);
+    const amrN = F.hasAMR ? steps(F.installed('amr'), Math.max(1, Math.round(F.installed('amr') / 2))) : [], agvN = F.hasAGV ? Array.from({ length: F.installed('agv') }, (_, i) => i + 1) : [];
+    fleetCntBusy = '0%'; renderFleet();
+    const rows = await predictFleetCounts({ Simulation, Agent, mode: modeKey, line: currentLine, seed: SEED, T: 900, amr: cfg.amr, agv: cfg.agv, amrN, agvN, onStep: (d, t) => { fleetCntBusy = `${Math.round((d / t) * 100)}%`; renderFleet(); } });
+    fleetCnt = { ...rows, at: sim.time, amrScale: `${Math.round(cfg.amr.scale * 100)}%`, agvScale: `${Math.round(cfg.agv.scale * 100)}%`, cur: { amr: F.active('amr'), agv: F.active('agv') } }; fleetCntBusy = null; renderFleet();
+  }
   else if (b.dataset.flPause) fleetDo((F) => F.pause(b.dataset.flPause, by));
   else if (b.dataset.flResume) fleetDo((F) => F.resume(b.dataset.flResume, by));
   else if (b.hasAttribute('data-fl-predict')) {
     fleetBusy = true; renderFleet(); await new Promise((r) => setTimeout(r, 30));
     const cfg = { amr: { ...fleetCfg.amr }, agv: { ...fleetCfg.agv } }, Agent = agentArch === 'hybrid' ? HybridAgent : FactoryAgent;
     const P = predictFleet({ Simulation, Agent, mode: modeKey, line: currentLine, seed: SEED, T: 900, amr: cfg.amr, agv: cfg.agv });
-    const lab = (c) => (c.paused ? '정지' : `${Math.round(c.scale * 100)}%`);
-    fleetPred = { ...P, at: sim.time, cfg: { amr: lab(cfg.amr), agv: lab(cfg.agv) } }; fleetBusy = false; renderFleet();
+    const lab = (c, f) => `${c.paused ? '정지' : `${Math.round(c.scale * 100)}%`} · ${c.count ?? sim.fleet.installed(f)}대`;
+    fleetPred = { ...P, at: sim.time, cfg: { amr: lab(cfg.amr, 'amr'), agv: lab(cfg.agv, 'agv') } }; fleetBusy = false; renderFleet();
   }
 });
-fleetBody.addEventListener('change', (e) => { const r = e.target.closest('[data-fl-range]'); if (r) fleetDo((F) => F.setScale(r.dataset.flRange, +r.value / 100, '관제 운영자 · AMR·AGV 관제')); });
+fleetBody.addEventListener('change', (e) => {
+  const r = e.target.closest('[data-fl-range]'); if (r) fleetDo((F) => F.setScale(r.dataset.flRange, +r.value / 100, '관제 운영자 · AMR·AGV 관제'));
+  const c = e.target.closest('[data-fl-crange]'); if (c) fleetDo((F) => F.setActive(c.dataset.flCrange, +c.value, '관제 운영자 · AMR·AGV 관제'));
+});
 document.getElementById('btnFleet').addEventListener('click', () => {
   fleetModal.classList.remove('hidden'); renderFleet();
   clearInterval(fleetTimer); fleetTimer = setInterval(() => { if (!fleetModal.classList.contains('hidden') && !fleetBody.querySelector(':hover') && document.activeElement?.type !== 'range') renderFleet(); }, 700);

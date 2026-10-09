@@ -66,7 +66,7 @@ export class FactoryAgent {
   // ── 물류: 자재 공급 / 완제품 출하 ─────────────────
   logistics() {
     const s = this.sim, m = this.m;
-    const free = s.vehicles.filter((v) => v.idle && !(m.batteryDrain && v.battery < (m.chargeAt ?? 0) * 0.6));
+    const free = s.vehicles.filter((v) => v.idle && !v.outOfService && !(m.batteryDrain && v.battery < (m.chargeAt ?? 0) * 0.6));   // 운행 제외 AGV(관제)는 배차 안 함
     const projected = s.rawStock + s.inboundRaw;
 
     if (projected <= m.reorderPoint) {
@@ -226,7 +226,7 @@ export class FactoryAgent {
   expedite() {
     const s = this.sim;
     if (!s.supplyDisrupted || this.disruptHandled >= s.supplyDisruptedUntil) return null;
-    const v = s.vehicles.filter((x) => x.idle && x.battery > 25).sort((a, b) => Math.abs(a.x - LOC.WH.x) - Math.abs(b.x - LOC.WH.x))[0];
+    const v = s.vehicles.filter((x) => x.idle && !x.outOfService && x.battery > 25).sort((a, b) => Math.abs(a.x - LOC.WH.x) - Math.abs(b.x - LOC.WH.x))[0];
     if (!v) return null;
     const remain = s.supplyDisruptedUntil - s.time;
     const add = Math.max(0, Math.min(s.safetyStock, RAW_CAP - s.rawStock - s.inboundRaw));
