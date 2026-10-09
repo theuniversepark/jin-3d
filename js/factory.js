@@ -1502,7 +1502,7 @@ export class FactoryView {
     // 뒷벽 관제 화면 왼쪽(12×4m)에는 CCTV 전광판(js/cctvview.js)이 걸린다 — 과학기술정보통신부·정보통신산업진흥원 로고는 관제 서버 랙 양옆(아래 관제/서버)과 앞쪽 바닥 표시에 둔다
     // 바닥 표시(12×5.4m) — 앞쪽 AGV 충전소(오른쪽 끝 x −2.8)와 정비실(왼쪽 끝 x 10.3) 사이 가운데 (x 3.75), 앞쪽 통로(지게차 z ≤ 10.7)와 AMR 복귀 전용로(z ≥ 18.3) 사이 가운데 (z 14.5)
     // 두 줄로 각 기관 CI 가로형 시그니처(상징 + 로고타입, 상징은 공식 색) — 멀리서도 선명하게 로고타입은 진한 회색(#3a3a3a)으로 굵게. 바탕 판 없이 바닥색 위에 그린다 (투명 배경 이미지)
-    const logoTex = new THREE.TextureLoader().load('assets/msit_nipa_ci_bold.png');
+    const logoTex = new THREE.TextureLoader().load('assets/msit_nipa_ci_v2.png');
     logoTex.colorSpace = THREE.SRGBColorSpace; logoTex.anisotropy = 8;
     const sign = put(new THREE.Mesh(new THREE.PlaneGeometry(12, 12 * 720 / 1600), new THREE.MeshBasicMaterial({ map: logoTex, transparent: true, depthWrite: false, toneMapped: false })), 3.75, 0.012, 14.5, r);   // 톤 매핑으로 글자가 옅어지지 않게
     sign.rotation.x = -Math.PI / 2;
