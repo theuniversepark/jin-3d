@@ -439,7 +439,8 @@ export class Simulation {
       this.helpers.push(h);
     }
     for (let i = 0; i < (m.quadrupeds ?? 0); i++) {
-      const q = new Mover(`사족보행-${i + 1}`, 'quadruped', { x: 6 + i * 2, z: 13.5, aisle: 'F', name: '사족보행 충전 스테이션' }, 1.2);
+      // 충전 스테이션: 정비실(오른쪽 끝 x 17.9)과 드론 이착륙장 충전기(x 27.9) 사이 가운데 (x 22.9), 2m 간격
+      const q = new Mover(`사족보행-${i + 1}`, 'quadruped', { x: 22.9 - (m.quadrupeds - 1) + i * 2, z: 13.5, aisle: 'F', name: '사족보행 충전 스테이션' }, 1.2);
       q.round = i; q.scanning = null;
       q.battery = 55 + this.rand() * 40; q.chargeRate = 0.45;   // 도킹 충전 약 0.45%/초 (20→95% 약 3분)
       this.quads.push(q);
