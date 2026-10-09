@@ -1501,10 +1501,10 @@ export class FactoryView {
     // 천장 형광등 기구는 두지 않는다 — 공장 밝기는 환경광·주광·보조광(main.js LOOK)으로 단계별로 유지
     // 뒷벽 관제 화면 왼쪽(12×4m)에는 CCTV 전광판(js/cctvview.js)이 걸린다 — 과학기술정보통신부·정보통신산업진흥원 로고는 관제 서버 랙 양옆(아래 관제/서버)과 앞쪽 바닥 표시에 둔다
     // 바닥 표시(12×5.4m) — 앞쪽 AGV 충전소(오른쪽 끝 x −2.8)와 정비실(왼쪽 끝 x 10.3) 사이 가운데 (x 3.75), 앞쪽 통로(지게차 z ≤ 10.7)와 AMR 복귀 전용로(z ≥ 18.3) 사이 가운데 (z 14.5)
-    // 두 줄로 각 기관 CI 가로형 시그니처(상징 + 로고타입, 공식 색) — 멀리서도 읽히게 로고타입 획만 같은 색으로 조금 굵게. 바탕 판 없이 바닥색 위에 그린다 (투명 배경 이미지)
-    const logoTex = new THREE.TextureLoader().load('assets/msit_nipa_ci.png');
+    // 두 줄로 각 기관 CI 가로형 시그니처(상징 + 로고타입, 상징은 공식 색) — 멀리서도 선명하게 로고타입은 진한 회색(#3a3a3a)으로 굵게. 바탕 판 없이 바닥색 위에 그린다 (투명 배경 이미지)
+    const logoTex = new THREE.TextureLoader().load('assets/msit_nipa_ci_bold.png');
     logoTex.colorSpace = THREE.SRGBColorSpace; logoTex.anisotropy = 8;
-    const sign = put(new THREE.Mesh(new THREE.PlaneGeometry(12, 12 * 720 / 1600), new THREE.MeshBasicMaterial({ map: logoTex, transparent: true, depthWrite: false })), 3.75, 0.012, 14.5, r);
+    const sign = put(new THREE.Mesh(new THREE.PlaneGeometry(12, 12 * 720 / 1600), new THREE.MeshBasicMaterial({ map: logoTex, transparent: true, depthWrite: false, toneMapped: false })), 3.75, 0.012, 14.5, r);   // 톤 매핑으로 글자가 옅어지지 않게
     sign.rotation.x = -Math.PI / 2;
     // 출하 도크: 말아 올린 셔터·문틀·도크 레벨러·범퍼 (벽 기둥 사이 두 칸)
     for (const [i, bx] of YARD.bays.entries()) {
