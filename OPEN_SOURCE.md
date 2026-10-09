@@ -43,7 +43,7 @@
 | Claude 아티팩트 (claude.ai) | 공유 페이지 호스팅 |
 | Anthropic Claude API (모델 `claude-opus-5-5`) | 대화 기반 Agent 해석, 자연어 공정 설계 (API 키가 있을 때만) |
 | https://console.anthropic.com/settings/keys | 설정 화면의 API 키 발급 안내 링크 |
-| 과학기술정보통신부 — https://www.msit.go.kr (세로형·가로형 로고 SVG: https://commons.wikimedia.org/wiki/File:Ministry_of_Science_and_ICT_of_the_Republic_of_Korea_Logo_(vertical).svg · https://commons.wikimedia.org/wiki/File:Ministry_of_Science_and_ICT_of_the_Republic_of_Korea_Logo_(horizontal).svg) · 정보통신산업진흥원 — https://www.nipa.kr (CI 원본: https://www.nipa.kr/home/4-4-5) | 서버 랙 양옆 로고·앞쪽 바닥 표시 이미지 `assets/msit_logo.png` · `assets/nipa_logo.png` · `assets/msit_nipa_floor.png` 출처 (바닥 표시의 이름 글자는 운영체제 기본 폰트 Apple SD Gothic Neo 굵게로 직접 조판) |
+| 과학기술정보통신부 — https://www.msit.go.kr (세로형·가로형 로고 SVG: https://commons.wikimedia.org/wiki/File:Ministry_of_Science_and_ICT_of_the_Republic_of_Korea_Logo_(vertical).svg · https://commons.wikimedia.org/wiki/File:Ministry_of_Science_and_ICT_of_the_Republic_of_Korea_Logo_(horizontal).svg) · 정보통신산업진흥원 — https://www.nipa.kr (CI 원본: https://www.nipa.kr/home/4-4-5) | 서버 랙 양옆 로고·앞쪽 바닥 표시 이미지 `assets/msit_logo.png` · `assets/nipa_logo.png` · `assets/msit_nipa_mark.png` 출처 (바닥 표시의 이름 글자는 운영체제 기본 폰트 Apple SD Gothic Neo 굵게로 직접 조판) |
 | 사용자 제공 이미지 | 도어트림 실물 이미지 `assets/doortrim.png` · e-axle 실물 단면 이미지 `assets/eaxle.png` (부품분류셀 이후 AMR 위 제품 표시) |
 
 - AAS 데이터 안의 `https://admin-shell.io/...`, `https://camtic.or.kr/aas/jin3d/...` 등은 의미 식별자(semanticId·id)이며 실행 중 접속하지 않습니다.
