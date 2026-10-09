@@ -30,6 +30,79 @@ export const SEC_THREATS = {
   tamper: { label: '학습 데이터 위변조', icon: '🧬', layer: 'data', desc: 'VLA 에피소드 실행 로그 해시 불일치 → ZKML 무결성 검증 실패 → 해당 데이터 격리' },
   exfil: { label: '노하우 무단 반출', icon: '📤', layer: 'data', desc: '제조 레시피(명령 노하우)를 eVDI 밖으로 반출 시도 → DLP 민감정보 탐지 → 차단' },
 };
+// 보안 인시던트 처리 흐름 — 레인(누가) · 단계(무엇을) · 담당 주체/에이전트 · 발생 후 시각(초)
+export const SEC_LANES = [
+  { key: 'src', label: '위협 출처', sub: '공격·오작동 주체' },
+  { key: 'detect', label: '탐지 모듈', sub: 'OT 엔드포인트 · ONE Access · ZKML · eVDI' },
+  { key: 'ai', label: '보안 분석 AI', sub: 'Internal AI 분석 시스템' },
+  { key: 'orch', label: 'FACOS 오케스트레이터', sub: '보안 인시던트 판단·지시' },
+  { key: 'resp', label: '대응 실행', sub: 'TrustCore · eVDI · 명령 센터 · 모델 검증' },
+];
+export const SEC_STAGES = [
+  { key: 'occur', label: '발생' }, { key: 'detect', label: '탐지' }, { key: 'block', label: '차단·격리' }, { key: 'analyze', label: '분석·분류' },
+  { key: 'decide', label: '판단·보고' }, { key: 'respond', label: '대응' }, { key: 'verify', label: '복구 확인' }, { key: 'feedback', label: '룰 환류' }, { key: 'close', label: '종결' },
+];
+// 담당 주체·에이전트 (흐름 상자에 표시)
+export const SEC_ACTORS = {
+  otac: { name: 'OT 엔드포인트 보안 장비', org: '센스톤 · OTAC 단방향 동적 인증' },
+  dpi: { name: 'DPI 명령 선별 제어', org: '센스톤 · 아이티스테이션' },
+  oneaccess: { name: 'ONE Access', org: '라온시큐어 · DID/VC 권한 검증' },
+  trustcore: { name: 'TrustCore', org: '라온시큐어 · 신원·자격 저장소' },
+  zkml: { name: 'ZKML 무결성 검증', org: '서강대' },
+  he: { name: '동형암호 연합학습', org: '디사일로' },
+  evdi: { name: 'eVDI 보안 워크스페이스', org: '틸론 · 반출 통제(DLP)' },
+  intai: { name: 'Internal AI 분석 시스템', org: '틸론 · 보안 분석 에이전트' },
+  mr: { name: 'AI 모델 안전성 검증', org: '전북대 · 메타모픽·차등 테스팅' },
+  orch: { name: '공장 오케스트레이터', org: 'FACOS' },
+  cmd: { name: '명령 센터', org: 'FACOS' },
+};
+const A = (k) => SEC_ACTORS[k].name;
+export const SEC_FLOW = {
+  spoof: ({ st }) => ({ title: `미등록 주체 → ${st.name} 속도 150% 명령`, block: `${st.name} OT 엔드포인트 OTAC 인증 실패 · DID 서명 없음`, act: '패킷 폐기 · 발신 세션 격리 · 차단 목록 등록 · 탐지 룰 재배포', steps: [
+    { dt: 0, lane: 'src', stage: 'occur', actor: '미등록 외부 단말', a: null, text: `${st.name}에 속도 150% 제어 명령 송신` },
+    { dt: 0.3, lane: 'detect', stage: 'detect', actor: A('otac'), a: 'otac', text: 'OTAC 동적 토큰 불일치 · DID 서명 없음 → 인증 실패' },
+    { dt: 0.6, lane: 'detect', stage: 'block', actor: A('dpi'), a: 'dpi', text: '쓰기(제어) 명령 식별 · 추가 인증 없음 → 패킷 폐기' },
+    { dt: 2, lane: 'ai', stage: 'analyze', actor: A('intai'), a: 'intai', text: '발신 세션·명령 패턴 분석 → 제어 명령 위조, 위험 높음' },
+    { dt: 3.5, lane: 'orch', stage: 'decide', actor: A('orch'), a: 'orch', text: `보안 인시던트 P2 · ${st.name} 명령 채널 감시 강화 지시` },
+    { dt: 5, lane: 'resp', stage: 'respond', actor: A('trustcore'), a: 'trustcore', text: '발신 세션 격리 · 차단 목록 등록' },
+    { dt: 6.5, lane: 'resp', stage: 'verify', actor: A('cmd'), a: 'cmd', text: `${st.name} 상태 확인 — 위조 명령 미실행, 정상 운전 유지` },
+    { dt: 8, lane: 'ai', stage: 'feedback', actor: A('intai'), a: 'intai', text: '위조 명령 탐지 룰 갱신 → OT 엔드포인트 재배포' },
+    { dt: 9.5, lane: 'orch', stage: 'close', actor: A('orch'), a: 'orch', text: '종결 — 차단 확인, 공정 영향 없음' },
+  ] }),
+  privesc: ({ robot }) => ({ title: `${robot?.name ?? '로봇 에이전트'} → 비상정지 해제 요청`, block: `ONE Access: VC 권한 [${robot?.scopes.join(', ')}]에 command:emergency 없음`, act: '요청 거부 · 위임 VC 일시 정지 · 모델 재검사', steps: [
+    { dt: 0, lane: 'src', stage: 'occur', actor: `${robot?.name ?? '로봇 에이전트'}`, a: null, text: '권한 밖 명령: 비상정지 해제 요청 (오작동·탈취 의심)' },
+    { dt: 0.3, lane: 'detect', stage: 'detect', actor: A('oneaccess'), a: 'oneaccess', text: `DID 확인 · VC 권한에 command:emergency 없음` },
+    { dt: 0.6, lane: 'detect', stage: 'block', actor: A('oneaccess'), a: 'oneaccess', text: '최소 권한 위반 → 요청 거부 (명령 센터로 전달 안 함)' },
+    { dt: 2, lane: 'ai', stage: 'analyze', actor: A('intai'), a: 'intai', text: '에이전트 행동 이력 분석 → 비정상 권한 상승 시도' },
+    { dt: 3.5, lane: 'orch', stage: 'decide', actor: A('orch'), a: 'orch', text: '보안 인시던트 P2 · 해당 에이전트 위임 VC 재검증 지시' },
+    { dt: 5, lane: 'resp', stage: 'respond', actor: A('trustcore'), a: 'trustcore', text: '위임 VC 일시 정지 — 재발급 전 명령 요청 차단' },
+    { dt: 6.5, lane: 'resp', stage: 'verify', actor: A('mr'), a: 'mr', text: '해당 로봇 VLA 정책 메타모픽 재검사 → 이상 없음' },
+    { dt: 8, lane: 'ai', stage: 'feedback', actor: A('intai'), a: 'intai', text: '권한 상승 시도 탐지 룰 추가' },
+    { dt: 9.5, lane: 'orch', stage: 'close', actor: A('orch'), a: 'orch', text: '종결 — 비상정지 유지 상태 변화 없음, 위임 VC 재발급 대기' },
+  ] }),
+  tamper: ({ st }) => ({ title: `VLA 에피소드 실행 로그 위변조 (${st.name})`, block: 'ZKML 증명 검증 실패 — 실행 로그 해시 불일치', act: '오염 에피소드 격리 · 연합학습 집계 제외 · 배포 모델 재검사', steps: [
+    { dt: 0, lane: 'src', stage: 'occur', actor: `${st.name} 도메인 데이터`, a: null, text: '오염된 실행 로그가 학습 데이터로 반입' },
+    { dt: 0.3, lane: 'detect', stage: 'detect', actor: A('zkml'), a: 'zkml', text: '영지식 증명 검증 실패 — 실행 로그 해시 불일치' },
+    { dt: 0.6, lane: 'resp', stage: 'block', actor: A('evdi'), a: 'evdi', text: '해당 에피소드 격리 볼륨으로 이동 · 학습 제외' },
+    { dt: 2, lane: 'ai', stage: 'analyze', actor: A('intai'), a: 'intai', text: '위변조 범위 분석 → 해당 도메인 최근 에피소드' },
+    { dt: 3.5, lane: 'orch', stage: 'decide', actor: A('orch'), a: 'orch', text: '보안 인시던트 P2 · 오염 데이터 제외 재학습 지시' },
+    { dt: 5, lane: 'resp', stage: 'respond', actor: A('he'), a: 'he', text: '오염 도메인 가중치를 연합 집계에서 제외' },
+    { dt: 6.5, lane: 'resp', stage: 'verify', actor: A('mr'), a: 'mr', text: '배포 중인 모델 차등 테스팅 재검사 → 이상 없음' },
+    { dt: 8, lane: 'ai', stage: 'feedback', actor: A('intai'), a: 'intai', text: '입력조작 탐지 룰 갱신 → 도메인 eVDI 재배포' },
+    { dt: 9.5, lane: 'orch', stage: 'close', actor: A('orch'), a: 'orch', text: '종결 — 오염 데이터 격리, 모델 영향 없음' },
+  ] }),
+  exfil: () => ({ title: '제조 레시피(명령 노하우) eVDI 밖 반출 시도', block: 'eVDI DLP: 민감정보(공정 파라미터·노하우) 탐지 · DID 서명 없음', act: '반출 차단 · 세션 권한 정지 · 감사 증적 보존 · 룰 재배포', steps: [
+    { dt: 0, lane: 'src', stage: 'occur', actor: 'eVDI 사용자 세션', a: null, text: '공정 파라미터·명령 노하우 파일 외부 반출 시도' },
+    { dt: 0.3, lane: 'detect', stage: 'detect', actor: A('evdi'), a: 'evdi', text: 'DLP 민감정보 탐지 · DID 서명 없음' },
+    { dt: 0.6, lane: 'resp', stage: 'block', actor: A('evdi'), a: 'evdi', text: '반출 차단 · 커널 반출 채널(USB·캡처) 차단' },
+    { dt: 2, lane: 'ai', stage: 'analyze', actor: A('intai'), a: 'intai', text: '세션 행위 분석 → 내부 유출 시도 판정' },
+    { dt: 3.5, lane: 'orch', stage: 'decide', actor: A('orch'), a: 'orch', text: '보안 인시던트 P2 · 세션 권한 정지 지시' },
+    { dt: 5, lane: 'resp', stage: 'respond', actor: A('oneaccess'), a: 'oneaccess', text: '사용자 세션 권한 정지 — 관리자 승인 후 해제' },
+    { dt: 6.5, lane: 'resp', stage: 'verify', actor: A('trustcore'), a: 'trustcore', text: '감사 증적 DID 서명 보존 · 반출 데이터 0건 확인' },
+    { dt: 8, lane: 'ai', stage: 'feedback', actor: A('intai'), a: 'intai', text: '반출 탐지 룰 재배포 (능동형 방어 루프)' },
+    { dt: 9.5, lane: 'orch', stage: 'close', actor: A('orch'), a: 'orch', text: '종결 — 유출 없음' },
+  ] }),
+};
 // 통신 지연 모델 (가정값): 셀 명령 메시지 평문 왕복 지연과 구간 암호화(인증 연계 세션키 · AES-GCM) 추가 지연
 const PLAIN_MS = 4.0, ENC_MS = 1.3;
 // 동형암호 연합학습 집계 시간 모델 (가정값): 1만 파라미터당
@@ -43,6 +116,7 @@ export class SecurityLayer {
     this.stats = { cmdVerified: 0, cmdBlocked: 0, otac: 0, dpiWrite: 0, encMsgs: 0, heRounds: 0, zkml: 0, zkmlFail: 0, mrTests: 0, exports: 0, exportBlocked: 0, threats: 0, blocked: 0 };
     this.byLayer = { agent: 0, data: 0, model: 0, ot: 0 };
     this.scores = [];   // VLA 후보 모델별 Safety Score · DRS
+    this.flows = []; this.flowSeq = 0;   // 보안 인시던트 처리 흐름 (최근 12건)
     sim.sec = this;
   }
   // 신원 등록 (DID/VC 발행) — 물리 에이전트(로봇·이동체·드론)와 소프트웨어 에이전트, 각자 역할에 필요한 권한만(최소 권한)
@@ -107,30 +181,31 @@ export class SecurityLayer {
     this.note('data', 'pass', `${kind} 반출 — eVDI DLP 검사 통과 · DID 서명 반출 (${name}${bytes ? `, ${(bytes / 1024).toFixed(0)}KB` : ''})`);
     return true;
   }
-  // 위협 주입 (시연) — 해당 계층이 막고 오케스트레이터에 보안 인시던트로 보고
+  // 위협 주입 (시연) — 보안 인시던트 처리 흐름(SEC_FLOW)을 단계마다 시각에 맞춰 진행하고, 오케스트레이터 인시던트(P2)에도 같은 흐름을 남긴다
   inject(type) {
     if (!this.on) return null;
     this.register();
     const s = this.sim, o = s.orch, T = SEC_THREATS[type]; if (!T) return null;
     const cells = s.processing.filter((st) => !st.standby), st = cells[Math.floor(s.rand() * cells.length)];
     const robot = [...this.ids.values()].find((x) => x.kind === 'robot');
-    const text = {
-      spoof: [`미등록 주체 → ${st.name} 속도 150% 명령`, `${st.name} OT 엔드포인트: OTAC 동적 토큰 불일치 · DID 서명 없음`, '명령 폐기 · 발신 세션 격리 · TrustCore 차단 목록 등록', 'ot'],
-      privesc: [`${robot?.name ?? '로봇 에이전트'} → 비상정지 해제 요청`, `ONE Access: VC 권한 [${robot?.scopes.join(', ')}]에 command:emergency 없음`, '요청 거부 · 위임 VC 재발급 없이 차단 유지', 'agent'],
-      tamper: [`VLA 에피소드 실행 로그 위변조 (${st.name})`, 'ZKML 증명 검증 실패 — 실행 로그 해시 불일치', '해당 에피소드 학습 제외 · 도메인 eVDI 격리 볼륨으로 이동', 'data'],
-      exfil: ['제조 레시피(명령 노하우) eVDI 밖 반출 시도', 'eVDI DLP: 민감정보(공정 파라미터·노하우) 탐지 · DID 서명 없음', '반출 차단 · 세션 행위 로그 보존 · 탐지 룰 재배포', 'data'],
-    }[type];
+    const script = SEC_FLOW[type]({ st, robot });
     this.stats.threats++;
     if (type === 'spoof' || type === 'privesc') this.stats.cmdBlocked++;
     if (type === 'tamper') this.stats.zkmlFail++;
     if (type === 'exfil') this.stats.exportBlocked++;
-    this.note(text[3], 'block', `${T.icon} ${T.label} 차단 — ${text[1]}`);
-    const inc = o.open('security', `sec:${this.seq}`, `${T.icon} ${T.label} — ${text[0]}`, SEC_LAYERS[text[3]].label, { prio: 2 });
-    o.step(inc, 'field', 'detect', `${SEC_LAYERS[text[3]].icon} ${text[1]}`);
-    o.step(inc, 'cell', 'self', `즉시 차단 (${SEC_LAYERS[text[3]].label})`);
-    o.step(inc, 'orch', 'report', `보안 인시던트 보고: ${text[0]}`);
-    o.later(2, () => { o.step(inc, 'orch', 'decide', `조치: ${text[2]}`); o.later(2, () => o.close(inc, `${T.label} 차단 확인 · 공정 영향 없음`)); });
-    s.log('alert', `${T.icon} 보안 위협 차단 · ${T.label}`, { obs: text[1], act: text[2] });
+    const f = { id: ++this.flowSeq, type, title: script.title, layer: T.layer, t0: s.time, steps: [], status: 'open', tEnd: null };
+    this.flows.unshift(f); if (this.flows.length > 12) this.flows.pop();
+    this.note(T.layer, 'block', `${T.icon} ${T.label} 차단 — ${script.block}`);
+    const inc = o.open('security', `sec:${f.id}`, `${T.icon} ${T.label} — ${script.title}`, SEC_LAYERS[T.layer].label, { prio: 2 });
+    f.incId = inc.id;
+    // 보안 흐름 레인 → 오케스트레이터 인시던트 레인 (현장 감지 · 셀 컨트롤러 · 오케스트레이터 · 실행 자원)
+    const OL = { src: 'field', detect: 'field', ai: 'cell', orch: 'orch', resp: 'exec' }, OK = { occur: 'detect', detect: 'detect', block: 'self', analyze: 'report', decide: 'decide', respond: 'act', verify: 'act', feedback: 'notify' };
+    script.steps.forEach((x) => o.later(x.dt, () => {
+      f.steps.push({ ...x, t: s.time });
+      if (x.stage === 'close') { f.status = 'resolved'; f.tEnd = s.time; o.close(inc, `${x.actor}: ${x.text}`); return; }
+      o.step(inc, OL[x.lane], OK[x.stage], `${x.actor} — ${x.text}`);
+    }));
+    s.log('alert', `${T.icon} 보안 위협 차단 · ${T.label}`, { obs: script.block, act: script.act });
     return inc;
   }
   summary() {

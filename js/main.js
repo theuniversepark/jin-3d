@@ -32,7 +32,7 @@ import { AI_MODELS } from './cctv.js';
 import { NR, STACK, LAT, UE_LOAD, maxRobots } from './net5g.js';
 import { setAasVersion, AAS_VERSIONS } from './aas.js';
 import { OrchView } from './orchview.js';
-import { SEC_LAYERS, SEC_KPI, SEC_THREATS } from './security.js';
+import { SEC_LAYERS, SEC_KPI, SEC_THREATS, SEC_LANES, SEC_STAGES, SEC_ACTORS } from './security.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
 // ── 렌더러 ─────────────────────────────
@@ -1422,6 +1422,38 @@ function viewCells() {
     ${cells.map((st) => `<tr><td><b class="uidc">${escV(st.uid ?? st.id)}</b></td><td>${escV(st.name)}</td><td>${escV(ST_LABEL[st.state] ?? st.state)}</td><td>${pct(st.ema)}</td><td>${st.c.processed}</td><td>${st.c.defects}</td><td>${st.c.fails}</td><td style="color:${st.health > 60 ? '#8ff0b8' : st.health > 40 ? '#ffc65a' : '#ff7b7b'}">${st.health.toFixed(0)}%</td><td>${pct(st.c.starved / T)}</td><td>${pct(st.c.blocked / T)}</td><td>${pct((st.c.down + st.c.maint) / T)}</td><td>${(st.def.cycle * s.mode.cycleMul * st.speedMul * (s.vla?.cycleFactor(st) ?? 1)).toFixed(1)}초</td></tr>`).join('')}</tbody></table>
     ${gates.length ? `<div class="fc-cards">${gates.map(gateCard).join('')}</div>` : '<p class="vla-note">이 라인에는 분류·포장 게이트 셀이 없습니다.</p>'}`;
 }
+// 보안 인시던트 처리 흐름도 — 레인(위협 출처 · 탐지 모듈 · 보안 분석 AI · FACOS 오케스트레이터 · 대응 실행) × 단계, 상자마다 담당 주체·에이전트
+let secFlowSel = null;
+const SEC_KIND = { occur: '#ff6b6b', detect: '#ff9a3d', block: '#f5b82e', analyze: '#5aa9ff', decide: '#b89bff', respond: '#3ddc84', verify: '#2bd4c6', feedback: '#a9b4c0', close: '#7dffb0' };
+function secFlowView(f) {
+  const now = sim.time, got = new Set(f.steps.map((x) => x.stage)), first = (k) => f.steps.find((x) => x.stage === k);
+  const nextIdx = SEC_STAGES.findIndex((x) => !got.has(x.key));
+  const stepper = SEC_STAGES.map((x, i) => { const st = first(x.key); return `<div class="os ${st ? 'on' : ''} ${!st && i === nextIdx && f.status === 'open' ? 'cur' : ''}"><i>${st ? '✓' : i + 1}</i><span>${x.label}</span><small>${st ? `+${(st.t - f.t0).toFixed(1)}s` : ''}</small></div>`; }).join('<b class="os-ar">›</b>');
+  const W = 1000, x0 = 70, colW = (W - x0) / SEC_LANES.length, rowH = 66, top = 54, BH = 58, bw = colW - 14;
+  const cx = (lane) => x0 + SEC_LANES.findIndex((l) => l.key === lane) * colW + colW / 2;
+  const H = top + Math.max(1, f.steps.length) * rowH + 12;
+  const wrap = (t, n, max) => { const a = [], w = [...t]; for (let i = 0; i < w.length && a.length < max; i += n) a.push(w.slice(i, i + n).join('')); if (w.length > n * max) a[max - 1] = a[max - 1].slice(0, n - 1) + '…'; return a; };
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" class="sw" role="img" aria-label="보안 인시던트 처리 흐름도"><defs><marker id="sarw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--o-line)"/></marker></defs>`;
+  SEC_LANES.forEach((l, i) => { const x = x0 + i * colW; svg += `<rect x="${x + 2}" y="0" width="${colW - 4}" height="${H}" rx="8" class="lane ${l.key === 'orch' ? 'l-orch' : ''}"/><text x="${x + colW / 2}" y="18" text-anchor="middle" class="ln">${escV(l.label)}</text><text x="${x + colW / 2}" y="34" text-anchor="middle" class="ls">${escV(l.sub)}</text>`; });
+  f.steps.forEach((st, i) => {
+    const y = top + i * rowH, x = cx(st.lane), K = SEC_KIND[st.stage], lab = SEC_STAGES.find((q) => q.key === st.stage).label, org = st.a ? SEC_ACTORS[st.a].org : '';
+    if (i > 0) { const p = f.steps[i - 1], px = cx(p.lane), py = top + (i - 1) * rowH;
+      if (p.lane !== st.lane) { const d = Math.sign(x - px), sx = px + d * (bw / 2), ex = x - d * (bw / 2); svg += `<path d="M${sx},${py + BH / 2} C${(sx + ex) / 2},${py + BH / 2} ${(sx + ex) / 2},${y + BH / 2} ${ex},${y + BH / 2}" class="ar" marker-end="url(#sarw)"/>`; }
+      else svg += `<line x1="${x}" y1="${py + BH}" x2="${x}" y2="${y - 2}" class="ar" marker-end="url(#sarw)"/>`; }
+    const cur = i === f.steps.length - 1 && f.status === 'open';
+    svg += `<text x="6" y="${y + 18}" class="tm">+${(st.t - f.t0).toFixed(1)}s</text><text x="6" y="${y + 31}" class="tm2">${fclock(st.t)}</text>
+      <g class="${cur ? 'cur' : ''}"><title>${escV(`${lab} · ${st.actor}${org ? ` (${org})` : ''} — ${st.text}`)}</title><rect x="${x - bw / 2}" y="${y}" width="${bw}" height="${BH}" rx="7" class="bx" style="--k:${K}"/>
+      <text x="${x - bw / 2 + 7}" y="${y + 13}" class="bk" style="fill:${K}">${escV(lab)}</text><text x="${x - bw / 2 + 7}" y="${y + 25}" class="bt" style="font-weight:700">${escV(wrap(st.actor, 21, 1)[0])}</text>`;
+    wrap(st.text, 19, 3).forEach((ln, k) => { svg += `<text x="${x - bw / 2 + 7}" y="${y + 36 + k * 10}" class="bt">${escV(ln)}</text>`; });
+    svg += '</g>';
+  });
+  svg += '</svg>';
+  const T = SEC_THREATS[f.type], dur = (f.tEnd ?? now) - f.t0;
+  const actors = [...new Set(f.steps.map((x) => x.a).filter(Boolean))].map((k) => `<b>${escV(SEC_ACTORS[k].name)}</b> <small>${escV(SEC_ACTORS[k].org)}</small>`).join(' · ');
+  return `<div class="of-h"><span>${T.icon} <em class="oi-p p2">P2 시설·작업 안전</em> <b>${escV(T.label)} — ${escV(f.title)}</b> · 발생 ${fclock(f.t0)} · ${SEC_LAYERS[f.layer].icon} ${escV(SEC_LAYERS[f.layer].label)}</span>
+      <span class="of-st ${f.status}">${f.status === 'open' ? `진행 중 · ${Math.round(dur)}초 경과` : `해결 · 총 ${dur.toFixed(1)}초`}</span></div>
+    <div class="ostp">${stepper}</div><div class="sw-wrap" style="max-height:none">${svg}</div><div class="fc-sub">참여 주체·에이전트: ${actors || '-'}</div>`;
+}
 // 피지컬AI 다중 계층 보안 (총괄4): 4개 계층 구조 · 실시간 검증·차단 결과 · 위협 주입(시연) · 1차년도 성과지표 목표
 function viewSecurity() {
   const S = sim.sec, st = S.stats, L = S.latency, mq = hub.mqtt;
@@ -1436,6 +1468,9 @@ function viewSecurity() {
     </div>
     <div class="ai-bar"><small>위협 주입 (시연) — 해당 보안 계층이 차단하고 오케스트레이터에 보안 인시던트(P2)로 보고합니다:</small>
       ${Object.entries(SEC_THREATS).map(([k, T]) => `<button type="button" class="ai-btn" data-sec-threat="${k}" title="${escV(T.desc)}">${T.icon} ${T.label}</button>`).join('')}</div>
+    ${(() => { const F = S.flows, sel = F.find((f) => f.id === secFlowSel) ?? F[0];
+      return `<h4>보안 인시던트 처리 흐름 <small>발생 → 탐지 → 차단·격리 → 분석·분류 → 판단·보고 → 대응 → 복구 확인 → 룰 환류 → 종결 · 레인별 담당 주체·에이전트</small></h4>
+      ${F.length ? `<div class="orch-b" style="grid-template-columns:220px 1fr;overflow:visible"><div class="orch-list">${F.map((f) => { const T = SEC_THREATS[f.type]; return `<button type="button" class="oi ${f === sel ? 'sel' : ''} st-${f.status === 'open' ? 'open' : 'done'}" data-sec-flow="${f.id}"><span class="oi-ic">${T.icon}</span><span class="oi-t">${escV(T.label)}</span><span class="oi-m">${fclock(f.t0)} · ${f.steps.length}/${SEC_STAGES.length}단계</span><span class="oi-s">${f.status === 'open' ? '진행 중' : '해결'}</span></button>`; }).join('')}</div><div class="orch-flow">${secFlowView(sel)}</div></div>` : '<p class="vla-note">위 버튼으로 위협을 주입하면 처리 흐름이 단계별로 그려집니다 (약 10초).</p>'}`; })()}
     <div class="fc-cards">
       ${card('agent', `로봇·이동체·드론·SW 에이전트마다 DID 발행, 역할 VC로 필요한 권한만(최소 권한). 상위 명령은 발신 주체 서명·권한을 확인한 뒤 전송합니다.`)}
       ${card('ot', `셀 OT 엔드포인트: OTAC 단방향 동적 토큰 인증 → 구간 암호화 → DPI로 명령 의미 식별(쓰기·제어 명령은 추가 인증, 텔레메트리 읽기는 무간섭 통과${mq.available ? ` · MQTT ${mq.sent.toLocaleString('ko-KR')}건` : ''}) → AI 이상 탐지.`)}
@@ -1484,7 +1519,8 @@ document.getElementById('closeFacos').addEventListener('click', () => { fcModal.
 fcModal.addEventListener('click', (e) => { if (e.target === fcModal) { fcModal.classList.add('hidden'); fcView = null; } });
 fcBody.addEventListener('click', (e) => {
   if (e.target.closest('[data-fc-info]')) { fcAgentInfo = !fcAgentInfo; renderFacosView(true); }
-  const th = e.target.closest('[data-sec-threat]'); if (th) { sim.sec?.inject(th.dataset.secThreat); renderFacosView(true); }
+  const th = e.target.closest('[data-sec-threat]'); if (th) { sim.sec?.inject(th.dataset.secThreat); secFlowSel = sim.sec?.flows[0]?.id ?? null; renderFacosView(true); }
+  const sf = e.target.closest('[data-sec-flow]'); if (sf) { secFlowSel = +sf.dataset.secFlow; renderFacosView(true); }
 });
 
 window.__twin = { primKey, setRender, RENDER, openGnb: (id) => openGnb(id), cctvRec, robotRec, cctvView, epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };

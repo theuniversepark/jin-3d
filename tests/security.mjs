@@ -20,7 +20,12 @@ check('셀 OT 엔드포인트 OTAC 인증·구간 암호화 기록', S.stats.ota
 check('구간 암호화 통신 지연 증가율 50% 이하 (모델 가정값)', S.latency.rise <= 0.5, `${Math.round(S.latency.rise * 100)}%`);
 console.log('== 위협 주입 → 차단 · 보안 인시던트');
 for (const k of ['spoof', 'privesc', 'tamper', 'exfil']) S.inject(k);
-run(6);
+run(3);
+check('처리 흐름이 시간에 따라 단계별로 진행 (3초: 분석까지)', S.flows.every((f) => f.status === 'open' && f.steps.some((x) => x.stage === 'analyze') && !f.steps.some((x) => x.stage === 'decide')), S.flows.map((f) => f.steps.length).join('/'));
+run(9);
+{ const { SEC_STAGES, SEC_LANES } = await import('../js/security.js');
+  check('처리 흐름: 발생 → 탐지 → 차단·격리 → 분석 → 판단·보고 → 대응 → 복구 확인 → 룰 환류 → 종결, 5개 레인 모두 거침', S.flows.every((f) => f.status === 'resolved' && SEC_STAGES.every((q) => f.steps.some((x) => x.stage === q.key)) && SEC_LANES.every((l) => f.steps.some((x) => x.lane === l.key))));
+  check('단계마다 담당 주체·에이전트 기록 (위협 출처 외 모두 보안 모듈·FACOS 에이전트)', S.flows.every((f) => f.steps.every((x) => x.actor && (x.lane === 'src' || x.a))), [...new Set(S.flows.flatMap((f) => f.steps.map((x) => x.a)).filter(Boolean))].join(',')); }
 const inc = s.orch.incidents.filter((i) => i.type === 'security');
 check('위협 4종 모두 해당 계층에서 차단', S.stats.blocked === 4 && S.byLayer.ot === 1 && S.byLayer.agent === 1 && S.byLayer.data === 2, JSON.stringify(S.byLayer));
 check('오케스트레이터 보안 인시던트(P2)로 보고 후 종료', inc.length === 4 && inc.every((i) => i.prio === 2 && i.status !== 'open'), inc.map((i) => i.status).join(','));
