@@ -75,14 +75,14 @@ export const TOOL_KITS = {
   debris: { label: '이물질 수거 도구', items: '빗자루 · 쓰레받기 · 수거함', vis: 'broom', at: 4.35 },
   smoke:  { label: '소화기', items: '분말 소화기', vis: 'extinguisher', at: -1.3 },   // 왼쪽 끝 충전 스테이션과 떨어지게
 };
-const TECH_ROOM = { x: 12.8, z: 16.5 };   // 정비실 기준점 (factory.js 정비실 그룹과 같은 자리)
-export const toolSpot = (kit) => ({ x: TECH_ROOM.x + TOOL_KITS[kit].at, z: 15.15, aisle: 'F', name: `정비실 ${TOOL_KITS[kit].label} 보관대` });
-// 정비실 동선: 정비 휴머노이드 충전 스테이션은 정비실 양쪽 끝(서로 마주 봄), 도구 보관대는 안쪽 줄(z 15.15)
+const TECH_ROOM = { x: 12.8, z: 16.0 };   // 정비실 기준점 (factory.js 정비실 그룹과 같은 자리)
+export const toolSpot = (kit) => ({ x: TECH_ROOM.x + TOOL_KITS[kit].at, z: 14.65, aisle: 'F', name: `정비실 ${TOOL_KITS[kit].label} 보관대` });
+// 정비실 동선: 정비 휴머노이드 충전 스테이션은 정비실 양쪽 끝(서로 마주 봄), 도구 보관대는 안쪽 줄(z 14.65)
 // 정비실에 드나들 때는 가운데 통로(x 14.1)를 지나고, 보관대는 안쪽 줄을 따라 옆으로 간다 — 충전 스테이션 앞을 지나지 않는다
-const TECH_DOCKS = [{ x: 10.95, z: 14.0, heading: Math.PI / 2 }, { x: 17.25, z: 14.0, heading: -Math.PI / 2 }];
-const ROOM_MID_X = TECH_ROOM.x + 1.3, ROOM_IN_Z = 15.15, ROOM_FRONT_Z = 12.5, ROOM_LANE_Z = 14.0;
+const TECH_DOCKS = [{ x: 10.95, z: 13.5, heading: Math.PI / 2 }, { x: 17.25, z: 13.5, heading: -Math.PI / 2 }];
+const ROOM_MID_X = TECH_ROOM.x + 1.3, ROOM_IN_Z = 14.65, ROOM_FRONT_Z = 12.0, ROOM_LANE_Z = 13.5;
 const ROOM_IN_X = ROOM_MID_X - 0.5, ROOM_OUT_X = ROOM_MID_X + 0.5;   // 가운데 통로는 일방통행 두 줄 — 들어갈 때 서쪽 줄, 나올 때 동쪽 줄 (드나드는 동료와 정면으로 마주치지 않게)
-const inTechRoom = (m) => m.z > 13.0 && m.z < 16.9 && m.x > TECH_ROOM.x - 2.6 && m.x < TECH_ROOM.x + 5.2;
+const inTechRoom = (m) => m.z > 12.5 && m.z < 16.4 && m.x > TECH_ROOM.x - 2.6 && m.x < TECH_ROOM.x + 5.2;
 const dockFront = (h) => ({ x: h.x + Math.sin(h.heading) * 1.1, z: h.z + Math.cos(h.heading) * 1.1 });
 // 정비실 안에서 from → to: (스테이션이면 그 앞으로 나와) 가운데 통로 → 목적지 쪽 줄 → 목적지 (스테이션이면 그 앞에 선 뒤 들어감)
 const roomWalk = (from, to) => {
@@ -148,7 +148,7 @@ export const LOC = {
   WH_LANE_IN: -41.6, WH_LANE_OUT: -40.8,   // 일방통행 두 줄 — 선반으로 갈 때 서쪽 줄, 나올 때 동쪽 줄 (두 휴머노이드가 마주쳐 비켜서다 충전 도크 쪽으로 밀리지 않게)
   SRC: { x: -26, z: 4.2, aisle: 'F', name: '투입구' },
   SINK: { x: 29, z: 4.2, aisle: 'F', name: '완제품 적재장' },
-  TECH: { x: 12, z: 13.5, aisle: 'F', name: '정비실' },
+  TECH: { x: 12, z: 13.0, aisle: 'F', name: '정비실' },
   CTRL: { x: -13.5, z: -12.5, aisle: 'B', name: '관제실' },   // 중앙 관제 디스플레이(x −13.5) 가운데 앞
 };
 export const chgLoc = (i) => ({ x: -14 + i * 3.2, z: 13.5, aisle: 'F', name: '충전소' });
@@ -237,7 +237,8 @@ export class Mover {
       }
       this.path.unshift(...pts.map((p) => ({ ...p, detour: true }))); this.detourPts += pts.length; this.blockT = 0; return false;
     };
-    if (b.blockedOn === this) {
+    // 진로 이벤트로 멈춰 기다리는 상대는 비켜서지 않으므로 마주침·교차 양보를 기다리지 않고 아래의 정지 장애물 처리(돌아가기·목적지 옆 정지)로 넘긴다
+    if (b.blockedOn === this && !b.hzWait) {
       const bd = b.wantDir ?? { x: Math.sin(b.heading), z: Math.cos(b.heading) };
       if (dir.x * bd.x + dir.z * bd.z < -0.7) {
         // 정면으로 마주침(좁은 진입로): 우선순위가 낮은 쪽이 옆으로 비켜선다

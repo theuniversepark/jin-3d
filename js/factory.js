@@ -1954,7 +1954,7 @@ export class FactoryView {
     }
     // 정비실
     // 정비실: 오른쪽으로 확장 — 로컬 x −2.5 ~ +5.1 (x 19.4에서 1.5m 앞까지)
-    const tech = (this.tech = put(new THREE.Group(), LOC.TECH.x + 0.8, 0, 16.5, r));
+    const tech = (this.tech = put(new THREE.Group(), LOC.TECH.x + 0.8, 0, 16.0, r));   // 정비실 기준점 (sim.js TECH_ROOM과 같은 자리)
     put(box(7.6, 0.02, 3.5, std(0x6b4a2a)), 1.3, 0.01, -1.5, tech);
     this.techFurn = put(new THREE.Group(), 0, 0, 0, tech);   // 비품 (Blender 모델은 앱 시작 후 불러오므로 setup마다 다시 채움)
     this.buildTechFurniture();
