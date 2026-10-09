@@ -1361,7 +1361,7 @@ function renderFacos() {
     ['🛰', '오케스트레이터', open ? `인시던트 ${open}건` : '인시던트 없음', open ? 'warn' : 'ok', 'btnOrch', '인시던트 감지 → 셀 자체 조치 → 보고 → 판단 → 명령 → 조치 → 완료 확인 (js/orchestrator.js)'],
     ['🤖', '자율 에이전트', `의사결정 ${agent.decisions}건`, 'ok', 'facos:agent', '관찰 → 판단 → 실행: 예지정비·자율 보정·투입 제어·병목 최적화·공급 차질·AGV 배차·절전 (js/agent.js)'],
     ['📡', '명령 센터', cmd[0], cmd[1], 'btnOrch', '상위 긴급·제어 명령: 전송 → 셀 ACK → 실행 → 완료, 인터록 (js/commands.js)'],
-    ...(s.sec?.on ? [(() => { const S = s.sec.stats, blk = s.sec.stats.blocked; return ['🛡', '보안', `신원 ${s.sec.identities} · 검증 ${S.cmdVerified}${blk ? ` · 차단 ${blk}` : ''}`, s.orch.incidents.some((i) => i.type === 'security' && i.status === 'open') ? 'bad' : 'ok', 'facos:sec', '피지컬AI 다중 계층 보안 (총괄4 · 라온시큐어 사업단) — 에이전트 DID/VC 신원·최소 권한 · 데이터·IP(동형암호 연합학습·ZKML·eVDI 반출 통제) · AI 모델(메타모픽·차등 테스팅) · OT(OTAC·구간 암호화·DPI) (js/security.js)']; })()] : []),
+    ...(s.sec?.on ? [(() => { const S = s.sec.stats, blk = s.sec.stats.blocked; return ['🛡', '보안', `신원 ${s.sec.identities} · 검증 ${S.cmdVerified}${blk ? ` · 차단 ${blk}` : ''}`, s.orch.incidents.some((i) => i.type === 'security' && i.status === 'open') ? 'bad' : 'ok', 'facos:sec', '피지컬AI 다중 계층 보안 (라온시큐어 사업단) — 에이전트 DID/VC 신원·최소 권한 · 데이터·IP(동형암호 연합학습·ZKML·eVDI 반출 통제) · AI 모델(메타모픽·차등 테스팅) · OT(OTAC·구간 암호화·DPI) (js/security.js)']; })()] : []),
     ['🚦', '셀·게이트', `가동 ${busy}/${cells.length}${down ? ` · 고장 ${down}` : ''} · 판별 ${gates}`, down ? 'warn' : 'ok', 'facos:cell', '셀 컨트롤러 · 분류·포장 게이트 판별 → 로봇 역할(주 작업/보조) 결정 (js/sim.js)'],
     ['🧠', 'VLA', `${V.label(V.latest)} · ${vrob}대${V.job ? ` · ${VLA_PH[V.job.phase] ?? ''}` : ''}`, V.job ? 'act' : 'ok', 'btnVla', '로봇 VLA 추론 모델 — 에피소드 → 학습 → 평가 → 카나리 → OTA 배포 (js/vla.js)'],
     ['👁', '현장 감지', evs ? `이벤트 ${evs}건` : `CCTV ${s.cctv.cams.length} · 드론 ${s.drones.length} · 사족 ${s.quads.length}`, evs ? 'warn' : 'ok', 'facos:sense', '사각지대 없는 CCTV AI 영상 분석 · 로봇 비전 AI 이벤트 감지 · 순찰 드론 · 사족보행 열화상·진동 점검 (js/cctv.js · js/robotcam.js · js/drone.js)'],
@@ -1442,9 +1442,9 @@ function viewSecurity() {
       ${card('data', `VLA 학습은 셀(도메인)마다 eVDI 격리 워크스페이스에서 로컬 학습 → 가중치 동형암호화 → 연합 집계, 배포 전 ZKML 무결성 증명 검증. 데이터 반출은 DLP 검사 후 DID 서명.`)}
       ${card('model', `VLA 후보 모델을 메타모픽 관계 5종(조명·시점·객체 위치·부분 가림·센서 지연)과 차등 테스팅(현재 모델 대비)으로 검증 → Safety Score · DRS.`)}
     </div>
-    <h4>1차년도(2026) 성과지표 목표 <small>총괄4 착수보고 · 참여기관별</small></h4><table class="vla-t"><thead><tr><th>지표</th><th>목표</th><th>담당</th><th>계층</th></tr></thead><tbody>
+    <h4>1차년도(2026) 성과지표 목표 <small>착수보고 · 참여기관별</small></h4><table class="vla-t"><thead><tr><th>지표</th><th>목표</th><th>담당</th><th>계층</th></tr></thead><tbody>
       ${SEC_KPI.map((k) => `<tr><td>${escV(k.name)}</td><td>${escV(k.target)}</td><td>${escV(k.org)}</td><td>${SEC_LAYERS[k.layer].icon} ${SEC_LAYERS[k.layer].label}</td></tr>`).join('')}</tbody></table>
-    <p class="vla-note">출처: 총괄4 「협업지능 시스템을 위한 피지컬AI 기반 다중 계층 보안기술 개발」 착수보고회 자료(라온시큐어 사업단, 2026.9). 화면의 검증·차단은 운영 흐름에 보안 계층을 끼운 시뮬레이션이며 실제 암호 연산이 아닙니다. 통신 지연·연합학습 처리시간·Safety Score는 모델 가정값입니다. 데이터 수송은 SDF-OCS 고속 버스(총괄1~3)가 맡고, 본 계층은 주체 신원·명령·학습 데이터 무결성을 검증합니다(파이프라인 이원화).</p>`;
+    <p class="vla-note">출처: 「협업지능 시스템을 위한 피지컬AI 기반 다중 계층 보안기술 개발」 착수보고회 자료(라온시큐어 사업단, 2026.9). 화면의 검증·차단은 운영 흐름에 보안 계층을 끼운 시뮬레이션이며 실제 암호 연산이 아닙니다. 통신 지연·연합학습 처리시간·Safety Score는 모델 가정값입니다. 데이터 수송은 SDF-OCS 고속 버스(총괄1~3)가 맡고, 본 계층은 주체 신원·명령·학습 데이터 무결성을 검증합니다(파이프라인 이원화).</p>`;
 }
 function viewSense() {
   const s = sim, L = s.fieldLog ?? [], det = L.filter((e) => e.detected), done = L.filter((e) => e.cleared && e.tClear != null);
@@ -1470,7 +1470,7 @@ function viewSense() {
       <h4>최근 드론 순찰</h4><table class="vla-t"><thead><tr><th>시각</th><th>드론</th><th>점검 지점</th><th>배터리</th></tr></thead><tbody>
       ${(s.droneVisits ?? []).slice(-6).reverse().map((v) => `<tr><td>${fclock(v.t)}</td><td>${escV(v.by)}</td><td>${escV(v.where)}</td><td>${v.battery}%</td></tr>`).join('') || '<tr><td colspan="4">아직 없음</td></tr>'}</tbody></table></div></div>`;
 }
-const FC_VIEWS = { sec: ['🛡 피지컬AI 다중 계층 보안 · 총괄4', '라온시큐어 사업단 「협업지능 시스템을 위한 피지컬AI 기반 다중 계층 보안기술 개발」 — 시뮬레이션 재현', viewSecurity], agent: ['🤖 자율 에이전트 · 진행 결과', '관찰 → 판단 → 실행 의사결정과 운영 지표', viewAgent], cell: ['🚦 셀·게이트 · 진행 결과', '셀별 생산·상태 누적과 분류·포장 게이트 판별 (혼류)', viewCells], sense: ['👁 현장 감지 · 진행 결과', '로봇 비전 AI 이벤트 감지·대응, 사족보행 순찰 점검, 순찰 드론', viewSense] };
+const FC_VIEWS = { sec: ['🛡 피지컬AI 다중 계층 보안', '라온시큐어 사업단 「협업지능 시스템을 위한 피지컬AI 기반 다중 계층 보안기술 개발」 — 시뮬레이션 재현', viewSecurity], agent: ['🤖 자율 에이전트 · 진행 결과', '관찰 → 판단 → 실행 의사결정과 운영 지표', viewAgent], cell: ['🚦 셀·게이트 · 진행 결과', '셀별 생산·상태 누적과 분류·포장 게이트 판별 (혼류)', viewCells], sense: ['👁 현장 감지 · 진행 결과', '로봇 비전 AI 이벤트 감지·대응, 사족보행 순찰 점검, 순찰 드론', viewSense] };
 function openFacosView(k) { fcView = k; fcModal.classList.remove('hidden'); renderFacosView(true); }
 function renderFacosView(force) {
   if (!fcView || fcModal.classList.contains('hidden')) return;
