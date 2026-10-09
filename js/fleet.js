@@ -47,7 +47,7 @@ export class FleetControl {
     }
     if (this.hasAGV) { const v = this.speeds('agv'); for (const m of s.vehicles) m.speed = v.drive; }
   }
-  note(text, by) { this.events.unshift({ t: this.sim.time, text, by }); if (this.events.length > 30) this.events.pop(); this.sim.log('act', `🚚 AMR·AGV 관제 · ${text}`, { dec: by ?? '관제 운영자', act: text }); }
+  note(text, by) { this.events.unshift({ t: this.sim.time, text, by }); if (this.events.length > 30) this.events.pop(); this.sim.log('act', `🚚 AMR·AGV · ${text}`, { dec: by ?? '관제 운영자', act: text }); }
   setScale(f, k, by) {
     const fl = f === 'all' ? ['amr', 'agv'] : [f];
     k = Math.round(Math.max(FLEET_RANGE.min, Math.min(FLEET_RANGE.max, k)) * 10) / 10;
@@ -98,9 +98,9 @@ export class FleetControl {
     const cnt = (fn) => all.filter(fn).length;
     const lineWait = s.carriers.filter((c) => c.state === 'line' && c.lineInfo?.where === 'path' && /대기/.test(c.lineInfo.phase ?? '') && this.speedOf(c) < 0.15).length;
     return [
-      { k: '관제 속도 배율', eff: `AMR ${Math.round(this.amr.scale * 100)}% · AGV ${Math.round(this.agv.scale * 100)}%`, on: this.amr.scale !== 1 || this.agv.scale !== 1, n: null, src: 'AMR·AGV 관제 (이 창)' },
-      { k: '운행 대수 (운행 제외)', eff: '제외 차량은 배차 안 함 — 대기·충전 자리에서 0 m/s', on: this.active('amr') < this.installed('amr') || this.active('agv') < this.installed('agv'), n: (this.installed('amr') - this.active('amr')) + (this.installed('agv') - this.active('agv')), src: 'AMR·AGV 관제' },
-      { k: '관제 정지', eff: '0 m/s (해당 차종만)', on: this.amr.paused || this.agv.paused, n: (this.amr.paused ? s.carriers.length : 0) + (this.agv.paused ? s.vehicles.length : 0), src: 'AMR·AGV 관제' },
+      { k: '관제 속도 배율', eff: `AMR ${Math.round(this.amr.scale * 100)}% · AGV ${Math.round(this.agv.scale * 100)}%`, on: this.amr.scale !== 1 || this.agv.scale !== 1, n: null, src: 'AMR·AGV 창' },
+      { k: '운행 대수 (운행 제외)', eff: '제외 차량은 배차 안 함 — 대기·충전 자리에서 0 m/s', on: this.active('amr') < this.installed('amr') || this.active('agv') < this.installed('agv'), n: (this.installed('amr') - this.active('amr')) + (this.installed('agv') - this.active('agv')), src: 'AMR·AGV 창' },
+      { k: '관제 정지', eff: '0 m/s (해당 차종만)', on: this.amr.paused || this.agv.paused, n: (this.amr.paused ? s.carriers.length : 0) + (this.agv.paused ? s.vehicles.length : 0), src: 'AMR·AGV 창' },
       { k: '비상정지 · 보호정지', eff: '0 m/s (모든 이동 로봇·라인)', on: K.estopAll || K.pstopAll, n: K.estopAll || K.pstopAll ? all.length : 0, src: '명령 센터 (긴급 명령)' },
       { k: '안전 감속', eff: '25% (AMR 운반 0.4 m/s)', on: K.lineSafe, n: K.lineSafe ? all.length : 0, src: '명령 센터 · 현장 이벤트(연기·무단 진입)' },
       { k: '속도 오버라이드', eff: `${Math.round(K.overrideAll * 100)}% (시간 비율 — 이동·작업 모두)`, on: K.overrideAll !== 1, n: null, src: '명령 센터 (제어 명령)' },

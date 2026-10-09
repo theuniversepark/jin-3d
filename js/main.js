@@ -1418,7 +1418,7 @@ function fleetCountTables(C) {
 }
 fleetBody.addEventListener('click', async (e) => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
-  const by = '관제 운영자 · AMR·AGV 관제';
+  const by = '관제 운영자 · AMR·AGV';
   if (b.dataset.flStep) { const [f, d] = b.dataset.flStep.split(':'); fleetDo((F) => F.setScale(f, F[f].scale + 0.1 * +d, by)); }
   else if (b.dataset.flSet) { const [f, v] = b.dataset.flSet.split(':'); fleetDo((F) => F.setScale(f, +v, by)); }
   else if (b.dataset.flCount) { const [f, d] = b.dataset.flCount.split(':'); fleetDo((F) => F.setActive(f, d === 'all' ? F.installed(f) : F.active(f) + +d, by)); }
@@ -1441,8 +1441,8 @@ fleetBody.addEventListener('click', async (e) => {
   }
 });
 fleetBody.addEventListener('change', (e) => {
-  const r = e.target.closest('[data-fl-range]'); if (r) fleetDo((F) => F.setScale(r.dataset.flRange, +r.value / 100, '관제 운영자 · AMR·AGV 관제'));
-  const c = e.target.closest('[data-fl-crange]'); if (c) fleetDo((F) => F.setActive(c.dataset.flCrange, +c.value, '관제 운영자 · AMR·AGV 관제'));
+  const r = e.target.closest('[data-fl-range]'); if (r) fleetDo((F) => F.setScale(r.dataset.flRange, +r.value / 100, '관제 운영자 · AMR·AGV'));
+  const c = e.target.closest('[data-fl-crange]'); if (c) fleetDo((F) => F.setActive(c.dataset.flCrange, +c.value, '관제 운영자 · AMR·AGV'));
 });
 document.getElementById('btnFleet').addEventListener('click', () => {
   fleetModal.classList.remove('hidden'); renderFleet();
