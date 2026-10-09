@@ -16,7 +16,7 @@ export async function startMqtt({ host = process.env.MQTT_HOST || '127.0.0.1', p
   tcp = net.createServer(broker.handle);
   await new Promise((resolve) => {
     tcp.once('error', (err) => {
-      state.error = err.code === 'EADDRINUSE' ? `포트 ${port}이(가) 이미 사용 중입니다 (다른 Jin-3D나 브로커가 실행 중일 수 있음)` : err.message;
+      state.error = err.code === 'EADDRINUSE' ? `포트 ${port}이(가) 이미 사용 중입니다 (다른 피지컬AI 실증 메타팩토리 앱이나 브로커가 실행 중일 수 있음)` : err.message;
       resolve();
     });
     tcp.listen(port, host, () => { Object.assign(state, { listening: true, host, port, startedAt: new Date().toISOString() }); resolve(); });

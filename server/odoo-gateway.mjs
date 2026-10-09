@@ -76,7 +76,7 @@ async function picking(typeKey, ev, M, partnerId = null) {
   const from = await locId(lines[0].from, M.locations[lines[0].from]), to = await locId(lines[0].to, M.locations[lines[0].to]);
   const moves = [];
   for (const l of lines) moves.push([0, 0, { name: `${ev.key} ${M.products[l.product].code}`, product_id: await product(l.product, M.products[l.product]), product_uom_qty: l.qty, location_id: await locId(l.from, M.locations[l.from]), location_dest_id: await locId(l.to, M.locations[l.to]) }]);
-  const id = await kw('stock.picking', 'create', [{ picking_type_id: type, location_id: from, location_dest_id: to, origin: `${ev.key} · ${ev.origin ?? 'Jin-3D'}`, ...(partnerId ? { partner_id: partnerId } : {}), move_ids: moves }]);
+  const id = await kw('stock.picking', 'create', [{ picking_type_id: type, location_id: from, location_dest_id: to, origin: `${ev.key} · ${ev.origin ?? '피지컬AI 실증 메타팩토리'}`, ...(partnerId ? { partner_id: partnerId } : {}), move_ids: moves }]);
   count('stock.picking');
   await kw('stock.picking', 'action_confirm', [[id]]);
   await validate(id, lines);
@@ -111,7 +111,7 @@ async function apply(ev) {
     await partner('supplier', ev.supplier, true); await partner('customer', ev.customer, false);
     for (const o of ev.orderpoints) await findOrCreate(`op:${o.product}`, 'stock.warehouse.orderpoint', [['product_id', '=', await product(o.product, ev.products[o.product])], ['location_id', '=', await locId(o.location, ev.locations[o.location])]],
       { product_id: await product(o.product, ev.products[o.product]), location_id: await locId(o.location, ev.locations[o.location]), product_min_qty: o.min, product_max_qty: o.max, warehouse_id: (await warehouse()).id });
-    for (const e of ev.equipment) await findOrCreate(`eq:${e.serial_no}`, 'maintenance.equipment', [['serial_no', '=', e.serial_no]], { name: `${e.name} (${e.category})`, serial_no: e.serial_no, note: `Jin-3D 설비 고유 ID ${e.serial_no} · AAS 자산 ${e.key}` });
+    for (const e of ev.equipment) await findOrCreate(`eq:${e.serial_no}`, 'maintenance.equipment', [['serial_no', '=', e.serial_no]], { name: `${e.name} (${e.category})`, serial_no: e.serial_no, note: `피지컬AI 실증 메타팩토리 설비 고유 ID ${e.serial_no} · AAS 자산 ${e.key}` });
     if (ids.has('master:inventory')) return;   // 기초 재고는 한 번만 (같은 세션에 마스터를 다시 받아도 중복 조정하지 않음)
     ids.set('master:inventory', 1);
     for (const q of ev.inventory) {   // 기초 재고: 재고 조정 (inventory_quantity → action_apply_inventory)
@@ -126,7 +126,7 @@ async function apply(ev) {
   if (ev.type === 'po.create') {
     const lines = [];
     for (const l of ev.lines) lines.push([0, 0, { product_id: await product(l.product, M.products[l.product]), product_qty: l.qty, price_unit: l.price, name: `${M.products[l.product].code} ${M.products[l.product].name}` }]);
-    const id = await kw('purchase.order', 'create', [{ partner_id: await partner('supplier', M.supplier, true), partner_ref: ev.key, origin: `Jin-3D WMS ${ev.key}`, order_line: lines }]);
+    const id = await kw('purchase.order', 'create', [{ partner_id: await partner('supplier', M.supplier, true), partner_ref: ev.key, origin: `피지컬AI 실증 메타팩토리 WMS ${ev.key}`, order_line: lines }]);
     count('purchase.order');
     await kw('purchase.order', 'button_confirm', [[id]]);
     ids.set(`po:${ev.key}`, id);

@@ -1,4 +1,4 @@
-// Jin-3D 맥 앱 — 내장 로컬 서버를 띄우고 창에서 시뮬레이터를 연다.
+// 피지컬AI 실증 메타팩토리 맥 앱 — 내장 로컬 서버를 띄우고 창에서 시뮬레이터를 연다.
 // Claude API 키는 macOS 키체인(safeStorage)으로 암호화해 사용자 데이터 폴더에만 저장한다.
 import { app, BrowserWindow, Menu, ipcMain, safeStorage, shell, dialog } from 'electron';
 import fs from 'node:fs';
@@ -7,8 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { startServer, setApiKey, hasApiKey } from '../server/app-server.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const APP_NAME = 'Jin-3D';
+const APP_NAME = '피지컬AI 실증 메타팩토리';
 app.setName(APP_NAME);
+// 사용자 데이터 폴더는 이름을 바꾸기 전(Jin-3D) 그대로 둔다 — 저장된 API 키·녹화·에피소드를 이어서 쓴다
+app.setPath('userData', path.join(app.getPath('appData'), 'Jin-3D'));
 
 const keyFile = () => path.join(app.getPath('userData'), 'anthropic-key.bin');
 let win = null, origin = null, keySource = null;
@@ -110,7 +112,7 @@ async function createWindow() {
 // GPU 컨텍스트를 한 번 잃은 뒤에도 WebGL을 다시 만들 수 있게 (Chromium은 기본적으로 손실이 반복되면 3D API를 막는다)
 app.disableDomainBlockingFor3DAPIs();
 // GPU 프로세스가 죽으면 Chromium이 다시 띄우고, 페이지는 컨텍스트 손실 처리로 렌더러를 새로 만든다
-app.on('child-process-gone', (e, d) => { if (d.type === 'GPU') console.warn(`[Jin-3D] GPU 프로세스 종료 (${d.reason}) — 재시작`); });
+app.on('child-process-gone', (e, d) => { if (d.type === 'GPU') console.warn(`[피지컬AI 실증 메타팩토리] GPU 프로세스 종료 (${d.reason}) — 재시작`); });
 
 app.whenReady().then(async () => {
   loadStoredKey();

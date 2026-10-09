@@ -18,7 +18,7 @@ const f = (idShort, label, type, unit, get) => ({ idShort, label, type, unit, ge
 function buildAssets(sim, view) {
   const assets = [];
   const year = String(new Date().getFullYear());
-  const plate = (id, product) => ({ manufacturer: 'Jin-3D 가상 자산 (시뮬레이션)', product, serial: `J3D-${id}`, year });
+  const plate = (id, product) => ({ manufacturer: '피지컬AI 실증 메타팩토리 가상 자산 (시뮬레이션)', product, serial: `J3D-${id}`, year });
   const k = () => sim.kpi();
   assets.push({
     id: 'MetaFactory', kind: 'Factory', name: sim.line.name, nameplate: plate('MetaFactory', '메타팩토리 테스트베드 라인'),
@@ -343,7 +343,7 @@ export class DataHub {
     return null;
   }
   meta() {
-    return { generator: 'Jin-3D', runId: this.runId, referenceClock: { epochUtc: this.iso(0), description: '시뮬레이션 시각 0초 = 기준 시각. 모든 타임스탬프는 이 기준 시계 기반 ISO 8601 UTC' },
+    return { generator: '피지컬AI 실증 메타팩토리', runId: this.runId, referenceClock: { epochUtc: this.iso(0), description: '시뮬레이션 시각 0초 = 기준 시각. 모든 타임스탬프는 이 기준 시계 기반 ISO 8601 UTC' },
       samplingIntervalS: this.interval, samples: this.samples.length, events: this.events.length, mode: this.sim.mode.label, line: this.sim.line.name };
   }
   download(format, videosOf = null) {
@@ -361,7 +361,7 @@ export class DataHub {
     const a = ref.type === 'cell' ? this.assets.find((x) => x.id === tele.key()) : this.assets.find((x) => x.mover?.id === ref.id);
     if (a) return a;
     const id = tele.key().replace(/[^A-Za-z0-9_]/g, '') || 'Robot';
-    return { id, kind: 'Robot', name: tele.key(), nameplate: { manufacturer: 'Jin-3D 가상 자산 (시뮬레이션)', product: '로봇', serial: `J3D-${id}`, year: String(new Date().getFullYear()) }, tech: {}, fields: [] };
+    return { id, kind: 'Robot', name: tele.key(), nameplate: { manufacturer: '피지컬AI 실증 메타팩토리 가상 자산 (시뮬레이션)', product: '로봇', serial: `J3D-${id}`, year: String(new Date().getFullYear()) }, tech: {}, fields: [] };
   }
   robotCounts(tele) {
     if (!tele) return null;

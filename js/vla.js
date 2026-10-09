@@ -220,7 +220,7 @@ export async function buildEpisodesZip(uid, eps, runId) {
   const files = [];
   const e0 = eps[0];
   const info = {
-    dataset: `jin3d_${uid}`, format: e0?.videos ? 'Jin-3D VLA episode v2 (LeRobot 유사 구조: 메타 · 스텝 JSONL · 카메라 MP4 영상 + 타임스탬프)' : 'Jin-3D VLA episode v1 (LeRobot 유사 구조: 메타 · 스텝 JSONL · 카메라 JPEG)', generator: 'Jin-3D 디지털트윈 (시뮬레이션 데이터)',
+    dataset: `jin3d_${uid}`, format: e0?.videos ? '피지컬AI 실증 메타팩토리 VLA episode v2 (LeRobot 유사 구조: 메타 · 스텝 JSONL · 카메라 MP4 영상 + 타임스탬프)' : '피지컬AI 실증 메타팩토리 VLA episode v1 (LeRobot 유사 구조: 메타 · 스텝 JSONL · 카메라 JPEG)', generator: '피지컬AI 실증 메타팩토리 디지털트윈 (시뮬레이션 데이터)',
     run_id: runId, robot: { id: uid, kind: e0?.robot_kind, cell: e0?.cell, cell_name: e0?.cell_name, joints: e0?.jointNames, units: e0?.jointUnits, cameras: e0?.cameras ?? ['wrist'],
       ...(e0?.robot_kind === 'humanoid' ? { dof_note: 'Atlas형 — 허리 360° 연속 회전 · 머리 좌우 ±90°' } : {}) },
     fps: EP_HZ, episodes: eps.length, total_steps: eps.reduce((a, e) => a + e.length, 0),
@@ -252,8 +252,8 @@ export async function buildEpisodesZip(uid, eps, runId) {
   }
   const vids = e0?.videos ? Object.values(e0.videos) : null;
   files.push({ path: 'README.txt', data: vids
-    ? `Jin-3D VLA 에피소드 데이터 — 로봇 ${uid}\n에피소드 ${eps.length}개 · 스텝 ${EP_HZ}Hz · 카메라 영상 MP4(H.264 · ${vids[0].width}x${vids[0].height} · ${vids[0].fps}fps) — ${Object.keys(e0.videos).join(' · ')}\n영상: videos/<에피소드>/<카메라>.mp4 · 스텝(data/*.jsonl)의 observation.images.<카메라> = {path, timestamp(초)} 로 영상 프레임을 찾습니다 (LeRobot 형식)\n스키마: meta/info.json · 요약: meta/episodes.jsonl\n시뮬레이션으로 생성된 데이터입니다.\n`
-    : `Jin-3D VLA 에피소드 데이터 — 로봇 ${uid}\n에피소드 ${eps.length}개 · ${EP_HZ}Hz · 카메라 프레임 JPEG 160x120 (단계 전환·1초마다)\n${e0?.cameras?.length > 1 ? `카메라 4대: ${EP_CAMS.map((c) => `${c}(${CAM_KO[c]})`).join(' · ')} — 같은 시각의 네 시점을 videos/<에피소드>/<카메라>/frame_*.jpg로\n` : ''}스키마: meta/info.json · 요약: meta/episodes.jsonl · 스텝: data/*.jsonl · 영상: videos/*/${e0?.cameras?.length > 1 ? '<카메라>/' : ''}frame_*.jpg\n(서버 ffmpeg가 없어 사진으로 저장 — 맥 앱에서는 MP4 영상)\n시뮬레이션으로 생성된 데이터입니다.\n` });
+    ? `피지컬AI 실증 메타팩토리 VLA 에피소드 데이터 — 로봇 ${uid}\n에피소드 ${eps.length}개 · 스텝 ${EP_HZ}Hz · 카메라 영상 MP4(H.264 · ${vids[0].width}x${vids[0].height} · ${vids[0].fps}fps) — ${Object.keys(e0.videos).join(' · ')}\n영상: videos/<에피소드>/<카메라>.mp4 · 스텝(data/*.jsonl)의 observation.images.<카메라> = {path, timestamp(초)} 로 영상 프레임을 찾습니다 (LeRobot 형식)\n스키마: meta/info.json · 요약: meta/episodes.jsonl\n시뮬레이션으로 생성된 데이터입니다.\n`
+    : `피지컬AI 실증 메타팩토리 VLA 에피소드 데이터 — 로봇 ${uid}\n에피소드 ${eps.length}개 · ${EP_HZ}Hz · 카메라 프레임 JPEG 160x120 (단계 전환·1초마다)\n${e0?.cameras?.length > 1 ? `카메라 4대: ${EP_CAMS.map((c) => `${c}(${CAM_KO[c]})`).join(' · ')} — 같은 시각의 네 시점을 videos/<에피소드>/<카메라>/frame_*.jpg로\n` : ''}스키마: meta/info.json · 요약: meta/episodes.jsonl · 스텝: data/*.jsonl · 영상: videos/*/${e0?.cameras?.length > 1 ? '<카메라>/' : ''}frame_*.jpg\n(서버 ffmpeg가 없어 사진으로 저장 — 맥 앱에서는 MP4 영상)\n시뮬레이션으로 생성된 데이터입니다.\n` });
   return zipStore(files);
 }
 

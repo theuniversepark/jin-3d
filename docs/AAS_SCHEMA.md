@@ -1,6 +1,6 @@
 # AAS 데이터 스키마 설계 기준
 
-Jin-3D가 만드는 AAS(Asset Administration Shell) 데이터의 스키마와 속성을 무엇을 기준으로 정했는지 정리한 문서입니다.
+ 만드는 AAS(Asset Administration Shell) 데이터의 스키마와 속성을 무엇을 기준으로 정했는지 정리한 문서입니다.
 구현은 `js/aas.js`(AAS 모델·직렬화), `js/aasx.js`(AASX 패키지), `js/datahub.js`(자산·필드 정의)에 있습니다.
 
 기준은 세 층입니다.
@@ -65,7 +65,7 @@ Jin-3D가 만드는 AAS(Asset Administration Shell) 데이터의 스키마와 �
 
 ## 4. 한계
 
-- **Nameplate·TechnicalData는 간소화했습니다.** IDTA 02006 필수 항목 중 일부(제조사 상세 주소·연락처, 제품 URI, 다국어 표기 형식 등)를 넣지 않았고, 값도 시뮬레이션용 가상 값입니다("Jin-3D 가상 자산").
+- **Nameplate·TechnicalData는 간소화했습니다.** IDTA 02006 필수 항목 중 일부(제조사 상세 주소·연락처, 제품 URI, 다국어 표기 형식 등)를 넣지 않았고, 값도 시뮬레이션용 가상 값입니다("피지컬AI 실증 메타팩토리 가상 자산").
 - **운영 필드의 의미 식별자는 자체 정의입니다.** ECLASS나 IEC 공통 데이터 사전(CDD) 식별자, IEC 61360 데이터 사양(정의·단위 코드)을 붙이지 않아, 다른 시스템이 값의 의미를 자동으로 연결하기 어렵습니다.
 - **OPC UA 산업 표준 모델을 참고하지 않았습니다.** 로봇·설비용 companion specification(Robotics 40010, Machinery 40001 등)을 따르지 않고 속성 이름과 구조를 직접 정했습니다.
 

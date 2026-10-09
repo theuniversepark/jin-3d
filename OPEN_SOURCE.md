@@ -1,6 +1,6 @@
 # 오픈소스 고지 (Open Source Notices)
 
-Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하는 데 사용한 오픈소스 라이브러리, 개발 도구, 외부 사이트·서비스, 참고 표준을 정리합니다. 버전·라이선스는 프로젝트에 설치된 각 패키지의 `package.json` 기준입니다.
+피지컬AI 실증 메타팩토리(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하는 데 사용한 오픈소스 라이브러리, 개발 도구, 외부 사이트·서비스, 참고 표준을 정리합니다. 버전·라이선스는 프로젝트에 설치된 각 패키지의 `package.json` 기준입니다.
 
 ## 1. 오픈소스 라이브러리 (앱에 포함되어 동작)
 
@@ -10,7 +10,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 | └ OrbitControls · CSS2DRenderer · EffectComposer · RenderPass · UnrealBloomPass · OutputPass | (three.js `examples/jsm`) | MIT | 같은 저장소 | 시점 조작, 라벨, 발광·후처리 |
 | └ WebGLRenderTarget · readRenderTargetPixels | (three.js 코어) | MIT | 같은 저장소 | 로봇 카메라 영상(관제 디스플레이 8분할, 로봇 정보 창 실시간 영상) |
 | └ GLTFLoader · RoomEnvironment (+ BufferGeometryUtils · SkeletonUtils) | (three.js `examples/jsm`) | MIT | 같은 저장소 | Blender 모델 렌더(기본) — glTF 모델 불러오기·실내 환경광 (`vendor/three/addons`) |
-| Electron | 44.5.1 | MIT | https://github.com/electron/electron | Mac 앱 셸 (Jin-3D.app) |
+| Electron | 44.5.1 | MIT | https://github.com/electron/electron | Mac 앱 셸 (피지컬AI 실증 메타팩토리.app) |
 | @electron/packager | 20.3.0 | BSD-2-Clause | https://github.com/electron/packager | Mac 앱 패키징 (`npm run package`) |
 | @anthropic-ai/sdk | 0.131.0 | MIT | https://github.com/anthropics/anthropic-sdk-typescript | Agent(Claude API) 호출 서버 |
 | aedes | 1.2.0 | MIT | https://github.com/moscajs/aedes | 내장 MQTT 브로커 |
@@ -43,7 +43,7 @@ Jin-3D(메타팩토리 정밀조립Zone 디지털트윈)를 만들고 배포하�
 | Claude 아티팩트 (claude.ai) | 공유 페이지 호스팅 |
 | Anthropic Claude API (모델 `claude-opus-5-5`) | 대화 기반 Agent 해석, 자연어 공정 설계 (API 키가 있을 때만) |
 | https://console.anthropic.com/settings/keys | 설정 화면의 API 키 발급 안내 링크 |
-| 캠틱종합기술원 — https://camtic.or.kr | 로고 이미지 `assets/camtic_logo.png` 출처 |
+| 과학기술정보통신부 — https://www.msit.go.kr (세로형·가로형 로고 SVG: https://commons.wikimedia.org/wiki/File:Ministry_of_Science_and_ICT_of_the_Republic_of_Korea_Logo_(vertical).svg · https://commons.wikimedia.org/wiki/File:Ministry_of_Science_and_ICT_of_the_Republic_of_Korea_Logo_(horizontal).svg) · 정보통신산업진흥원 — https://www.nipa.kr (CI 원본: https://www.nipa.kr/home/4-4-5) | 서버 랙 양옆 로고·서버실 바닥 표시 이미지 `assets/msit_logo.png` · `assets/nipa_logo.png` · `assets/msit_floor.png` · `assets/nipa_floor.png` 출처 |
 | 사용자 제공 이미지 | 도어트림 실물 이미지 `assets/doortrim.png` · e-axle 실물 단면 이미지 `assets/eaxle.png` (부품분류셀 이후 AMR 위 제품 표시) |
 
 - AAS 데이터 안의 `https://admin-shell.io/...`, `https://camtic.or.kr/aas/jin3d/...` 등은 의미 식별자(semanticId·id)이며 실행 중 접속하지 않습니다.

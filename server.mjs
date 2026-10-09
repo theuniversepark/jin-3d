@@ -16,7 +16,7 @@ if (fs.existsSync(envFile)) {
 const { startServer, hasApiKey } = await import('./server/app-server.mjs');
 const { MODEL } = await import('./server/llm-agent.mjs');
 const { port } = await startServer({ port: Number(process.env.PORT) || 8765 });
-console.log(`Jin-3D → http://localhost:${port}`);
+console.log(`피지컬AI 실증 메타팩토리 → http://localhost:${port}`);
 const { mqttStatus } = await import('./server/mqtt-gateway.mjs');
 const mq = mqttStatus();
 console.log(mq.listening ? `MQTT 브로커 → mqtt://${mq.host}:${mq.port} (OPC UA PubSub JSON: opcua/json/#)` : `MQTT 브로커 시작 실패: ${mq.error}`);

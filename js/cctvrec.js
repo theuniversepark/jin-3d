@@ -134,7 +134,7 @@ export class CCTVRecorder {
     g.fillStyle = '#05080c'; g.fillRect(0, 0, w, head);
     g.fillStyle = Math.floor(performance.now() / 600) % 2 ? '#ff4d4d' : '#7a2020'; g.beginPath(); g.arc(18, head / 2, 7, 0, Math.PI * 2); g.fill();
     g.font = `800 18px ${FONT}`; g.fillStyle = '#e8edf2'; g.textBaseline = 'middle';
-    g.fillText(`REC · CCTV ${cv.slots.length}대 전체 · ${this.sim.mode.label} · Jin-3D NVR`, 34, head / 2);
+    g.fillText(`REC · CCTV ${cv.slots.length}대 전체 · ${this.sim.mode.label} · 피지컬AI 실증 메타팩토리 NVR`, 34, head / 2);
     g.textAlign = 'right'; g.fillStyle = '#7fb8cc'; g.fillText(`${this.iso(this.sim.time).replace('T', ' ').slice(0, 19)} UTC · 구간 #${this.seg?.no ?? '-'}`, w - 12, head / 2); g.textAlign = 'left';
   }
   stats() {

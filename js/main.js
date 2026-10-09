@@ -1038,7 +1038,7 @@ function watchContext(r) {
     e.preventDefault();
     if (r !== renderer) return;
     glLost = true; camWall.lost = true; cctvView.lost = true; glNote.hidden = false;
-    console.warn('[Jin-3D] WebGL 컨텍스트 손실 — 복구 대기');
+    console.warn('[피지컬AI 실증 메타팩토리] WebGL 컨텍스트 손실 — 복구 대기');
     clearTimeout(glTimer); glTimer = setTimeout(rebuildRenderer, 1500);
   });
   r.domElement.addEventListener('webglcontextrestored', () => {
@@ -1050,13 +1050,13 @@ function glRecovered(how) {
   glLost = false; camWall.lost = false; cctvView.lost = false; glNote.hidden = true;
   composer.setSize(innerWidth, innerHeight);
   scene.traverse((o) => { if (o.material) for (const m of [].concat(o.material)) m.needsUpdate = true; });
-  console.info(`[Jin-3D] WebGL 컨텍스트 ${how} 완료`);
+  console.info(`[피지컬AI 실증 메타팩토리] WebGL 컨텍스트 ${how} 완료`);
 }
 function rebuildRenderer() {
   if (!glLost) return;
   let r;
   try { r = makeRenderer(); } catch (e) {   // GPU가 아직 준비 안 됨 — 잠시 뒤 다시
-    console.warn('[Jin-3D] 렌더러 재생성 실패, 재시도', e.message);
+    console.warn('[피지컬AI 실증 메타팩토리] 렌더러 재생성 실패, 재시도', e.message);
     glTimer = setTimeout(rebuildRenderer, 2000); return;
   }
   const old = renderer;
@@ -1136,7 +1136,7 @@ function frame() {
       cctvRec.update(rdt);
       robotRec.update(rdt);
       composer.render();
-    } catch (e) { if (!frame.errAt || performance.now() - frame.errAt > 5000) { frame.errAt = performance.now(); console.error('[Jin-3D] 렌더 오류', e); } }
+    } catch (e) { if (!frame.errAt || performance.now() - frame.errAt > 5000) { frame.errAt = performance.now(); console.error('[피지컬AI 실증 메타팩토리] 렌더 오류', e); } }
   }
   labelRenderer.render(scene, camera);
 }
@@ -1171,7 +1171,7 @@ llm.probe();
 // 에피소드 서버 저장이 가능한지 (맥 앱·npm start) — 정적 호스팅·공유 페이지는 브라우저 보관만
 if (!window.JIN3D_SHARED && !window.JIN3D_NO_SERVER) fetch('/api/status').then((r) => r.json()).then((j) => { epRec.server = !!j.episodes; cctvRec.server = !!j.cctv; robotRec.server = !!j.robotcam; robotRec.ffmpeg = cctvRec.ffmpeg = !!j.ffmpeg?.available; epRec.video = epRec.server && !!j.ffmpeg?.available; ffmpegVer = j.ffmpeg?.version ?? null; if (j.dataDir) { cctvRec.dir = `${j.dataDir}/cctv`; robotRec.dir = `${j.dataDir}/robotcam`; } }).catch(() => {});
 
-// ── 맥 앱(Jin-3D) 전용: API 키 설정 ─────────────────
+// ── 맥 앱(피지컬AI 실증 메타팩토리) 전용: API 키 설정 ─────────────────
 const bridge = window.jin3d;
 if (bridge?.isApp) {
   document.body.classList.add('app');

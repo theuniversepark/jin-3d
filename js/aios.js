@@ -222,7 +222,7 @@ export function buildAiosZip(P, zipStore, iso, runId, range = null) {
   const inR = (x) => x.t >= t0 - SAMPLE_S && x.t <= t1;
   const jl = (a) => enc.encode(a.map((x) => JSON.stringify(x)).join('\n') + (a.length ? '\n' : ''));
   const info = {
-    dataset: 'jin3d_aios_ops', format: 'Jin-3D AIOS 운영 데이터셋 v1 (시계열·이벤트·의사결정·전이 JSONL)', generator: 'Jin-3D 디지털트윈 (시뮬레이션 데이터)',
+    dataset: 'jin3d_aios_ops', format: '피지컬AI 실증 메타팩토리 AIOS 운영 데이터셋 v1 (시계열·이벤트·의사결정·전이 JSONL)', generator: '피지컬AI 실증 메타팩토리 디지털트윈 (시뮬레이션 데이터)',
     run_id: runId, factory: '메타팩토리 정밀조립Zone', sample_period_s: SAMPLE_S, samples: S.length, start: iso(t0), end: iso(t1),
     features: FEATURES.map(([name, unit, desc]) => ({ name, unit, desc })),
     cell_ids: P.sim.processing.map((st) => st.uid ?? st.id), cell_feature: ['state', 'utilization', 'health_pct', 'queue', 'starved_ratio'],
@@ -235,7 +235,7 @@ export function buildAiosZip(P, zipStore, iso, runId, range = null) {
     { path: 'data/decisions.jsonl', data: jl(P.decisions.filter(inR).map((d) => ({ timestamp: iso(d.t), ...d }))) },
     { path: 'data/transitions.jsonl', data: jl(P.transitions(S)) },
     { path: 'models/registry.json', data: enc.encode(JSON.stringify(P.models.map((m) => ({ version: m.label, policy: m.policy, note: m.note, deployed_at: iso(m.t), twin: m.twin ?? null })), null, 2)) },
-    { path: 'README.txt', data: enc.encode(`Jin-3D AIOS 운영 데이터셋 — 공장 오케스트레이터 운영 정책 학습용\n샘플 ${S.length}개 · ${SAMPLE_S}초 주기 · 인시던트·의사결정·전이 포함\n스키마: meta/info.json · 시계열: data/timeseries.jsonl · 이벤트: data/events.jsonl · 의사결정: data/decisions.jsonl · 전이: data/transitions.jsonl · 모델: models/registry.json\n시뮬레이션으로 생성된 데이터입니다.\n`) },
+    { path: 'README.txt', data: enc.encode(`피지컬AI 실증 메타팩토리 AIOS 운영 데이터셋 — 공장 오케스트레이터 운영 정책 학습용\n샘플 ${S.length}개 · ${SAMPLE_S}초 주기 · 인시던트·의사결정·전이 포함\n스키마: meta/info.json · 시계열: data/timeseries.jsonl · 이벤트: data/events.jsonl · 의사결정: data/decisions.jsonl · 전이: data/transitions.jsonl · 모델: models/registry.json\n시뮬레이션으로 생성된 데이터입니다.\n`) },
   ];
   return zipStore(files);
 }

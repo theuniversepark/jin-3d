@@ -180,7 +180,7 @@ export function toTurtle(env) {
 const csvq = (s) => { const t = String(s ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
 // 자산 id → AAS id, idShort → semanticId 규칙은 머리말(#)에 한 번만 적는다
 export function toCSV(assets, samples, events, runId) {
-  const rows = [`# Jin-3D 운영 데이터 · run ${runId} · 시각: 기준 시계 ISO 8601 UTC`,
+  const rows = [`# 피지컬AI 실증 메타팩토리 운영 데이터 · run ${runId} · 시각: 기준 시계 ISO 8601 UTC`,
     `# aas_id = ${aasId('{asset_id}')} · submodel = ${smId('{asset_id}', 'OperationalData')} · semantic_id = ${SEM.cd('{id_short}')}`,
     'record_type,timestamp_utc,sim_time_s,asset_id,id_short,value,unit'];
   for (const s of samples) {
@@ -218,7 +218,7 @@ export function toAutomationML(assets, last, meta) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <CAEXFile xmlns="http://www.dke.de/CAEX" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" SchemaVersion="3.0" FileName="${xesc(meta.fileName)}">
   <SuperiorStandardVersion>AutomationML 2.10</SuperiorStandardVersion>
-  <SourceDocumentInformation OriginName="Jin-3D" OriginID="urn:camtic:jin3d" OriginVersion="1.0" LastWritingDateTime="${xesc(meta.writtenAt)}" OriginRelease="1.0" />
+  <SourceDocumentInformation OriginName="피지컬AI 실증 메타팩토리" OriginID="urn:camtic:jin3d" OriginVersion="1.0" LastWritingDateTime="${xesc(meta.writtenAt)}" OriginRelease="1.0" />
   <InstanceHierarchy Name="MetaFactoryTestbed">
     <InternalElement Name="${xesc(factory?.id ?? 'Factory')}" ID="${xesc(aasId(factory?.id ?? 'Factory'))}">
 ${factory ? attr('Description', factory.name, null, 3) + attr('AAS_Id', aasId(factory.id), null, 3) + attr('ReferenceClockUTC', last?.t ?? '', null, 3) + attr('RunId', meta.runId, null, 3) : ''}      <ExternalInterface Name="TimeSeriesData" ID="${xesc(`${BASE}/timeseries/${meta.runId}`)}" RefBaseClassPath="AutomationMLInterfaceClassLib/AutomationMLBaseInterface/ExternalDataConnector/ExternalDataReference">
@@ -325,7 +325,7 @@ export function buildRobotEnvironment({ asset, samples, detail, last, opts = {} 
   return env;
 }
 export function detailCSV(assetId, detail) {
-  const rows = [`# Jin-3D 로봇 정밀 기록 · ${assetId} · 시각: 기준 시계 ISO 8601 UTC`, ['timestamp_utc', 'sim_time_s', ...detail.fields.map((f) => (f.unit ? `${f.idShort} [${f.unit}]` : f.idShort))].join(',')];
+  const rows = [`# 피지컬AI 실증 메타팩토리 로봇 정밀 기록 · ${assetId} · 시각: 기준 시계 ISO 8601 UTC`, ['timestamp_utc', 'sim_time_s', ...detail.fields.map((f) => (f.unit ? `${f.idShort} [${f.unit}]` : f.idShort))].join(',')];
   for (const r of detail.rows) rows.push([r.t, r.simT.toFixed(1), ...r.v.map((x, i) => csvq(fmt(x, detail.fields[i].type)))].join(','));
   return '﻿' + rows.join('\n') + '\n';
 }

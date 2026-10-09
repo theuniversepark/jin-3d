@@ -1,9 +1,9 @@
-# Jin-3D Blender 자산 생성 스크립트 — Blender(5.x)에서 실제로 모델링·재질 적용 후 glTF(.glb)로 내보낸다.
+# 피지컬AI 실증 메타팩토리 Blender 자산 생성 스크립트 — Blender(5.x)에서 실제로 모델링·재질 적용 후 glTF(.glb)로 내보낸다.
 # 실행: blender -b --python blender/build_assets.py   (또는 npm run blender:assets)
 # 결과: assets/blender/{amr,agv,forklift,drone,humanoid,quadruped,arm6,ammr,truck,gantry,eaxle,parts,doortrim,maint,primitives}.glb  +  assets/blender/preview.png (Blender Eevee 렌더 미리보기)
 #
 # 좌표: Blender는 Z가 위, glTF로 내보내면 +Y가 위가 된다 (Blender X → three X, Blender Z → three Y, Blender −Y → three +Z).
-#       three.js 모델의 "앞"(로컬 +z)은 Blender −Y 방향으로 만든다. 단위 1 = 1m (Jin-3D와 같은 크기·같은 원점: 바닥 중심)
+#       three.js 모델의 "앞"(로컬 +z)은 Blender −Y 방향으로 만든다. 단위 1 = 1m ( 같은 크기·같은 원점: 바닥 중심)
 # 이름 규칙 (three.js 코드가 찾아 쓰는 부분):
 #   재질 LED          — AMR·AGV 상태 표시등 (코드가 발광색을 바꾼다)
 #   재질 NAV_R·NAV_G·STROBE — 드론 항법등·스트로브 (코드가 깜빡인다)
@@ -961,4 +961,4 @@ try:
     preview(); preview_humanoid(); preview_one(build_quadruped, 'quadruped', (-1.9, -2.15, 1.45), (70, 0, -42), 40, (960, 720)); preview_one(build_eaxle, 'eaxle', (1.25, -1.45, 0.95), (68, 0, 40), 45, (960, 640)); preview_one(build_maint_preview, 'maint', (0.0, -6.2, 2.4), (75, 0, 0), 32, (1400, 560)); preview_one(build_doortrim, 'doortrim', (0.35, -1.45, 0.62), (80, 0, 13), 45, (900, 600)); preview_one(build_parts_preview, 'parts', (0.0, -1.5, 0.55), (70, 0, 0), 34, (1400, 460)); preview_one(build_truck_fork, 'truck', (11.5, -9.5, 4.6), (72, 0, 52), 32, (1280, 720))
 except Exception as e:   # 렌더 장치가 없는 환경에서는 미리보기만 건너뛴다
     print('preview skipped:', e)
-print('Jin-3D Blender assets →', os.path.abspath(OUT), sorted(os.listdir(OUT)))
+print('피지컬AI 실증 메타팩토리 Blender assets →', os.path.abspath(OUT), sorted(os.listdir(OUT)))
