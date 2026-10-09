@@ -1499,7 +1499,15 @@ export class FactoryView {
     for (let x = -45; x <= 36; x += 9) put(box(0.6, 8, 0.6, MAT.steel), x, 4, -19.6, r);
     put(box(89, 0.5, 0.35, MAT.accent), -6.5, 7.7, -19.8, r);
     // 천장 형광등 기구는 두지 않는다 — 공장 밝기는 환경광·주광·보조광(main.js LOOK)으로 단계별로 유지
-    // 뒷벽 관제 화면 왼쪽(12×4m)에는 CCTV 전광판(js/cctvview.js)이 걸린다 — 과학기술정보통신부·정보통신산업진흥원 로고는 관제 서버 랙 양옆에 둔다(아래 관제/서버)
+    // 뒷벽 관제 화면 왼쪽(12×4m)에는 CCTV 전광판(js/cctvview.js)이 걸린다 — 과학기술정보통신부·정보통신산업진흥원 로고는 관제 서버 랙 양옆(아래 관제/서버)과 앞쪽 바닥 표시에 둔다
+    // 바닥 표시(6.6×2.6m, 흰 바탕) — 앞쪽 AGV 충전소(x -15~-3)와 사족보행·정비 휴머노이드 대기 구역(x 6~14) 사이. 두 줄(과학기술정보통신부 / 정보통신산업진흥원), 카메라 쪽에서 바로 읽히는 방향
+    // 흰 바탕이 블룸으로 번지지 않도록 조명 영향 없는 재질에 약간 낮춘 색을 곱한다
+    const logoTex = new THREE.TextureLoader().load('assets/msit_nipa_floor.png');
+    logoTex.colorSpace = THREE.SRGBColorSpace; logoTex.anisotropy = 8;
+    const floorLogo = put(new THREE.Group(), 1.2, 0, 13.6, r);
+    const flatOn = (w, d, mat, y) => { const m = put(new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat), 0, y, 0, floorLogo); m.rotation.x = -Math.PI / 2; m.receiveShadow = true; return m; };
+    flatOn(6.6, 2.6, new THREE.MeshBasicMaterial({ map: logoTex, color: 0xd6d9dd }), 0.012);
+    flatOn(6.6, 0.08, MAT.accent, 0.014).position.z = 1.3;
     // 출하 도크: 말아 올린 셔터·문틀·도크 레벨러·범퍼 (벽 기둥 사이 두 칸)
     for (const [i, bx] of YARD.bays.entries()) {
       put(cyl(0.32, 0.32, 4.6, MAT.dark, 16), bx, 4.75, -19.85, r).rotation.z = Math.PI / 2;
@@ -1991,15 +1999,6 @@ export class FactoryView {
       for (const sd of [-1, 1]) put(box(0.08, 0.85, 0.08, frame), x + sd * 0.7, 0.42, 0, brand);
       put(box(1.7, 0.04, 0.5, frame), x, 0.02, 0, brand);
       put(new THREE.Mesh(new THREE.PlaneGeometry(1.76, 1.32), new THREE.MeshBasicMaterial({ map: tex, color: 0xb4b8be })), x, 1.55, 0.045, brand);
-    }
-    // 서버실 왼쪽·오른쪽 바닥 표시(6.6×2.6m, 흰 바탕) — 왼쪽 과학기술정보통신부 · 오른쪽 정보통신산업진흥원, 앞쪽에서 읽히는 방향
-    // 흰 바탕이 블룸으로 번지지 않도록 조명 영향 없는 재질에 약간 낮춘 색을 곱한다
-    for (const [x, file] of [[-7, 'assets/msit_floor.png'], [7, 'assets/nipa_floor.png']]) {
-      const tex = new THREE.TextureLoader().load(file); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
-      const mark = put(new THREE.Group(), x, 0, 3.3, brand);
-      const flat = (w, d, mat, y, z = 0) => { const m = put(new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat), 0, y, z, mark); m.rotation.x = -Math.PI / 2; m.receiveShadow = true; return m; };
-      flat(6.6, 2.6, new THREE.MeshBasicMaterial({ map: tex, color: 0xd6d9dd }), 0.012);
-      flat(6.6, 0.08, MAT.accent, 0.014, 1.3);
     }
     // 디지털 트윈 대형 화면
     const c = document.createElement('canvas'); c.width = 2016; c.height = 448;   // 18×4m (4.5:1)
