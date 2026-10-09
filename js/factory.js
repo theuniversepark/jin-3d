@@ -1980,21 +1980,23 @@ export class FactoryView {
       }
     }
     this.serverPos = new THREE.Vector3(LOC.CTRL.x, 2.6, -17);
+    // 로고 표시는 서버 랙 묶음과 따로 둔다 — 레거시 단계는 관제 서버를 숨기지만 로고는 모든 단계에 보인다
+    const brand = put(new THREE.Group(), LOC.CTRL.x, 0, -17.5, r);
     // 서버 랙 양옆 로고 스탠드(랙과 같은 줄, 관제 화면 아래) — 왼쪽 과학기술정보통신부 · 오른쪽 정보통신산업진흥원
     // 흰 바탕이 블룸으로 번지지 않도록 회백색으로 낮춰 표시한다
     for (const [x, file] of [[-3.25, 'assets/msit_logo.png'], [3.25, 'assets/nipa_logo.png']]) {
       const tex = new THREE.TextureLoader().load(file); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
       const frame = std(0x14181e, { roughness: 0.6, metalness: 0.3 });
-      put(box(1.9, 1.45, 0.08, frame), x, 1.55, 0, srv);
-      for (const sd of [-1, 1]) put(box(0.08, 0.85, 0.08, frame), x + sd * 0.7, 0.42, 0, srv);
-      put(box(1.7, 0.04, 0.5, frame), x, 0.02, 0, srv);
-      put(new THREE.Mesh(new THREE.PlaneGeometry(1.76, 1.32), new THREE.MeshBasicMaterial({ map: tex, color: 0xb4b8be })), x, 1.55, 0.045, srv);
+      put(box(1.9, 1.45, 0.08, frame), x, 1.55, 0, brand);
+      for (const sd of [-1, 1]) put(box(0.08, 0.85, 0.08, frame), x + sd * 0.7, 0.42, 0, brand);
+      put(box(1.7, 0.04, 0.5, frame), x, 0.02, 0, brand);
+      put(new THREE.Mesh(new THREE.PlaneGeometry(1.76, 1.32), new THREE.MeshBasicMaterial({ map: tex, color: 0xb4b8be })), x, 1.55, 0.045, brand);
     }
     // 서버실 왼쪽·오른쪽 바닥 표시(6.6×2.6m, 흰 바탕) — 왼쪽 과학기술정보통신부 · 오른쪽 정보통신산업진흥원, 앞쪽에서 읽히는 방향
     // 흰 바탕이 블룸으로 번지지 않도록 조명 영향 없는 재질에 약간 낮춘 색을 곱한다
     for (const [x, file] of [[-7, 'assets/msit_floor.png'], [7, 'assets/nipa_floor.png']]) {
       const tex = new THREE.TextureLoader().load(file); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
-      const mark = put(new THREE.Group(), x, 0, 3.3, srv);
+      const mark = put(new THREE.Group(), x, 0, 3.3, brand);
       const flat = (w, d, mat, y, z = 0) => { const m = put(new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat), 0, y, z, mark); m.rotation.x = -Math.PI / 2; m.receiveShadow = true; return m; };
       flat(6.6, 2.6, new THREE.MeshBasicMaterial({ map: tex, color: 0xd6d9dd }), 0.012);
       flat(6.6, 0.08, MAT.accent, 0.014, 1.3);
