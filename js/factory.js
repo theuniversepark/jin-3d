@@ -1932,7 +1932,7 @@ export class FactoryView {
     put(new THREE.Mesh(new THREE.PlaneGeometry(10, 2.73), new THREE.MeshBasicMaterial({ map: this.whBoard.tex, toneMapped: false })), 0, 0, 0, bd);
     bd.traverse((o) => (o.castShadow = false));   // 왼쪽 벽에 붙은 재고 현황판도 그림자 없음
     // 드론 이착륙·충전 패드 (피지컬AI 단계에서만 보임)
-    // 드론마다 이착륙·충전 패드 (H1·H2·H3…, 3m 간격) — 운용 대수만큼 보인다
+    // 드론마다 이착륙·충전 패드 (H1·H2·H3…, AMR 복귀 전용로 왼쪽에 세로 한 줄) — 운용 대수만큼 보인다. 무선 충전기는 복귀로 반대쪽(왼쪽)
     this.dronePads = [0, 1, 2, 3].map((i) => {
       const p = dronePad(i), g = put(new THREE.Group(), p.x, 0, p.z, r);
       const padC = document.createElement('canvas'); padC.width = padC.height = 256;
@@ -1940,8 +1940,8 @@ export class FactoryView {
       pc.strokeStyle = '#37e8ff'; pc.lineWidth = 10; pc.beginPath(); pc.arc(128, 128, 110, 0, Math.PI * 2); pc.stroke();
       pc.fillStyle = '#ffffff'; pc.font = '900 120px sans-serif'; pc.textAlign = 'center'; pc.textBaseline = 'middle'; pc.fillText(`H${i + 1}`, 128, 136);
       const padTex = new THREE.CanvasTexture(padC); padTex.colorSpace = THREE.SRGBColorSpace;
-      const pad = put(new THREE.Mesh(new THREE.CircleGeometry(1.1, 40), new THREE.MeshStandardMaterial({ map: padTex, roughness: 0.7 })), 0, 0.02, 0, g); pad.rotation.x = -Math.PI / 2;
-      put(box(0.5, 0.25, 0.3, MAT.dark), 1.35, 0.125, 0, g);   // 무선 충전기
+      const pad = put(new THREE.Mesh(new THREE.CircleGeometry(DRONE_PAD.r, 40), new THREE.MeshStandardMaterial({ map: padTex, roughness: 0.7 })), 0, 0.02, 0, g); pad.rotation.x = -Math.PI / 2;
+      put(box(0.5, 0.25, 0.3, MAT.dark), -(DRONE_PAD.r + 0.35), 0.125, 0, g);   // 무선 충전기
       g.visible = false; return g;
     });
     // 충전소
@@ -1955,7 +1955,7 @@ export class FactoryView {
       this.chargers.push({ group: pad, post, m });
     }
     // 정비실
-    // 정비실: 오른쪽(드론 패드 H1 쪽)으로 확장 — H1 패드 왼쪽 가장자리(x 19.4)에서 바닥 1.5칸(1.5m) 앞까지 (로컬 x −2.5 ~ +5.1)
+    // 정비실: 오른쪽으로 확장 — 로컬 x −2.5 ~ +5.1 (x 19.4에서 1.5m 앞까지)
     const tech = (this.tech = put(new THREE.Group(), LOC.TECH.x + 0.8, 0, 16.5, r));
     put(box(7.6, 0.02, 3.5, std(0x6b4a2a)), 1.3, 0.01, -1.5, tech);
     this.techFurn = put(new THREE.Group(), 0, 0, 0, tech);   // 비품 (Blender 모델은 앱 시작 후 불러오므로 setup마다 다시 채움)
