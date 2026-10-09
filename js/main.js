@@ -32,6 +32,7 @@ import { AI_MODELS } from './cctv.js';
 import { NR, STACK, LAT, UE_LOAD, maxRobots } from './net5g.js';
 import { setAasVersion, AAS_VERSIONS } from './aas.js';
 import { OrchView } from './orchview.js';
+import { FLEET_RANGE, FLEET_NAMES, SHARED_SPACE_LIMIT, fleetAdvice, predictFleet } from './fleet.js';
 import { SEC_LAYERS, SEC_KPI, SEC_THREATS, SEC_LANES, SEC_STAGES, SEC_ACTORS } from './security.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
@@ -123,6 +124,7 @@ let sim, agent, agentArch = 'single';   // 에이전트 구조: single · hybrid
 const archPref = {};   // 단계별 운영자 선택 (없으면 MODES[단계].agentArch — 피지컬AI 기본 혼합형)
 let modeKey = 'smart', speed = 3, running = true, labelsOn = true;
 const SEED = 20261001;
+const fleetCfg = { amr: { scale: 1, paused: false }, agv: { scale: 1, paused: false } };   // AMR·AGV 관제 설정 (단계·라인을 바꿔도 유지)
 
 // 공정 라인 구성 — 정밀조립Zone 두 시나리오(도어트림·e-axle)와 사용자 라인을 각각 저장해 다음 실행 때도 유지
 // v4: 정밀조립Zone이 혼류(분기·합류) 구조로 바뀌어 이전 Zone 레시피는 버리고 사용자 라인만 옮긴다
@@ -196,6 +198,7 @@ function setRender(style) {
 function start(key) {
   modeKey = key;
   sim = new Simulation(key, SEED, { line: currentLine });
+  applyFleetCfg();   // AMR·AGV 관제 설정은 단계·라인을 바꿔도 유지
   agentArch = archPref[key] ?? sim.mode.agentArch ?? 'single';
   agent = agentArch === 'hybrid' ? new HybridAgent(sim) : new FactoryAgent(sim);
   document.querySelectorAll('#archSeg button').forEach((b) => b.classList.toggle('on', b.dataset.arch === agentArch));
@@ -1334,6 +1337,81 @@ function renderAios(force) {
         ${P.events.slice(-6).reverse().map((e) => `<tr><td>${hub.iso(e.t).slice(11, 19)}</td><td>${escV(e.type)}</td><td class="ins" title="${escV(e.title)}">${escV(e.title)}</td><td>${e.decide_s != null ? `${e.decide_s}s` : '셀 자체'}</td><td>${e.resolve_s}s</td></tr>`).join('') || '<tr><td colspan="5">아직 없음</td></tr>'}</tbody></table></div>
     </div>`);
 }
+
+// ── AMR·AGV 관제 ─────────────────
+// 운반 AMR·자재 공급 AGV의 공통 설정·상태, 상황별 속도 변화, 전체 속도 배율(50~150%)·정지·시작, 설정 변경의 예상 문제점·기대효과와 디지털트윈 예측
+function applyFleetCfg() { const F = sim?.fleet; if (!F) return; for (const f of ['amr', 'agv']) Object.assign(F[f], fleetCfg[f]); F.apply(); }
+const fleetModal = document.getElementById('fleetModal'), fleetBody = document.getElementById('fleetBody');
+let fleetTimer = null, fleetPred = null, fleetBusy = false;
+const ms = (v) => (v == null ? '-' : `${v.toFixed(2)} m/s`);
+function renderFleet() {
+  const F = sim.fleet, has = { amr: F.hasAMR, agv: F.hasAGV };
+  if (!has.amr && !has.agv) { setHTML(fleetBody, `<p class="vla-note">레거시 단계에는 운반 AMR·AGV가 없습니다 (고정 컨베이어 · 유인 지게차). 자동화·피지컬AI 단계에서 관제할 수 있습니다.</p>`); return; }
+  const fl = ['amr', 'agv'].filter((f) => has[f]);
+  const ctrl = (f) => { const C = F[f], v = F.speeds(f), b = F.base(f), S = F.summary(f);
+    return `<div class="fc-card"><h4>${f === 'amr' ? '📦' : '🚛'} ${FLEET_NAMES[f]} <small>${S.n}대 · 주행 ${S.moving}대 · 대기·정지 ${S.blocked}대 · 평균 배터리 ${Math.round(S.battery)}%</small></h4>
+      <div class="ai-bar"><b style="font-size:20px;min-width:70px">${Math.round(C.scale * 100)}%</b>
+        <button type="button" class="ai-btn" data-fl-step="${f}:-1" ${C.scale <= FLEET_RANGE.min + 1e-6 ? 'disabled' : ''}>－10%</button>
+        <input type="range" min="${FLEET_RANGE.min * 100}" max="${FLEET_RANGE.max * 100}" step="10" value="${Math.round(C.scale * 100)}" data-fl-range="${f}" style="flex:1;min-width:140px">
+        <button type="button" class="ai-btn" data-fl-step="${f}:1" ${C.scale >= FLEET_RANGE.max - 1e-6 ? 'disabled' : ''}>＋10%</button>
+        <button type="button" class="ai-btn" data-fl-set="${f}:1">기준 100%</button>
+        <button type="button" class="ai-btn ${C.paused ? 'on' : ''}" data-fl-${C.paused ? 'resume' : 'pause'}="${f}">${C.paused ? '▶ 시작' : '⏸ 정지'}</button></div>
+      <div class="fc-sub">설정 속도: ${b.line != null ? `셀 사이 운반 ${ms(v.line)} (기준 ${ms(b.line)}) · ` : ''}${f === 'amr' ? '빈 차 복귀' : '주행'} ${ms(v.drive)} (기준 ${ms(b.drive)})${v.drive > SHARED_SPACE_LIMIT ? ` · <b style="color:#ffc65a">공존 구역 권장 상한 ${SHARED_SPACE_LIMIT} m/s 초과</b>` : ''} · 실제 평균 ${ms(S.avg)} · 최고 ${ms(S.max)}${C.paused ? ' · <b style="color:#ff9a9a">관제 정지 중</b>' : ''}</div></div>`; };
+  const K = sim.cmd, nmode = sim.mode;
+  const common = [
+    ['대수', `${sim.carriers.length}대`, has.agv ? `${sim.vehicles.length}대` : '-'],
+    ['기준 속도', `운반 ${ms(F.base('amr').line)} · 복귀 ${ms(F.base('amr').drive)}`, has.agv ? `${ms(F.base('agv').drive)}` : '-'],
+    ['현재 설정 속도', `운반 ${ms(F.speeds('amr').line)} · 복귀 ${ms(F.speeds('amr').drive)} (${Math.round(F.amr.scale * 100)}%)`, has.agv ? `${ms(F.speeds('agv').drive)} (${Math.round(F.agv.scale * 100)}%)` : '-'],
+    ['운행 상태', F.amr.paused ? '관제 정지' : '운행', has.agv ? (F.agv.paused ? '관제 정지' : '운행') : '-'],
+    ['경로', '셀 사이 운반 경로(라인) · AMR 복귀 전용로 · 투입 진입로(한 줄)', '앞쪽·뒤쪽 통로 차로(방향별 ±0.7m) · 좌우 세로 통로'],
+    ['간격·충돌 방지', '라인 위 앞차 간격 2.0m · 진행 방향 앞 차폭 감지', '진행 방향 앞 차폭 감지 · 지게차 포크 회피'],
+    ['통행 우선순위', 'AMR > AGV > 정비 > 작업자 > 사족보행 (마주침: 낮은 쪽이 비켜섬 · 교차: 낮은 쪽이 물러남)', '같음'],
+    ['충전', '정차 위치 무선 충전(대기열·투입·셀 정차 중 기회 충전)', `물류 대기 충전 패드 (${nmode.chargeAt ?? 30}% 이하 복귀)`],
+    ['적재', '대상물 1개', `원자재 ${nmode.vehicleCap ?? 16}박스`],
+  ];
+  const R = F.rules(), adv = fleetAdvice(F), P = fleetPred;
+  const row = (k, a, b) => `<tr><td style="white-space:nowrap"><b>${k}</b></td><td>${escV(a)}</td>${has.agv ? `<td>${escV(b)}</td>` : ''}</tr>`;
+  const ADV = { gain: ['기대효과', 'p-done'], risk: ['예상 문제점', 'p-rejected'], tip: ['참고', ''] };
+  const predRows = P ? [['시간당 생산 (UPH)', 'uph', 0, 1], ['OEE', 'oee', 1, 1, true], ['평균 재공 (WIP)', 'wip', 1, -1], ['에너지 (kWh/개)', 'kwh', 3, -1], ['차량 근접 (1.9m 이내 주행)', 'near', 0, -1], ['양보·이벤트 대기 시간 (초)', 'blockT', 0, -1], ['셀 자재대기 누적 (초)', 'starve', 0, -1], ['AGV 평균 배터리 (%)', 'agvBattery', 0, 1]].filter(([, k]) => P.base[k] != null).map(([nm, k, d, good, pctv]) => {
+    const a = P.base[k], b = P.cur[k], f = (v) => (pctv ? `${(v * 100).toFixed(1)}%` : v.toFixed(d)), dl = a ? (b - a) / Math.abs(a) : 0, ok = Math.sign(b - a) === good || Math.abs(dl) < 0.005;
+    return `<tr><td>${nm}</td><td>${f(a)}</td><td>${f(b)}</td><td class="${ok ? 'p-done' : 'p-rejected'}">${a ? `${dl >= 0 ? '+' : ''}${(dl * 100).toFixed(1)}%` : '-'}</td></tr>`; }).join('') : '';
+  setHTML(fleetBody, `
+    <div class="ai-bar"><button type="button" class="ai-btn" data-fl-pause="all">⏸ 전체 정지</button><button type="button" class="ai-btn" data-fl-resume="all">▶ 전체 시작</button><button type="button" class="ai-btn" data-fl-set="all:1">전체 기준 100%</button>
+      <small>${K.estopAll || K.pstopAll ? '<b style="color:#ff9a9a">명령 센터 비상정지·보호정지 발령 중 — 관제 시작과 무관하게 모든 이동 로봇이 정지합니다</b>' : '정지·시작·속도 변경은 이벤트 로그와 관제 이력에 남습니다. 명령 센터의 비상정지·보호정지가 관제 설정보다 우선합니다.'}</small></div>
+    <div class="fc-cards">${fl.map(ctrl).join('')}</div>
+    <div class="vla-grid"><div><h4>공통 설정 · 운용 규칙</h4><table class="vla-t"><thead><tr><th>항목</th><th>운반 AMR</th>${has.agv ? '<th>자재 공급 AGV</th>' : ''}</tr></thead><tbody>${common.map(([k, a, b]) => row(k, a, b)).join('')}</tbody></table></div>
+    <div><h4>상황별 속도 변화 <small>지금 해당하는 규칙은 강조 · 대수</small></h4><table class="vla-t"><thead><tr><th>상황</th><th>속도 변화</th><th>지금</th><th>지시·출처</th></tr></thead><tbody>
+      ${R.map((r) => `<tr${r.on ? ' style="background:rgba(245,184,46,.10)"' : ''}><td><b>${escV(r.k)}</b></td><td class="ins" title="${escV(r.eff)}">${escV(r.eff)}</td><td>${r.on ? (r.n != null ? `${r.n}대` : '적용 중') : '-'}</td><td class="ins" title="${escV(r.src)}">${escV(r.src)}</td></tr>`).join('')}</tbody></table></div></div>
+    <h4>설정 변경 — 예상 문제점 · 기대효과 <small>현재 관제 설정 기준</small></h4>
+    <table class="vla-t"><tbody>${adv.map((a) => `<tr><td style="white-space:nowrap" class="${ADV[a.kind][1]}">${ADV[a.kind][0]}</td><td>${a.f ? `<b>${FLEET_NAMES[a.f]}</b> · ` : ''}${escV(a.text)}</td></tr>`).join('')}</tbody></table>
+    <div class="ai-bar" style="margin-top:8px"><button type="button" class="ai-btn" data-fl-predict ${fleetBusy ? 'disabled' : ''}>🔬 디지털트윈 예측 (15분 · 기준 100% 운행 vs 현재 설정)</button><small>${fleetBusy ? '예측 중…' : P ? `예측 완료 ${fclock(P.at)} — 설정: AMR ${P.cfg.amr} · AGV ${P.cfg.agv}` : '같은 라인·단계로 헤드리스 시뮬레이션 두 번(약 2초)'}</small></div>
+    ${P ? `<table class="vla-t"><thead><tr><th>지표 (15분)</th><th>기준 100%</th><th>현재 설정</th><th>변화</th></tr></thead><tbody>${predRows}</tbody></table>` : ''}
+    <h4>차량별 상태 <small>실제 속도는 주행 거리 변화로 측정</small></h4><div style="max-height:260px;overflow:auto"><table class="vla-t"><thead><tr><th>ID</th><th>종류</th><th>상태</th><th>실제 속도</th><th>설정 속도</th><th>배터리</th><th>작업</th></tr></thead><tbody>
+      ${fl.flatMap((f) => F.list(f).map((m) => { const [st, c] = F.stateOf(m, f), v = F.speeds(f); return `<tr><td><b class="uidc">${escV(m.uid ?? m.id)}</b></td><td>${f === 'amr' ? 'AMR' : 'AGV'}</td><td class="${c === 'ok' ? 'p-done' : c === 'bad' ? 'p-rejected' : c === 'warn' ? 'p-train' : ''}">${escV(st)}</td><td>${ms(F.speedOf(m))}</td><td>${ms(m.state === 'line' ? v.line : v.drive)}</td><td>${Math.round(m.battery ?? 100)}%</td><td class="ins" title="${escV(m.lineInfo?.phase ?? m.task ?? '')}">${escV(m.state === 'line' ? m.lineInfo?.phase ?? '' : m.task ?? '대기')}</td></tr>`; })).join('')}</tbody></table></div>
+    <h4>관제 이력</h4><table class="vla-t"><tbody>${F.events.slice(0, 8).map((e) => `<tr><td>${fclock(e.t)}</td><td>${escV(e.text)}</td><td>${escV(e.by ?? '관제 운영자')}</td></tr>`).join('') || '<tr><td>아직 없음</td></tr>'}</tbody></table>`);
+}
+function fleetDo(fn) { fn(sim.fleet); for (const f of ['amr', 'agv']) fleetCfg[f] = { scale: sim.fleet[f].scale, paused: sim.fleet[f].paused }; renderFleet(); }
+fleetBody.addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b || b.disabled) return;
+  const by = '관제 운영자 · AMR·AGV 관제';
+  if (b.dataset.flStep) { const [f, d] = b.dataset.flStep.split(':'); fleetDo((F) => F.setScale(f, F[f].scale + 0.1 * +d, by)); }
+  else if (b.dataset.flSet) { const [f, v] = b.dataset.flSet.split(':'); fleetDo((F) => F.setScale(f, +v, by)); }
+  else if (b.dataset.flPause) fleetDo((F) => F.pause(b.dataset.flPause, by));
+  else if (b.dataset.flResume) fleetDo((F) => F.resume(b.dataset.flResume, by));
+  else if (b.hasAttribute('data-fl-predict')) {
+    fleetBusy = true; renderFleet(); await new Promise((r) => setTimeout(r, 30));
+    const cfg = { amr: { ...fleetCfg.amr }, agv: { ...fleetCfg.agv } }, Agent = agentArch === 'hybrid' ? HybridAgent : FactoryAgent;
+    const P = predictFleet({ Simulation, Agent, mode: modeKey, line: currentLine, seed: SEED, T: 900, amr: cfg.amr, agv: cfg.agv });
+    const lab = (c) => (c.paused ? '정지' : `${Math.round(c.scale * 100)}%`);
+    fleetPred = { ...P, at: sim.time, cfg: { amr: lab(cfg.amr), agv: lab(cfg.agv) } }; fleetBusy = false; renderFleet();
+  }
+});
+fleetBody.addEventListener('change', (e) => { const r = e.target.closest('[data-fl-range]'); if (r) fleetDo((F) => F.setScale(r.dataset.flRange, +r.value / 100, '관제 운영자 · AMR·AGV 관제')); });
+document.getElementById('btnFleet').addEventListener('click', () => {
+  fleetModal.classList.remove('hidden'); renderFleet();
+  clearInterval(fleetTimer); fleetTimer = setInterval(() => { if (!fleetModal.classList.contains('hidden') && !fleetBody.querySelector(':hover') && document.activeElement?.type !== 'range') renderFleet(); }, 700);
+});
+document.getElementById('closeFleet').addEventListener('click', () => { fleetModal.classList.add('hidden'); clearInterval(fleetTimer); });
 
 // ── FACOS 공장 운영 SW 통합 표시 (피지컬AI) ─────────────────
 // 운영자 지시 → AIOS → 오케스트레이터 → 자율 에이전트 → 명령 센터 → 셀·게이트 → VLA → 현장 감지 → DataHub 를 한 줄로, 계층마다 실시간 상태와 해당 창 바로가기

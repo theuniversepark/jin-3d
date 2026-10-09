@@ -10,6 +10,7 @@ import { OdooBridge } from './odoo.js';
 import { VLAPipeline } from './vla.js';
 import { AIOSPipeline } from './aios.js';
 import { SecurityLayer } from './security.js';
+import { FleetControl } from './fleet.js';
 import { Orchestrator, PRIORITY, prioOf } from './orchestrator.js';
 import { AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
@@ -496,6 +497,7 @@ export class Simulation {
     for (const st of this.processing) st.vlaCell = m.key === 'dark' && ['cobot', 'articulated', 'ammr', 'humanoid'].includes(st.def.robot?.kind);
     new VLAPipeline(this);
     new AIOSPipeline(this);
+    new FleetControl(this);   // AMR·AGV 관제: 전체 속도 배율 · 전체 정지/시작 (js/fleet.js)
     new SecurityLayer(this).register();   // 피지컬AI 다중 계층 보안 (총괄4): 에이전트 신원(DID/VC) · 데이터·IP · AI 모델 · OT
     this.cctvAgent = new CCTVAgent(this);   // 피지컬AI: CCTV 에이전트 (영상 감시 · 오케스트레이터 보고 · 이벤트 이력)
     this.net = new Private5G(this);   // Private 5G 특화망: 음영 없는 기지국 배치 · 이동 로봇 5G 모뎀 · 핸드오버 · 무손실 업링크 (자동화·피지컬AI)
@@ -876,16 +878,17 @@ export class Simulation {
     // 상위 명령: 전체 비상정지·보호정지면 라인 이동(AMR·컨베이어)과 이동로봇을 세우고, 안전 감속·속도 오버라이드는 이동 속도에 반영
     const K = this.cmd, halt = K.estopAll || K.pstopAll, mdt = halt ? 0 : dt * K.lineSpeed;
     K.update(dt);
-    if (mdt > 0) {
-      for (const c of this.conveyors) this.updateConveyor(c, mdt);
-      this.updateCarriers(mdt);
+    const F = this.fleet, amrDt = F?.amr.paused && this.useAMR ? 0 : mdt;   // AMR·AGV 관제 정지 (해당 차종만)
+    if (amrDt > 0) {
+      for (const c of this.conveyors) this.updateConveyor(c, amrDt);
+      this.updateCarriers(amrDt);
     }
     this.assignTechs();
     for (const v of this.vehicles) {
-      if (!mdt) continue;
+      if (!mdt || (F?.hasAGV && F.agvHeld(v))) continue;
       v.update(mdt);
       if (m.batteryDrain) {
-        if (v.moving) v.battery = Math.max(0, v.battery - m.batteryDrain * dt);
+        if (v.moving) v.battery = Math.max(0, v.battery - m.batteryDrain * Math.pow(F?.agv.scale ?? 1, 1.5) * dt);   // 빠를수록 거리당 소모↑ (관제 배율^1.5)
         else if (!v.charging) v.battery = Math.max(0, v.battery - 0.01 * dt);
       }
     }
@@ -895,6 +898,7 @@ export class Simulation {
     this.aios?.update(dt);
     this.dispatchDrones();
     for (const d of this.drones) d.update(dt);
+    this.fleet?.sample(dt);   // AMR·AGV 실제 속도 측정
     this.inbound.update(dt);   // 입고 트럭도 건물 밖이라 계속 움직인다
     if (mdt > 0) for (const f of this.forklifts) { if (f.idle && !K.evac) (f.receiver ? planReceiver : planForklift)(this, f); f.update(mdt); }
     if (mdt > 0) {
@@ -1044,7 +1048,7 @@ export class Simulation {
     const B = BATTERY, clamp = (v) => Math.max(0, Math.min(100, v));
     for (const c of this.carriers) {
       c.chgNow = !c.moving && ['park', 'atSrc', 'line'].includes(c.state);   // 정차 위치마다 무선 충전 코일
-      c.battery = clamp(c.battery + (c.chgNow ? B.carrier.rate : -(c.moving ? B.carrier.move : B.carrier.idle)) * dt);
+      c.battery = clamp(c.battery + (c.chgNow ? B.carrier.rate : -(c.moving ? B.carrier.move * Math.pow(this.fleet?.amr.scale ?? 1, 1.5) : B.carrier.idle)) * dt);   // 빠를수록 거리당 소모↑ (관제 배율^1.5)
     }
     for (const h of [...this.helpers, ...this.techs.filter((t) => t.kind === 'humanoid')]) {
       h.chgNow = (h.idle || h.swapping) && !h.moving && Math.hypot(h.x - h.home.x, h.z - h.home.z) < 0.4;

@@ -151,6 +151,7 @@
     <button id="btnCctv" title="사각지대 없는 CCTV 배치 — 커버리지 지도(빨강 사각지대 · 연두 1대 · 초록 2대 이상)와 감시 반경">📹 CCTV</button>
     <button id="btnData" title="AAS · OPC UA PubSub over MQTT 데이터 연동과 파일 저장">📡 데이터 연동</button>
     <button id="btnOdoo" title="Odoo ERP 연동 — 발주(구매오더·입고) · 재고(로케이션·이동) · 설비보전(정비요청)">🏢 Odoo</button>
+    <button id="btnFleet" title="AMR·AGV 관제 — 공통 설정·상태, 상황별 속도 변화, 전체 속도 조절·정지·시작, 설정 변경 효과 예측">🚚 AMR·AGV 관제</button>
     <button id="btnConcept">🧭 진화 컨셉</button>
     <button id="btnCompare" class="primary">📊 3단계 8시간 비교</button>
     <button id="btnReset">↺ 리셋</button>
@@ -174,6 +175,12 @@
     <div class="modal-card wide">
       <div class="modal-h"><h2>데이터 연동 <small>기준 시계 동기화 · AAS(Asset Administration Shell) 모델 · OPC UA PubSub(JSON) over MQTT · 파일 저장</small></h2><button id="closeData">✕</button></div>
       <div id="dataBody"></div>
+    </div>
+  </div>
+  <div class="modal hidden" id="fleetModal">
+    <div class="modal-card wide">
+      <div class="modal-h"><h2>🚚 AMR·AGV 관제 <small>운반 AMR · 자재 공급 AGV — 공통 설정·상태 · 상황별 속도 변화 · 전체 속도 조절·정지·시작 · 설정 변경 효과(디지털트윈 예측)</small></h2><button id="closeFleet">✕</button></div>
+      <div id="fleetBody"></div>
     </div>
   </div>
   <div class="modal hidden" id="odooModal">
