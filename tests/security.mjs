@@ -1,0 +1,35 @@
+// 피지컬AI 다중 계층 보안(총괄4) 검증 — 에이전트 신원(DID/VC)·최소 권한, 명령 OTAC·구간 암호화, VLA 연합학습·ZKML 배포·모델 안전성 테스트,
+// 위협 주입(위조 명령·권한 밖 명령·데이터 위변조·노하우 반출) 차단과 오케스트레이터 보안 인시던트 보고. 실행: npm test
+import { zoneLine } from '../js/line.js';
+import { Simulation } from '../js/sim.js';
+import { FactoryAgent } from '../js/agent.js';
+let pass = 0, fail = 0;
+const check = (name, ok, info = '') => { ok ? pass++ : fail++; console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  — ' + info : ''}`); };
+console.log('== 신원 · 최소 권한');
+const s = new Simulation('dark', 3, { line: zoneLine(), quiet: true }), ag = new FactoryAgent(s), S = s.sec;
+const robots = s.processing.reduce((a, st) => a + (st.robotUids?.length ?? 0), 0) + (s.sinkRobotUids?.length ?? 0), mob = [...s.movers, ...s.drones].filter((m) => m.uid).length;
+check('모든 로봇·이동체·드론과 SW 에이전트에 DID 발행', S.identities === robots + mob + 5, `${S.identities}개 (셀 로봇 ${robots} · 이동·드론 ${mob} · SW·운영자 5)`);
+check('로봇 VC에는 명령 권한 없음 (최소 권한)', [...S.ids.values()].filter((x) => x.kind === 'robot').every((x) => !x.scopes.some((p) => p.startsWith('command:'))));
+check('자동화 단계에는 보안 계층 없음 (피지컬AI 전용)', !new Simulation('smart', 3, { line: zoneLine(), quiet: true }).sec.on);
+console.log('== 명령 · OT');
+const run = (sec) => { for (let t = 0; t < sec; t += 0.1) { s.step(0.1); ag.update(0.1); } };
+run(60);
+const c = s.cmd.issue('SPEED', s.processing[1].id, 80, { by: `${s.orch.name} · 관제 콘솔` }); run(3);
+check('상위 명령: DID 서명·VC 확인 후 전송 → 셀 이행', S.stats.cmdVerified >= 1 && c.state !== 'rejected' && c.inc.steps.some((x) => x.text.includes('DID 서명')), `#${c.id} ${c.state}`);
+check('셀 OT 엔드포인트 OTAC 인증·구간 암호화 기록', S.stats.otac >= 1 && S.log.some((l) => l.layer === 'ot' && l.kind === 'pass'));
+check('구간 암호화 통신 지연 증가율 50% 이하 (모델 가정값)', S.latency.rise <= 0.5, `${Math.round(S.latency.rise * 100)}%`);
+console.log('== 위협 주입 → 차단 · 보안 인시던트');
+for (const k of ['spoof', 'privesc', 'tamper', 'exfil']) S.inject(k);
+run(6);
+const inc = s.orch.incidents.filter((i) => i.type === 'security');
+check('위협 4종 모두 해당 계층에서 차단', S.stats.blocked === 4 && S.byLayer.ot === 1 && S.byLayer.agent === 1 && S.byLayer.data === 2, JSON.stringify(S.byLayer));
+check('오케스트레이터 보안 인시던트(P2)로 보고 후 종료', inc.length === 4 && inc.every((i) => i.prio === 2 && i.status !== 'open'), inc.map((i) => i.status).join(','));
+check('위협 차단 중에도 생산 계속', (run(60), s.processing.some((st) => st.state === 'BUSY')));
+console.log('== VLA 학습·배포 보호');
+s.vla.newEps = 99; s.vla.startTraining(true); const j = s.vla.job;
+check('VLA 학습: 도메인별 eVDI 로컬 학습 · 동형암호 연합 집계', !!j?.he && S.stats.heRounds === 1 && j.he.ms <= 500, j?.he ? `도메인 ${j.he.domains} · ${j.he.ms}ms/1만 파라미터` : '');
+run(240);
+check('VLA 평가: 메타모픽 5종 · 차등 테스팅 → Safety Score', !!j.safety && j.safety.mr.length === 5 && S.stats.mrTests >= 200, j.safety ? `Safety ${j.safety.safety} · DRS ${j.safety.drs}` : '');
+check('통과 모델만 ZKML 검증 후 배포 (평가 미달은 배포 안 함)', j.phase === 'rejected' ? S.stats.zkml === 0 : S.stats.zkml >= 1, `${j.phase} · ZKML ${S.stats.zkml}대`);
+console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);
+if (fail) process.exit(1);

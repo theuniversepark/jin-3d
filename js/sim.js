@@ -9,6 +9,7 @@ import { Private5G } from './net5g.js';
 import { OdooBridge } from './odoo.js';
 import { VLAPipeline } from './vla.js';
 import { AIOSPipeline } from './aios.js';
+import { SecurityLayer } from './security.js';
 import { Orchestrator, PRIORITY, prioOf } from './orchestrator.js';
 import { AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
@@ -495,6 +496,7 @@ export class Simulation {
     for (const st of this.processing) st.vlaCell = m.key === 'dark' && ['cobot', 'articulated', 'ammr', 'humanoid'].includes(st.def.robot?.kind);
     new VLAPipeline(this);
     new AIOSPipeline(this);
+    new SecurityLayer(this).register();   // 피지컬AI 다중 계층 보안 (총괄4): 에이전트 신원(DID/VC) · 데이터·IP · AI 모델 · OT
     this.cctvAgent = new CCTVAgent(this);   // 피지컬AI: CCTV 에이전트 (영상 감시 · 오케스트레이터 보고 · 이벤트 이력)
     this.net = new Private5G(this);   // Private 5G 특화망: 음영 없는 기지국 배치 · 이동 로봇 5G 모뎀 · 핸드오버 · 무손실 업링크 (자동화·피지컬AI)
     this.erp = new OdooBridge(this);   // Odoo ERP 연동: 발주·재고·설비보전 (자동화·피지컬AI)

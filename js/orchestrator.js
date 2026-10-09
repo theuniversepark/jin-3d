@@ -21,6 +21,7 @@ export const INCIDENT_TYPES = {
   quality: { label: '공정 편차', icon: '◎' },
   command: { label: '상위 명령', icon: '📡' },
   parts: { label: '부품 선반 결품', icon: '▦' },
+  security: { label: '보안 위협', icon: '🛡' },   // 피지컬AI 다중 계층 보안(총괄4)이 차단한 위협
 };
 
 // 문제 해결 우선순위: 화재·사람·시설 안전을 먼저, 그다음 생산량·공정 운영·효율 (숫자가 작을수록 먼저)
@@ -31,7 +32,7 @@ export const PRIORITY = {
   4: { label: 'P4 생산 차질', short: 'P4', desc: '자재 공급 차질·부품 결품·운영 명령' },
   5: { label: 'P5 효율·품질', short: 'P5', desc: '예지정비·재보정·공정 편차 — 안전(P1) 대응 중에는 보류' },
 };
-const TYPE_PRIO = { field: 2, equipment: 3, supply: 4, parts: 4, command: 4, quality: 5 };
+const TYPE_PRIO = { field: 2, equipment: 3, supply: 4, parts: 4, command: 4, quality: 5, security: 2 };   // 보안 위협: 위조 제어 명령 등은 물리 안전과 직결 → P2
 export const prioOf = (inc) => inc?.prio ?? TYPE_PRIO[inc?.type] ?? 4;
 
 export class Orchestrator {

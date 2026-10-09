@@ -112,6 +112,9 @@ export class CommandCenter {
     this.list.unshift(c); if (this.list.length > 60) this.list.pop();
     c.inc = inc ?? o.open('command', `cmd:${c.id}`, `${C.icon} ${this.label(c)} → ${this.targetName(target)}`, c.by, { prio: C.group === 'emergency' ? 1 : 4 });   // 긴급 명령(비상정지·보호정지 등)은 P1
     o.step(c.inc, 'orch', 'command', `${C.group === 'emergency' ? '긴급 명령' : '제어 명령'} #${c.id}: ${this.label(c)} → ${this.targetName(target)}${why ? ` (${why})` : ''}`);
+    // 피지컬AI 다중 계층 보안(총괄4): 발신 주체 DID 서명·VC 권한 → 셀 OT 엔드포인트 OTAC 인증·구간 암호화·DPI. 권한 밖이면 보내지 않는다
+    if (s.sec && !s.sec.onCommand(c, C, this.targets(target).length)) { this.mark(c, 'rejected', '보안 검증 실패 (DID/VC 권한)'); o.close(c.inc, '보안 계층 차단'); return c; }
+    if (s.sec?.on) o.step(c.inc, 'orch', 'command', '🛡 DID 서명 · VC 권한 확인 → OTAC 인증 · 구간 암호화 전송');
     this.mark(c, 'sent');
     s.log(C.group === 'emergency' ? 'alert' : 'act', `${C.group === 'emergency' ? '긴급' : '제어'} 명령 #${c.id} · ${this.label(c)}`, { obs: `대상: ${this.targetName(target)}`, dec: why ?? `${c.by} 지시`, act: `${this.link.via} 전송` });
     o.later(code === 'ESTOP' ? this.link.estop : this.link.delay, () => this.receive(c));

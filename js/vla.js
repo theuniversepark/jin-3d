@@ -284,6 +284,7 @@ export class VLAPipeline {
     this.job = { v, label: this.label(v), episodes: n, total: this.allEps, phase: 'train', t0: this.sim.time, epochs: 10, epoch: 0, loss: [], val: null, rollout: [], log: [] };
     this.jobs.unshift(this.job); if (this.jobs.length > 12) this.jobs.pop();
     this.newEps = 0;
+    this.sim.sec?.onVlaTrain(this.job);   // 보안(총괄4): 도메인별 eVDI 로컬 학습 · 동형암호 연합 집계
     this.sim.log('plan', `VLA 학습 시작 · ${this.job.label}`, { obs: `새 에피소드 ${n}개 (누적 ${this.allEps}개, 성공률 ${Math.round((this.okEps / Math.max(1, this.allEps)) * 100)}%)`, dec: manual ? '운영자 수동 학습 요청' : `새 에피소드 ${TRAIN_MIN}개 이상 → 자동 재학습`, act: 'VLA 학습 서버에서 미세조정(fine-tuning) 10 에폭' });
     return true;
   }
@@ -305,15 +306,18 @@ export class VLAPipeline {
         j.phase = 'canary'; j.t2 = s.time; this.latest = j.v;
         const canary = this.sim.processing.find((x) => x.vlaCell && x.robotUids?.length)?.robotUids[0];
         j.canary = canary; if (canary) { this.versions.set(canary, j.v); j.rollout.push(canary); }
+        s.sec?.onVlaEval(j, true); s.sec?.onVlaDeploy(j, 'canary', canary ? 1 : 0);   // 보안(총괄4): 메타모픽·차등 테스팅 → ZKML 검증된 모델만 배포
         s.log('ok', `VLA ${j.label} 평가 통과 → 카나리 배포`, { obs: `검증 성공률 ${j.val}% (이전 ${j.prevVal}%)`, act: `${canary} 1대에 먼저 배포, 40초 모니터링` });
       } else {
         j.phase = 'rejected'; this.backoff = Math.min(4, (this.backoff ?? 1) * 2);
+        s.sec?.onVlaEval(j, false);
         s.log('warn', `VLA ${j.label} 평가 미달 — 배포 안 함`, { obs: `검증 성공률 ${j.val}% (이전 ${j.prevVal}%, 개선 0.3%p 미만)`, act: `현재 모델 유지 · 에피소드 ${TRAIN_MIN * this.backoff}개 더 모은 뒤 재학습` });
         this.job = null;
       }
     } else if (j.phase === 'canary' && s.time - j.t2 >= 40) {
       j.phase = 'rollout'; j.t3 = s.time;
       j.queue = this.sim.processing.filter((x) => x.vlaCell).flatMap((x) => x.robotUids ?? []).filter((u) => (this.versions.get(u) ?? 1) < j.v);
+      s.sec?.onVlaDeploy(j, 'rollout', j.queue.length);
       s.log('act', `VLA ${j.label} 전체 OTA 배포 시작`, { obs: `카나리 ${j.canary} 이상 없음`, act: `로봇 ${j.queue.length}대 순차 배포 (3초 간격)` });
     } else if (j.phase === 'rollout') {
       while (j.queue.length && s.time - j.t3 >= (j.rollout.length) * 3) { const u = j.queue.shift(); this.versions.set(u, j.v); j.rollout.push(u); }
