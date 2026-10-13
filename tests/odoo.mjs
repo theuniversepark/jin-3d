@@ -1,7 +1,7 @@
 // Odoo 연동 검증 (1순위: 발주 · 재고 · 설비보전)
 // ① 시뮬레이션 Fac(내장): 피지컬AI 2시간 — 구매오더 = WMS 발주, 입고 확정 = 입고 트럭, 재고(로케이션별) = 시뮬레이션 재고와 정확히 일치,
 //    출고 = 출하 수량, 정비요청 = 고장(긴급)·정비 지시(예방), 완료 시 소요 시간
-// ② 실시간 Odoo: 같은 이벤트를 게이트웨이(server/odoo-gateway.mjs)로 가짜 Odoo(JSON-RPC, tests/fake-odoo.mjs)에 보내
+// ② 실시간 Fac: 같은 이벤트를 게이트웨이(server/odoo-gateway.mjs)로 가짜 Fac 서버(Odoo 호환 JSON-RPC, tests/fake-odoo.mjs)에 보내
 //    Odoo 쪽 재고·구매오더·정비요청이 시뮬레이션과 같은지 (Odoo 17 · 18 제품 유형)
 // 실행: npm test
 import { zoneLine } from '../js/line.js';
@@ -39,7 +39,7 @@ check('설비 등록: 셀·셀 로봇·이동 로봇·드론 (일련번호 = 설
 check('전표 번호 형식 (P / WH/IN / WH/INT / WH/MO / WH/OUT / MR)', /^P\d{5}$/.test(E.db.po[0].name) && P.some((p) => /^WH\/IN\/\d{5}$/.test(p.name)) && P.some((p) => /^WH\/OUT\/\d{5}$/.test(p.name)) && /^MR\/\d{5}$/.test(E.db.mr[0].ref));
 { const t = new Simulation('traditional', 2, { line: zoneLine(), quiet: true }); check('레거시 단계: ERP 연동 없음 (수기 발주)', !t.erp.on && t.erp.outbox.length === 0 && !t.erp.master); }
 
-console.log('== 실시간 Odoo (게이트웨이 → JSON-RPC, 가짜 Odoo)');
+console.log('== 실시간 Fac (게이트웨이 → Odoo 호환 JSON-RPC, 가짜 Fac 서버)');
 for (const version of ['17.0', '18.0']) {
   const fake = await startFakeOdoo({ version });
   const G = await import(`../server/odoo-gateway.mjs?v=${version}`);

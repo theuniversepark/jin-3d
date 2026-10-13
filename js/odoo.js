@@ -10,7 +10,7 @@
 //          설비 고장 → 긴급 정비요청(corrective), 예지·예방 정비 지시 → 예방 정비요청(preventive),
 //          정비 인력 배정 → 진행 중, 수리·정비 완료 → 완료(소요 시간 기록)
 // 두 가지 모드: ① 시뮬레이션 Fac(내장 — 같은 모델·전표 번호·상태로 기록, 서버 없이 동작)
-//              ② 실시간 Odoo(서버 /api/odoo/sync → server/odoo-gateway.mjs가 JSON-RPC로 실제 Odoo에 생성·확정)
+//              ② 실시간 Fac(서버 /api/odoo/sync → server/odoo-gateway.mjs가 Odoo 호환 JSON-RPC로 실제 Fac 서버에 생성·확정)
 // 렌더링과 분리되어 헤드리스 시뮬레이션에서도 같은 흐름으로 동작한다 (tests/odoo.mjs).
 import { WH } from './receiving.js';
 
@@ -36,8 +36,8 @@ const WINDOW = 600;   // 내부 이동·생산 입고 묶음 (공장 시계 초)
 export class OdooBridge {
   constructor(sim) {
     this.sim = sim; this.on = sim.mode.key !== 'traditional' && !sim.twin;
-    this.live = false;                       // 실시간 Odoo로도 보내기 (서버 연결 시 화면에서 켬)
-    this.outbox = []; this.sent = 0;         // 실시간 Odoo로 보낼 이벤트
+    this.live = false;                       // 실시간 Fac으로도 보내기 (서버 연결 시 화면에서 켬)
+    this.outbox = []; this.sent = 0;         // 실시간 Fac으로 보낼 이벤트
     this.seq = { po: 0, in: 0, int: 0, out: 0, mrp: 0, mr: 0 };
     this.db = { po: [], picking: [], mr: [], equipment: [] };
     this.quant = Object.fromEntries(Object.keys(ODOO_LOCS).map((k) => [k, { raw: 0, parts: 0, doortrim: 0, eaxle: 0 }]));
