@@ -247,13 +247,13 @@ export class UI {
     }
   }
 
-  // Odoo 설비보전: 이 설비의 정비요청 이력 (설비 등록 일련번호 · 진행 중 요청 · 최근 요청)
+  // Fac 설비보전: 이 설비의 정비요청 이력 (설비 등록 일련번호 · 진행 중 요청 · 최근 요청)
   erpLine(st) {
     const E = this.sim.erp; if (!E?.on) return '';
     const e = E.equipmentOf(st.id) ?? E.equipmentOf(st.uid), mrs = E.db.mr.filter((m) => m.equipment === e?.serial_no);
     if (!e) return '';
     const open = mrs.find((m) => m.stage !== 'done'), last = mrs[0];
-    return `<div class="note">🏢 Odoo 설비보전 · 설비 ${esc(e.serial_no)} — 정비요청 ${mrs.length}건 (누적 ${Math.round(e.downtime * 60)}분)${open ? ` · <b>${open.ref} ${open.type === 'corrective' ? '긴급' : '예방'} ${open.stage === 'progress' ? '진행 중' : '신규'}</b>` : last ? ` · 최근 ${last.ref} 완료` : ''}</div>`;
+    return `<div class="note">🏢 Fac 설비보전 · 설비 ${esc(e.serial_no)} — 정비요청 ${mrs.length}건 (누적 ${Math.round(e.downtime * 60)}분)${open ? ` · <b>${open.ref} ${open.type === 'corrective' ? '긴급' : '예방'} ${open.stage === 'progress' ? '진행 중' : '신규'}</b>` : last ? ` · 최근 ${last.ref} 완료` : ''}</div>`;
   }
   renderDetail() {
     const st = this.detailSt, sim = this.sim;

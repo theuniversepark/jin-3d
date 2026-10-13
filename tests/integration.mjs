@@ -20,15 +20,15 @@ s.disruptSupply?.(300); run(400);
 console.log('== 진화 컨셉');
 { const el = { innerHTML: '' }; renderConcept(el, { current: 'dark', res: null, lineName: '정밀조립Zone', busy: false });
   const h = el.innerHTML;
-  check('진화 컨셉에 현장 감시(CCTV) · 통신망(5G) · ERP · 입고·창고 · 이동 로봇 에너지 단계 비교', ['현장 감시 (CCTV)', 'CCTV 에이전트', '통신망', 'Private 5G', 'ERP (업무 기록)', 'Odoo', '입고·창고', '이동 로봇 에너지', '패킷 덤프'].every((k) => h.includes(k))); }
+  check('진화 컨셉에 현장 감시(CCTV) · 통신망(5G) · ERP · 입고·창고 · 이동 로봇 에너지 단계 비교', ['현장 감시 (CCTV)', 'CCTV 에이전트', '통신망', 'Private 5G', 'ERP (업무 기록)', 'Fac', '입고·창고', '이동 로봇 에너지', '패킷 덤프'].every((k) => h.includes(k))); }
 
-console.log('== 오케스트레이터 ↔ ERP(Odoo)');
+console.log('== 오케스트레이터 ↔ ERP(Fac)');
 { const inc = s.orch.incidents.find((i) => i.key === `fail:${st.id}`);
-  check('설비 고장 인시던트 타임라인에 Odoo 긴급 정비요청 번호', !!inc?.erp && inc.steps.some((x) => /ERP\(Odoo\) (긴급 정비요청|정비요청 .* 긴급으로 전환)/.test(x.text)), inc?.erp ?? '없음');
+  check('설비 고장 인시던트 타임라인에 Fac 긴급 정비요청 번호', !!inc?.erp && inc.steps.some((x) => /ERP\(Fac\) (긴급 정비요청|정비요청 .* 긴급으로 전환)/.test(x.text)), inc?.erp ?? '없음');
   const mr = s.erp.db.mr.find((m) => m.ref === inc?.erp);
   check('정비요청에 인시던트 번호 · 수리 완료 시 타임라인에 완료 기록', mr?.incident === inc?.id && (mr.stage !== 'done' || inc.steps.some((x) => x.text.includes(`${mr.ref} 완료`)) || inc.status !== 'open'), mr ? `${mr.ref} ${mr.stage}` : '');
   const sup = s.orch.incidents.find((i) => i.key === 'supply');
-  check('자재 공급 차질 인시던트 기간에 발주가 나면 구매오더 번호 기록 (또는 차질 중 발주 없음)', !sup || sup.steps.some((x) => /ERP\(Odoo\) 구매오더 P\d{5}/.test(x.text)) || !s.erp.db.po.some((p) => p.date_order >= sup.t0 && p.date_order <= (sup.tEnd ?? s.time)), sup ? `인시던트 #${sup.id}` : '차질 없음'); }
+  check('자재 공급 차질 인시던트 기간에 발주가 나면 구매오더 번호 기록 (또는 차질 중 발주 없음)', !sup || sup.steps.some((x) => /ERP\(Fac\) 구매오더 P\d{5}/.test(x.text)) || !s.erp.db.po.some((p) => p.date_order >= sup.t0 && p.date_order <= (sup.tEnd ?? s.time)), sup ? `인시던트 #${sup.id}` : '차질 없음'); }
 
 console.log('== Claude 에이전트 스냅샷');
 { const L = new LLMController(); L.reset?.(s, ag); L.sim = s; L.agent = ag;
