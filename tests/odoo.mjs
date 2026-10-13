@@ -1,5 +1,5 @@
 // Odoo 연동 검증 (1순위: 발주 · 재고 · 설비보전)
-// ① 시뮬레이션 Odoo: 피지컬AI 2시간 — 구매오더 = WMS 발주, 입고 확정 = 입고 트럭, 재고(로케이션별) = 시뮬레이션 재고와 정확히 일치,
+// ① 시뮬레이션 Fac(내장): 피지컬AI 2시간 — 구매오더 = WMS 발주, 입고 확정 = 입고 트럭, 재고(로케이션별) = 시뮬레이션 재고와 정확히 일치,
 //    출고 = 출하 수량, 정비요청 = 고장(긴급)·정비 지시(예방), 완료 시 소요 시간
 // ② 실시간 Odoo: 같은 이벤트를 게이트웨이(server/odoo-gateway.mjs)로 가짜 Odoo(JSON-RPC, tests/fake-odoo.mjs)에 보내
 //    Odoo 쪽 재고·구매오더·정비요청이 시뮬레이션과 같은지 (Odoo 17 · 18 제품 유형)
@@ -24,7 +24,7 @@ const pendIn = (k) => P.filter((p) => p.type === 'incoming' && p.state !== 'done
 const pendOut = (k) => P.filter((p) => p.type === 'outgoing' && p.state !== 'done').flatMap((p) => p.lines).reduce((a, l) => a + (l.product === k ? l.done : 0), 0)
   + (s.forklifts ?? []).reduce((a, f) => a + (f.load?.type === 'fg' && (f.load.product ?? 'doortrim') === k ? f.load.n : 0), 0);
 const expRaw = s.whRaw - pendIn('raw'), expParts = s.whParts - pendIn('parts'), expDT = s.fgBy.doortrim + pendOut('doortrim'), expEA = s.fgBy.eaxle + pendOut('eaxle');
-console.log('== 시뮬레이션 Odoo (피지컬AI 2시간)');
+console.log('== 시뮬레이션 Fac (내장, 피지컬AI 2시간)');
 check('구매오더 = WMS 발주 · 입고 확정 + 진행 중 = 구매오더 수', S.po > 0 && S.receipts + S.poOpen === S.po && S.receipts >= s.inbound.stats.trucks - 1 && S.poOpen === s.inbound.orders.length + [...E.byTruck.values()].filter((r) => !r.po.received).length, `구매오더 ${S.po}건 · 입고 확정 ${S.receipts} · 진행 중 ${S.poOpen} · ${(S.amount / 1e6).toFixed(1)}백만원`);
 check('입고 수량 = 입고 트럭이 내린 수량 (원자재·부품)', P.filter((p) => p.type === 'incoming').flatMap((p) => p.lines).reduce((a, l) => a + (l.product === 'raw' ? l.done : 0), 0) === s.inbound.stats.raw && P.filter((p) => p.type === 'incoming').flatMap((p) => p.lines).reduce((a, l) => a + (l.product === 'parts' ? l.done : 0), 0) === s.inbound.stats.parts, `원자재 ${s.inbound.stats.raw} · 부품 ${s.inbound.stats.parts}`);
 check('물류 선반 재고 = 시뮬레이션 창고 재고 − 입고 확정 전 수량', Q.rackRaw.raw === expRaw && Q.rackParts.parts === expParts, `원자재 ${Q.rackRaw.raw} (창고 ${s.whRaw} − 확정 전 ${pendIn('raw')}) · 부품 ${Q.rackParts.parts}`);
@@ -49,7 +49,7 @@ for (const version of ['17.0', '18.0']) {
   const st2 = G.odooStatus();
   check(`Odoo ${version}: 로그인 · 이벤트 ${E.pending().length}건 모두 적용 (실패 0)`, !err && res.applied === E.pending().length && st2.failed === 0, err ?? st2.lastError ?? `구매오더 ${st2.created['purchase.order'] ?? 0} · 전표 ${st2.created['stock.picking'] ?? 0} · 정비요청 ${st2.created['maintenance.request'] ?? 0}`);
   const raw = fake.stockAt('물류선반-원자재', 'RM-BOX'), parts = fake.stockAt('물류선반-부품', 'PT-KIT'), dt = fake.stockAt('구분적재장', 'FG-DT'), ea = fake.stockAt('구분적재장', 'FG-EA');
-  check(`Odoo ${version}: Odoo 재고 = 시뮬레이션 Odoo 재고 (선반 원자재·부품, 구분 적재장)`, raw === Q.rackRaw.raw && parts === Q.rackParts.parts && dt === Q.output.doortrim && ea === Q.output.eaxle, `원자재 ${raw} · 부품 ${parts} · 도어트림 ${dt} · e-axle ${ea}`);
+  check(`Odoo ${version}: Fac 서버 재고 = 시뮬레이션 Fac (내장) 재고 (선반 원자재·부품, 구분 적재장)`, raw === Q.rackRaw.raw && parts === Q.rackParts.parts && dt === Q.output.doortrim && ea === Q.output.eaxle, `원자재 ${raw} · 부품 ${parts} · 도어트림 ${dt} · e-axle ${ea}`);
   const pos = [...fake.T['purchase.order'].values()], mrs = [...(fake.T['maintenance.request']?.values() ?? [])];
   check(`Odoo ${version}: 구매오더 확정 · 정비요청 단계(완료) · 재주문 규칙 · 설비`, pos.length === S.po && pos.every((p) => p.state === 'purchase') && mrs.length === E.db.mr.length && mrs.filter((m) => m.stage_id?.[0] && fake.T['maintenance.stage'].get(m.stage_id[0]).done).length === E.db.mr.filter((m) => m.stage === 'done').length && fake.T['stock.warehouse.orderpoint'].size === 2 && fake.T['maintenance.equipment'].size === S.equipment);
   fake.close();

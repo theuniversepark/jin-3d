@@ -9,7 +9,7 @@
 //  · 설비보전: 셀·셀 로봇·이동 로봇을 설비(maintenance.equipment, 일련번호 = 설비 고유 ID)로 등록하고,
 //          설비 고장 → 긴급 정비요청(corrective), 예지·예방 정비 지시 → 예방 정비요청(preventive),
 //          정비 인력 배정 → 진행 중, 수리·정비 완료 → 완료(소요 시간 기록)
-// 두 가지 모드: ① 시뮬레이션 Odoo(내장 — 같은 모델·전표 번호·상태로 기록, 서버 없이 동작)
+// 두 가지 모드: ① 시뮬레이션 Fac(내장 — 같은 모델·전표 번호·상태로 기록, 서버 없이 동작)
 //              ② 실시간 Odoo(서버 /api/odoo/sync → server/odoo-gateway.mjs가 JSON-RPC로 실제 Odoo에 생성·확정)
 // 렌더링과 분리되어 헤드리스 시뮬레이션에서도 같은 흐름으로 동작한다 (tests/odoo.mjs).
 import { WH } from './receiving.js';
