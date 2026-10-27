@@ -301,6 +301,7 @@ export class UI {
       ${sim.mode.key === 'traditional' ? '<div class="note">※ 레거시 공장에는 센서가 없어 건강도·RUL은 현장에서 보이지 않는 시뮬레이션 내부값입니다.</div>' : ''}
       ${this.erpLine(st)}
       ${sim.zone && sim.sps && SPS_CELLS.includes(st.id) ? spsHtml(sim.sps, st.id) : ''}
+      ${st.def.type === 'pack' && sim.zone ? `<div class="note">🏷 최종 외관·라벨 검사 합격 시 시리얼 발행 · QR 라벨 (GS1 Digital Link) — 발행 <b>${st.marks ?? 0}</b>개${st.lastMark ? ` · 최근 <b>${esc(st.lastMark.id)}</b>` : ''}</div>` : ''}
       <div class="btns"><button data-act="fault">⚡ 고장 주입</button><button data-act="pm">🔧 정비 지시</button></div>
       <div class="pcap-box" id="pcapBox"></div>`;
     this.onDetailRendered?.();

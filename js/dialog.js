@@ -12,7 +12,7 @@ const CELL_ALIASES = [
   [/도어\s*트림\s*(체결|스크류|나사)/, 'DT_FAST'],
   [/(e-?\s*axle|이\s*액슬|이\s*엑슬)\s*(조립)/i, 'EA_ASSY'],
   [/(e-?\s*axle|이\s*액슬|이\s*엑슬)\s*(체결)/i, 'EA_FAST'],
-  [/포장/, 'PACK'],
+  [/포장|검사\s*셀/, 'PACK'],
 ];
 const ALL_RE = /전체|모든|모두|공장|라인\s*전|zone|존\s*전체|전\s*셀/i;
 const norm = (s) => s.replace(/\s+/g, '').toLowerCase();

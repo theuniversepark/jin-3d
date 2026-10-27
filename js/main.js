@@ -258,7 +258,7 @@ function renderZoneCard() {
         <div class="zc-line p-eaxle"><small>▶ e-axle 라인 · ${escH(ZONE_PRODUCTS.eaxle.customer)}</small>${cellRow('EA_ASSY')}${cellRow('EA_FAST')}</div></div>
         ${cellRow('PACK')}</div>
       <div class="zc-amr" id="zcAmr"></div>
-      <div class="zc-flow">투입 → 1.분류 → <span class="t-dt">도어트림 2.조립 → 3.체결</span> / <span class="t-ea">e-axle 4.조립 → 5.체결</span> → 6.포장 → 구분 적재</div>`;
+      <div class="zc-flow">투입 → 1.분류 → <span class="t-dt">도어트림 2.조립 → 3.체결</span> / <span class="t-ea">e-axle 4.조립 → 5.체결</span> → 6.검사·포장 → 구분 적재</div>`;
   } else body = `<div class="zc-sub">${escH(currentLine.name)} · 공정 ${currentLine.stations.length}개 (공정 설계에서 편집)</div>`;
   zoneCard.innerHTML = `<div class="zc-h"><b>${ZONE_NAME}</b><small>메타팩토리 테스트베드 · 6셀 혼류</small></div>
     <div class="seg small" id="slotSeg">${seg}</div>${body}`;
@@ -299,7 +299,7 @@ zoneCard.addEventListener('click', (e) => {
     const w = ZONE_MIXES[currentLine.mix];
     sim.log('act', `혼류 비율 변경 · 도어트림 : e-axle = ${w.label}`, {
       obs: `투입 순서를 비율에 맞춰 평준화 (도어트림 ${w.w.doortrim} : e-axle ${w.w.eaxle})`,
-      dec: '1.부품분류셀이 부품 종류를 판별해 제품별 라인으로 분기, 6.포장셀에서 합류',
+      dec: '1.부품분류셀이 부품 종류를 판별해 제품별 라인으로 분기, 6.검사·포장셀에서 합류 (최종 검사 합격 시 시리얼·QR)',
       act: '시뮬레이션 재시작',
     });
     return;

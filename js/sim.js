@@ -79,6 +79,7 @@ export const TOOL_KITS = {
   debris: { label: '이물질 수거 도구', items: '빗자루 · 쓰레받기 · 수거함', vis: 'broom', at: 4.35 },
   smoke:  { label: '소화기', items: '분말 소화기', vis: 'extinguisher', at: -1.3 },   // 왼쪽 끝 충전 스테이션과 떨어지게
 };
+const SERIAL_YMD = (() => { const d = new Date(); return `${String(d.getFullYear()).slice(2)}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; })();   // 시리얼 생산일 (실행한 날)
 const TECH_ROOM = { x: 12.8, z: 16.0 };   // 정비실 기준점 (factory.js 정비실 그룹과 같은 자리)
 export const toolSpot = (kit) => ({ x: TECH_ROOM.x + TOOL_KITS[kit].at, z: 14.65, aisle: 'F', name: `정비실 ${TOOL_KITS[kit].label} 보관대` });
 // 정비실 동선: 정비 휴머노이드 충전 스테이션은 정비실 양쪽 끝(서로 마주 봄), 도구 보관대는 안쪽 줄(z 14.65)
@@ -360,6 +361,7 @@ export class Simulation {
     this.time = 0;
     this.nextItemId = 1;
     this.logs = []; this.logSeq = 0; this.events = [];
+    this.serialSeq = {};   // 제품 시리얼 일련번호 (제품 코드별 · 재사용 없음)
     this.stats = { released: 0, good: 0, escaped: 0, rejected: 0, failures: 0, pm: 0, cal: 0, energy: 0, shipped: 0, wipInt: 0, supplyTrips: 0, goodBy: {} };
     this.history = []; this.lastHist = -999;
     this.rawStock = 24; this.inboundRaw = 0; this.fgStock = 0; this.safetyStock = 10;
@@ -1040,6 +1042,14 @@ export class Simulation {
     sink.state = this.time - (sink.lastIn ?? -99) < 12 ? 'BUSY' : 'IDLE';
   }
 
+  // 제품 시리얼 (상위 meta-factory js/serial.js의 발행 부분): 최종 검사 합격 순간 제품 코드별 순차 발행 — DT-YYMMDD-000045 (재사용 없음)
+  // QR 라벨 내용은 GS1 Digital Link 형식(GTIN · AI 21 시리얼 · AI 11 생산일) — 업체코드 880 0000은 가상 값
+  markSerial(st, it) {
+    const code = it.product === 'doortrim' ? 'DT' : 'EA', n = (this.serialSeq[code] = (this.serialSeq[code] ?? 0) + 1);
+    it.serial = `${code}-${SERIAL_YMD}-${String(n).padStart(6, '0')}`;
+    st.lastMark = { t: this.time, id: it.serial }; st.marks = (st.marks ?? 0) + 1;
+  }
+
   hazard(st) {
     return 0.00008 + 0.02 * Math.pow(Math.max(0, (60 - st.health) / 60), 2);
   }
@@ -1047,7 +1057,7 @@ export class Simulation {
   // ── 분류·포장 게이트 (혼류) ─────────────────
   // 셀 입구의 게이트가 들어오는 대상물을 비전·ID로 판별해 결정을 내리고, 그 결정에 맞는 로봇이 주 작업을 맡는다.
   // 분류셀: 도어트림/e-axle 판별 → 해당 제품 라인으로 분기 + 그 제품 쪽 로봇이 제품별 부품 키팅, 반대쪽 로봇은 작업물 고정·ID 태그
-  // 포장셀: 도어트림 → 트레이 포장 / e-axle → 크레이트 포장 — 그 포장재 매거진 쪽 로봇이 포장, 반대쪽 로봇은 고정·라벨
+  // 검사·포장셀: 도어트림 → 트레이 포장 / e-axle → 크레이트 포장 — 그 포장재 매거진 쪽 로봇이 포장, 반대쪽 로봇은 고정·라벨
   // 로봇 쪽: 도어트림 = +z(홀수 번째 로봇), e-axle = −z(짝수 번째 로봇). 같은 쪽 로봇이 없으면 첫 로봇이 맡는다
   gateDecide(st) {
     if (st.def.type !== 'sort' && st.def.type !== 'pack') return;
@@ -1252,6 +1262,7 @@ export class Simulation {
     } else {
       const p = (m.defectBase / 4) * (st.def.defectMul ?? 1) * (1 + (100 - st.health) / 50) * (1 + st.drift * 1.5) * (this.vla?.defectFactor(st) ?? 1);
       if (!it.defect && this.rand() < p) { it.defect = true; it.defectBy = st.id; st.c.defects++; }
+      if (st.def.type === 'pack' && this.zone && it.product) this.markSerial(st, it);   // 검사·포장셀 최종 외관·라벨 검사 합격 → 제품 시리얼 발행 · QR 라벨 부착 · 판독
     }
     if (st.def.effect === 'sort') it.sorted = true;
     else if (st.def.effect === 'press') it.pressed = true;

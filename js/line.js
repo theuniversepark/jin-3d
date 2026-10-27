@@ -54,7 +54,7 @@ export const DEFAULT_LINE = {
 
 // ── 메타팩토리 테스트베드 정밀조립Zone (혼류 생산) ─────────────────
 // 자재 투입 → 부품분류셀(공동)에서 부품 종류를 판별해 도어트림 라인 / e-axle 라인으로 분기
-// → 각 라인의 조립셀 → 체결셀 → 포장셀(공동)로 합류 → 제품별 포장 후 구분 적재장의 제품별 구역에 적재.
+// → 각 라인의 조립셀 → 체결셀 → 검사·포장셀(공동)로 합류 → 최종 외관·라벨 검사 합격 시 제품 시리얼·QR 라벨 → 제품별 포장 후 구분 적재장의 제품별 구역에 적재.
 // side -1: 설비 앞면(작업자·AGV 쪽)이 뒤쪽 통로를 향하도록 앞뒤 반전 배치
 export const ZONE_NAME = '정밀조립Zone';
 export const ZONE_PRODUCTS = {
@@ -67,7 +67,7 @@ export const ZONE_CELLS = {
   DT_FAST: { no: '3', type: 'screw',    label: '도어트림 체결셀', product: 'doortrim', use: '도어트림 라인', x: 7, z: 4.6 },
   EA_ASSY: { no: '4', type: 'assembly', label: 'e-axle 조립셀',  product: 'eaxle',    use: 'e-axle 라인', x: -5, z: -4.6, side: -1 },
   EA_FAST: { no: '5', type: 'fasten',   label: 'e-axle 체결셀',  product: 'eaxle',    use: 'e-axle 라인', x: 7, z: -4.6, side: -1 },
-  PACK:    { no: '6', type: 'pack',     label: '포장셀',          product: 'shared',   use: '공동 · 제품별 포장', x: 18, z: 0 },
+  PACK:    { no: '6', type: 'pack',     label: '검사·포장셀',     product: 'shared',   use: '공동 · 최종 검사·시리얼(QR)·제품별 포장', x: 18, z: 0 },
 };
 const ZONE_SRC = { x: -28, z: 0 };
 const ZONE_SINK = { x: 28, z: 0 };
@@ -229,6 +229,7 @@ export function normalizeLine(raw) {
     }
     for (const s of stations) {
       const cell = ZONE_CELLS[s.id];
+      if (cell) s.name = cell.label;   // 셀 이름도 고정 (저장된 예전 이름 — 예: 포장셀 → 검사·포장셀)
       if (cell && s.type !== cell.type) { warnings.push(`${cell.label}의 유형은 ${STATION_TYPES[cell.type].label}로 고정 → 되돌림`); s.type = cell.type; }
       const R0 = ZONE_RECIPES.find((r) => r.id === s.id);   // 실제 작업 시간: 예전 저장 레시피(시간표 없음)는 사이클을 새 기준 시간으로 되돌린다
       if (R0?.T) { if (!src.find((x) => String(x.id ?? '').toUpperCase() === s.id)?.T) { s.cycle = R0.cycle; s.robot = { ...R0.robot }; s.task = R0.task; } s.T = R0.T; }   // 로봇 구성·하는 일도 새 기준 (e-axle 조립셀 6축 2대)

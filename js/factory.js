@@ -1592,7 +1592,7 @@ function buildVision(g) {
 
 function buildPack(g, st, sim) {
   if (sim?.zone) {
-    // 공동 포장셀: 입구에 포장 게이트(제품 판별 → 트레이 박스/폴딩 크레이트), 셀 양옆 밖에 포장대(도어트림 +z · e-axle −z) — 그 제품 쪽 로봇이 포장 (js/pack.js)
+    // 공동 검사·포장셀: 입구에 포장 게이트(제품 판별 → 트레이 박스/폴딩 크레이트), 셀 양옆 밖에 포장대(도어트림 +z · e-axle −z) — 그 제품 쪽 로봇이 포장 (js/pack.js)
     // 포장대마다: 접힌 상자 매거진(서쪽) · 라벨 프린터(셀 쪽 가장자리) · 뚜껑 (자동화 = 셀 안 모서리 선반 · 피지컬AI = 포장대 동쪽 랙) · 출구 쪽 문형에는 QR 판독 카메라
     // 게이트 x −2.05 (e-axle 고가반 6축이 매거진으로 뻗을 때 팔꿈치가 기둥을 지난다)
     const gate = buildGate(g, -2.05, 0x58c4ff), G = PACK_GEO, T = G.table, dark = sim.mode?.key === 'dark', pack = {};
@@ -1628,7 +1628,7 @@ function buildPack(g, st, sim) {
     for (const z of [-0.85, 0.85]) put(box(0.12, 1.9, 0.12, MAT.steel), 1.8, 1.0, z, g);
     const head = put(box(0.6, 0.45, 1.8, MAT.white), 1.8, 2.0, 0, g);
     put(box(0.62, 0.1, 1.82, MAT.accent), 0, -0.25, 0, head);
-    // 검사·포장셀: 최종 외관 검사·QR 라벨 판독 카메라 (출구 문형 — 마킹·판독 순간 밝아짐, js/serial.js)
+    // 검사·포장셀: 최종 외관 검사·QR 라벨 판독 카메라 (출구 문형 — 마킹·판독 순간 밝아짐, sim.markSerial)
     const markMat = emis(0x37e8ff, 0.35), rd = put(new THREE.Group(), -0.05, -0.36, 0.5, head); rd.name = 'CodeReader';
     put(box(0.14, 0.12, 0.18, MAT.dark), 0, 0, 0, rd); put(new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.009, 6, 14), markMat), 0, -0.07, 0, rd).rotation.x = Math.PI / 2;
     return { ...gate, markMat, pack, light: PACK_GEO.light };
@@ -3141,6 +3141,7 @@ export class FactoryView {
       case 'sort': {
         if (parts.sps) this.animSps(parts.sps, st, t);
         if (parts.pack) this.animPack(parts.pack, st);
+        if (parts.markMat) parts.markMat.emissiveIntensity = st.lastMark && this.sim.time - st.lastMark.t < 1.2 ? 6 : 0.35;   // 시리얼 QR 라벨 판독 순간
         if (!parts.gateSign) break;
         // 대상물이 입구 게이트를 지나는 동안 스캔 → 판별 결과를 표시판·스캔 링 색으로 보여 준다
         const passing = !!st.item && (st.itemT ?? 9) < this.sim.entryTime + 0.6;
