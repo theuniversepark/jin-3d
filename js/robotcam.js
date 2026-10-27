@@ -12,6 +12,13 @@ const FONT = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif
 const CLS_COLOR = { 설비: '#37a0ff', 협동로봇: '#2bd4c6', AMR: '#3ddc84', AGV: '#3ddc84', 휴머노이드: '#b89bff', 사족보행: '#f5d36b', 사람: '#ff5a5a', 누유: '#ff7a3d', 이물질: '#f5b82e', 연기: '#ff5a5a' };
 const hash = (s) => { let h = 2166136261; for (const c of String(s)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0) / 4294967295; };
 
+// 손목 카메라 시점: 카메라 몸체(앵커 +z = 렌즈) 그대로 — aimWristCam(payload-robots.js)으로 그리퍼 접근 축 앞을 보게 맞춰 둠
+function wristPose(a) {
+  a.updateWorldMatrix(true, false);
+  const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(a.getWorldQuaternion(new THREE.Quaternion()));
+  return { pos: a.getWorldPosition(new THREE.Vector3()).addScaledVector(dir, 0.03), dir, ahead: 0.3 };
+}
+
 export class RobotCamWall {
   constructor(scene, renderer) {
     this.scene = scene; this.renderer = renderer;
@@ -177,6 +184,7 @@ export class RobotCamWall {
     if (ref.type === 'cell') {
       const sv = view?.stationViews.find((x) => x.st.id === ref.stationId), r = sv?.parts.robots?.[ref.idx];
       if (!r) return null;
+      if (r.vla && r.wristCameraAnchor) return { label: `${r.spec ? `${r.spec.model} ` : ''}손목 카메라 · VLA`, pose: () => wristPose(r.wristCameraAnchor) };
       if (r.vla) { const up = new THREE.Vector3(); return { label: '손목 카메라 · VLA', pose: () => { const p = r.tip.getWorldPosition(new THREE.Vector3()); up.set(0, 1, 0).transformDirection(r.tip.parent.matrixWorld); return { pos: p.addScaledVector(up, -0.06), dir: up.clone(), ahead: 1.2 }; } }; }
       if ((r.kind === 'ammr' || r.kind === 'humanoid') && r.cams) return this.anchorCam(r.cams, ref.cam, r.kind === 'ammr' ? 'AMMR' : '휴머노이드');
       return { label: '셀 상부 카메라', pose: () => { const p = r.root.getWorldPosition(new THREE.Vector3()); const c = new THREE.Vector3(sv.st.x, 1.2, sv.st.z); return { pos: p.add(new THREE.Vector3(0, 2.6, 0)), dir: c.sub(p).normalize(), ahead: 3 }; } };

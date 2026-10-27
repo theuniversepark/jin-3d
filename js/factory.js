@@ -10,6 +10,8 @@ import { DRONE_PAD, dronePad } from './drone.js';
 import { STAGES, INCIDENT_TYPES, prioOf } from './orchestrator.js';
 import { NR } from './net5g.js';
 import { blenderOn, cloneAsset, RENDER } from './blender.js';
+import { makePayloadArm, makePayloadDual, aimWristCam } from './payload-robots.js';
+import { ROBOT_SPECS } from './robot-specs.js';
 import { equipmentList, STATUS_CLASS } from './assets.js';
 import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, AMR_LANES, amrPark, ZONE_AMR, AMMR, AMMR_FETCH } from './line.js';
 
@@ -147,7 +149,9 @@ function makeArmBlender(mat, s) {
   pose(0, 0.2, 0.9, 0.5);
   return { root, turret, shoulder, elbow, wrist, tip, pose, joints, blender: true };
 }
-function makeArm(mat, s = 1) {
+// model: 실물 로봇(ROBOT_SPECS 키 — 'cobot' UR20 · 'articulated' ABB IRB 4600)의 원본 형상·관절로 만든다 (Blender 모델 렌더일 때)
+function makeArm(mat, s = 1, model = null) {
+  if (blenderOn() && model) return makePayloadArm(model);
   if (blenderOn()) return makeArmBlender(mat, s);
   const root = new THREE.Group();
   put(cyl(0.34 * s, 0.42 * s, 0.4 * s, MAT.dark), 0, 0.2 * s, 0, root);
@@ -185,6 +189,17 @@ function armIK(s, x, y, z) {
   return [yaw, a, b, Math.PI - a - b];
 }
 
+// 손목(마지막 관절) 비트 회전: 실물 로봇 모델(native)은 관절 한계(UR J6 ±360°)에서 잘려 1바퀴 넘게 돌지 못한다 —
+// 바퀴 수를 덜어(±2π, 같은 자세) 한계 안으로 접어 넣어 여러 바퀴를 끊김 없이 돌린다
+function wristSpin(A, q, spin) {
+  if (!spin) return q;
+  const d = A.jointDefs?.[5], T = Math.PI * 2;
+  let a = q + (spin % T);
+  if (d) { while (a > d.max) a -= T; while (a < d.min) a += T; }
+  return a;
+}
+
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 // 관절 정의 (이름·단위·가동 범위) — 텔레메트리 표시용
 const DEG = Math.PI / 180;
 const ARM_JOINTS = [
@@ -582,12 +597,15 @@ function makeHumanoidDock() {
 // Blender 사족보행 (Spot 분위기의 독자 디자인): 관절 빈 객체(Body · Hip_i · Knee_i · Cam)를 3D 모델과 같은 이름·순서로 넘긴다
 function makeQuadrupedBlender() {
   const A = cloneAsset('quadruped'), g = new THREE.Group(); g.add(A.root);
-  const legs = [0, 1, 2, 3].map((i) => ({ hip: A.find(`Hip_${i}`), knee: A.find(`Knee_${i}`) }));
+  // Boston Dynamics Spot (공식 SDK 형상·12축 관절 원점·한계 — blender/BOSTON_DYNAMICS.md)
+  const legs = [0, 1, 2, 3].map((i) => ({ hip: A.find(`Hip_${i}`), knee: A.find(`Knee_${i}`), roll: A.find(`HipRoll_${i}`) }));
   const cam = A.find('Cam');
+  // Cam 노드는 Blender에서 가져온 회전을 갖고 있고 렌즈는 그 로컬 +x 쪽 — 쓸어보기는 이 기본 자세 위에 더하고, 스캔 빔도 렌즈 방향으로 낸다 (로컬 +z로 내면 옆을 비춘다)
+  const camRest = cam.quaternion.clone(), lensDir = (A.find('InspectionLens')?.position.clone() ?? new THREE.Vector3(0, 0, 1)).setY(0).normalize();
   const scanMat = new THREE.MeshBasicMaterial({ color: 0xff7a3d, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-  const beam = put(new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.6, 18, 1, true), scanMat), 0, 0, 1.4, cam);
-  beam.rotation.x = -Math.PI / 2; beam.visible = false;
-  g.userData = { body: A.find('Body'), legs, cam, beam, blender: true };
+  const beam = put(new THREE.Mesh(new THREE.ConeGeometry(0.9, 2.6, 18, 1, true), scanMat), lensDir.x * 1.4, 0, lensDir.z * 1.4, cam);
+  beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), lensDir.clone().negate()); beam.visible = false;   // 원뿔 꼭짓점이 카메라 쪽
+  g.userData = { body: A.find('Body'), bodyRestHeight: A.find('Body').position.y, legs, cam, camRest, beam, blender: true, nativeSpot: true };
   return g;
 }
 function makeQuadruped() {
@@ -718,13 +736,22 @@ const COBOT_JOINT = std(0x2a7fff, { roughness: 0.35 });
 
 function makeRobot(kind, color, opts = {}) {
   if (kind === 'articulated' || kind === 'cobot') {
+    // Blender 모델 렌더: 협동로봇 = Universal Robots UR20 · 6축 = ABB IRB 4600 (공개 ROS 형상·관절 — js/robot-specs.js)
     const cobot = kind === 'cobot';
-    const arm = makeArm(cobot ? COBOT_MAT : color, cobot ? 0.72 : 1);
-    if (cobot) put(cyl(0.13, 0.13, 0.08, COBOT_JOINT), 0, 0.18, 0, arm.turret);
+    const spec = ROBOT_SPECS[kind];
+    const arm = makeArm(cobot ? COBOT_MAT : color, cobot ? 0.72 : 1, kind);
+    if (cobot && !arm.native) put(cyl(0.13, 0.13, 0.08, COBOT_JOINT), 0, 0.18, 0, arm.turret);
+    if (cobot) {   // 협동로봇 받침대 0.5m (로봇 베이스가 받침대 윗면)
+      const pedestal = put(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshStandardMaterial({ color: 0x687581, metalness: 0.55, roughness: 0.45 })), 0, -0.25, 0, arm.root);
+      pedestal.name = 'CobotPedestal'; pedestal.castShadow = true; pedestal.receiveShadow = true;
+    }
+    // 손목 카메라: 플랜지 옆에서 그리퍼 접근 축 앞을 본다 (payload-robots aimWristCam)
+    const wristCameraAnchor = arm.cameraAnchor ?? aimWristCam(camModule(arm.tip.parent, 0, 0.03, 0.095, 0, 0, 0.035), arm.tip);
     const speed = cobot ? 1.4 : 2.2;
     return {
-      root: arm.root, kind, tip: arm.tip, jointDefs: ARM_JOINTS, joints: arm.joints, payload: cobot ? 5 : 20, arm, scale: cobot ? 0.72 : 1,
+      root: arm.root, kind, spec, tip: arm.tip, jointDefs: arm.jointDefs ?? ARM_JOINTS, joints: arm.joints, payload: spec.payload, arm, scale: cobot ? 0.72 : 1, wristCam: true, wristCameraAnchor,
       anim(busy, t) {
+        if (arm.native) { const q = arm.home.slice(); if (busy) { q[0] += Math.sin(t * speed) * 0.35; q[1] += Math.sin(t * speed * 0.7) * 0.14; q[2] += Math.cos(t * speed) * 0.15; q[5] += Math.sin(t * speed * 0.6) * 0.5; } arm.pose(...q); return; }
         if (busy) {
           const w = t * speed;
           arm.pose(Math.sin(w) * 0.35, 0.7 + Math.sin(w * 1.3) * 0.12, 1.25 + Math.cos(w) * 0.1, 0.75, Math.sin(w * 0.9) * 0.3, Math.sin(w * 0.6) * 1.6);
@@ -732,6 +759,7 @@ function makeRobot(kind, color, opts = {}) {
       },
     };
   }
+  if (kind === 'ammr' && blenderOn()) return makePayloadDual(camModule);   // Rainbow Robotics RB-Y1 (공식 URDF 형상·관절: 몸통 6축 · 팔 7축 × 2 · 바퀴 · 머리)
   if (kind === 'ammr') {
     // AMR 기반 양팔 로봇: 이동 플랫폼(바퀴·라이다) + 승강 몸통 + 양팔(각 6축) + 머리 카메라. 로컬 +z가 작업 쪽(통로)
     const root = new THREE.Group();
@@ -992,7 +1020,7 @@ function placeRobots(g, st) {
     else {
       const [x, z, yaw] = slots[i];
       // AMMR은 이동 플랫폼 깊이(0.64m)만큼 통로에서 조금 더 떨어져 도킹한다
-      put(r.root, x, kind === 'ammr' ? 0.06 : 0.15, kind === 'ammr' ? Math.sign(z) * AMMR.slotZ : z, group); r.root.rotation.y = yaw;
+      put(r.root, x, kind === 'ammr' ? 0.06 : kind === 'cobot' ? 0.5 : 0.15, kind === 'ammr' ? Math.sign(z) * AMMR.slotZ : z, group); r.root.rotation.y = yaw;
       r.slot = { x, z: kind === 'ammr' ? Math.sign(z) * AMMR.slotZ : z, yaw, side: Math.sign(z) };
     }
     r.phase = i * 1.3;
@@ -1030,7 +1058,7 @@ function placeRobots(g, st) {
       [0x2f6fd6, 0x3ddc84, 0xf5b82e, 0xd23b3b].forEach((c, k) => bins.push(put(box(0.2, 0.12, 0.24, std(c)), -0.11 + (k % 2) * 0.22, y + 0.075, -0.13 + Math.floor(k / 2) * 0.26, sh)));
     });
     const flange = r.tip.parent;
-    const cam = put(box(0.07, 0.05, 0.06, MAT.dark), 0.07, 0.02, 0, flange);
+    const cam = r.wristCameraAnchor ?? put(box(0.07, 0.05, 0.06, MAT.dark), 0.07, 0.02, 0, flange);
     const lens = emis(0x37e8ff, 1.5); put(cyl(0.018, 0.018, 0.02, lens, 10), 0, 0.035, 0, cam);   // 손목 카메라 렌즈 (도구 방향)
     const names = cellParts(st);
     fillBins(bins, names);
@@ -1411,11 +1439,13 @@ function buildSink(g, st, sim) {
         const lx = i % 4, lz = Math.floor(i / 4) % 3, ly = Math.floor(i / 12);
         stacks[k].push(put(box(0.66, 0.5, 0.66, mat), -1.05 + lx * 0.7, 0.43 + ly * 0.52, sd * (2.3 + lz * 0.7), g));
       }
-      const arm = makeArm(k === 'doortrim' ? MAT.orange : std(0x7a5cc8, { roughness: 0.45, metalness: 0.3 }), PALLET_ARM.s);
+      const arm = makeArm(k === 'doortrim' ? MAT.orange : std(0x7a5cc8, { roughness: 0.45, metalness: 0.3 }), PALLET_ARM.s, 'articulated');
       put(arm.root, 0, 0.06, sd * PALLET_ARM.z, auto);
+      const sc = arm.native ? PALLET_ARM.s : 1; arm.root.scale.setScalar(sc);   // 실물 IRB 4600 모델을 적재 거리만큼 키운 고가반 6축 (IK는 같은 비율로 나눠 푼다)
       put(cyl(0.62, 0.66, 0.06, std(ZONE_COLOR[k], { roughness: 0.5 })), 0, 0.03, sd * PALLET_ARM.z, auto);   // 제품 색 받침
-      const held = put(box(0.66, 0.5, 0.66, mat), 0, -0.25 - 0.02, 0, arm.tip); held.visible = false;       // 진공 그리퍼에 붙은 박스
-      arms[k] = { arm, sd, held, queue: 0, cyc: null, seen: null };
+      // 진공 그리퍼에 붙은 박스 — 실물 로봇은 TCP +y가 툴 방향이라 그쪽에 매단다
+      const held = put(box(0.66, 0.5, 0.66, mat), 0, ((arm.native ? 1 : -1) * 0.27) / sc, 0, arm.tip); held.scale.setScalar(1 / sc); held.visible = false;
+      arms[k] = { arm, sd, held, queue: 0, cyc: null, seen: null, sc };
     });
     return { zoneStacks: stacks, arms, auto };
   }
@@ -1425,7 +1455,7 @@ function buildSink(g, st, sim) {
     const lx = i % 4, lz = Math.floor(i / 4) % 3, ly = Math.floor(i / 12);
     stack.push(put(box(0.66, 0.5, 0.66, MAT.carton), -1.05 + lx * 0.7, 0.52 + ly * 0.52, 1.5 + lz * 0.7, g));
   }
-  const arm = makeArm(MAT.orange, 0.9); put(arm.root, 1.7, 0.15, 0.9, g);
+  const arm = makeArm(MAT.orange, 0.9, 'articulated'); put(arm.root, 1.7, 0.15, 0.9, g);
   return { stack, arm, auto: arm.root };
 }
 
@@ -2614,12 +2644,17 @@ export class FactoryView {
     g.rotation.y = qv.yaw;
     ud.legs.forEach(({ hip, knee }, i) => {
       const ph = t * 10 + (i === 0 || i === 3 ? 0 : Math.PI);   // 대각 보행(trot)
+      if (ud.nativeSpot) {   // Spot 원본 관절: 관절 축·한계(기본 자세 기준)로 돌린다
+        const angle = (node, q) => node.quaternion.setFromAxisAngle(new THREE.Vector3(...node.userData.axis), THREE.MathUtils.clamp(q, node.userData.lower - node.userData.rest_angle, node.userData.upper - node.userData.rest_angle));
+        angle(hip, moved ? Math.sin(ph) * 0.25 : 0); angle(knee, moved ? Math.max(0, -Math.sin(ph)) * 0.4 : 0); return;
+      }
       hip.rotation.x = moved ? Math.sin(ph) * 0.45 : 0;
       knee.rotation.x = moved ? Math.max(0, -Math.sin(ph)) * 0.6 + 0.15 : 0.15;
     });
-    ud.body.position.y = 0.55 + (moved ? Math.abs(Math.sin(t * 10)) * 0.025 : 0);
+    ud.body.position.y = (ud.bodyRestHeight ?? 0.55) + (moved ? Math.abs(Math.sin(t * 10)) * 0.025 : 0);
     ud.beam.visible = !!v.scanning;
-    ud.cam.rotation.y = v.scanning ? Math.sin(t * 2.5) * 0.4 : 0;
+    const sweep = v.scanning ? Math.sin(t * 2.5) * 0.4 : 0;   // 점검 중 좌우로 쓸어본다
+    if (ud.camRest) ud.cam.quaternion.setFromAxisAngle(Y_AXIS, sweep).multiply(ud.camRest); else ud.cam.rotation.y = sweep;
     qv.el.innerHTML = `${v.uid ? `<i class="uid">${v.uid}</i>` : ''}${v.id} · ${v.battery.toFixed(0)}%<em>${v.task ?? "대기"}</em>`;
   }
 
@@ -2857,7 +2892,7 @@ export class FactoryView {
   animVLA(r, st, busy, p, i) {
     const V = r.vla, s = r.scale, A = r.arm;
     const th = r.root.rotation.y, c = Math.cos(th), sn = Math.sin(th);
-    const ik = (x, y, z) => { const dx = x - r.slot.x, dz = z - r.slot.z; return armIK(s, dx * c - dz * sn, y - 0.15, dx * sn + dz * c); };
+    const ik = (x, y, z) => { const dx = x - r.slot.x, dz = z - r.slot.z; return A.native ? A.ik(dx * c - dz * sn, y - r.root.position.y, dx * sn + dz * c, true) : armIK(s, dx * c - dz * sn, y - r.root.position.y, dx * sn + dz * c); };
     const wx = r.slot.x * 0.3, wz = r.slot.z * 0.22, wy = 1.3;   // 대상물(AMR 위)에서 로봇 쪽 가장자리
     const K = r.vlaKeys ??= {
       shelfUp: ik(V.shelf.x, V.shelf.y + 0.32, V.shelf.z), grab: ik(V.shelf.x, V.shelf.y + 0.03, V.shelf.z),
@@ -2875,7 +2910,8 @@ export class FactoryView {
       if (u >= 0.55 && u < 0.75) { const f = (u - 0.55) / 0.2; if (st.type === 'screw' || st.type === 'fasten') e = f * Math.PI * 6; else d = Math.sin(f * Math.PI * 4) * 0.12; }
     }
     r.vlaCur = r.vlaCur ? r.vlaCur.map((v, n) => v + (q[n] - v) * 0.35) : q.slice();
-    A.pose(r.vlaCur[0], r.vlaCur[1], r.vlaCur[2], r.vlaCur[3], d, e);
+    if (A.native) { const q = r.vlaCur.slice(); q[4] += d; q[5] = wristSpin(A, q[5], e); A.pose(...q); }
+    else A.pose(r.vlaCur[0], r.vlaCur[1], r.vlaCur[2], r.vlaCur[3], d, e);
     if (held && !V.held.visible && V.heldParts) { V.pick = (V.pick + 1) % V.heldParts.length; V.heldParts.forEach((o, k) => { o.visible = k === V.pick; }); }
     V.held.visible = held;
     if (held && st.item?.product && V.held.material) V.held.material.color.setHex(st.item.product === 'eaxle' ? 0x9a6bff : 0xf0a030);
@@ -2925,13 +2961,14 @@ export class FactoryView {
       if (got > A.seen) { A.queue += got - A.seen; A.seen = got; }
       A.queue = Math.min(A.queue, 3);   // 고속 재생에서 밀리면 앞 사이클은 건너뛴다
       const rz = A.sd * PALLET_ARM.z, s = PALLET_ARM.s;
-      const home = armIK(s, 0, 1.9, -A.sd * 0.6);
+      const sc = A.sc ?? 1, ik = (x, y, z) => A.arm.native ? A.arm.ik(x / sc, y / sc, z / sc, true) : armIK(s, x, y, z);   // 실물 로봇: 툴을 아래로 세워 집고 놓는다
+      const home = ik(0, 1.9, -A.sd * 0.6);
       if (!A.cyc && A.queue > 0 && parts.auto.visible) {
         A.queue--;
         const arr = parts.zoneStacks[k], idx = Math.max(0, Math.min(arr.length - 1, sim.fgBy[k] + (sim.zone ? 0 : -A.queue - 1)));   // 놓을 자리 = 다음 칸 (구분 적재장은 집기 전이라 아직 안 셈)
         const b = arr[idx].position, topY = 0.9 + 0.5;   // AMR 지그 위 박스 윗면
-        const pick = armIK(s, 0, topY, -rz), pickUp = armIK(s, 0, topY + 0.6, -rz);
-        const place = armIK(s, b.x, b.y + 0.25, b.z - rz), placeUp = armIK(s, b.x, b.y + 0.95, b.z - rz);
+        const pick = ik(0, topY, -rz), pickUp = ik(0, topY + 0.6, -rz);
+        const place = ik(b.x, b.y + 0.25, b.z - rz), placeUp = ik(b.x, b.y + 0.95, b.z - rz);
         A.cyc = { t: 0, keys: [[0, home], [0.22, pickUp], [0.32, pick], [0.42, pickUp], [0.7, placeUp], [0.8, place], [0.9, placeUp], [1, home]], placed: false, grabBase: sim.stats.grabBy?.[k] ?? 0 };
       } else if (!A.cyc && !parts.auto.visible) A.queue = 0;
       let q = home;
@@ -2944,7 +2981,7 @@ export class FactoryView {
         if (u >= 0.8) c.placed = true;
         if (c.t >= 1) A.cyc = null;
       } else A.held.visible = false;
-      A.arm.pose(q[0], q[1], q[2], q[3]);
+      if (A.arm.native) A.arm.pose(...q); else A.arm.pose(q[0], q[1], q[2], q[3]);
     }
   }
 

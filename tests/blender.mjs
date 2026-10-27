@@ -14,11 +14,11 @@ function glb(name) {
   return { ok: magic === 0x46546c67 && ver === 2 && len === b.length && jtype === 0x4e4f534a && btype === 0x004e4942, json, bytes: b.length };
 }
 // 장면 전체 경계 상자 (노드 변환: 이동·회전(쿼터니언)·크기 — 정점 min/max의 8개 꼭짓점을 변환해 모은다)
-function bounds(J) {
+function bounds(J, skip = new Set()) {
   const qm = (q, v) => { const [x, y, z, w] = q, [a, b, c] = v, ix = w * a + y * c - z * b, iy = w * b + z * a - x * c, iz = w * c + x * b - y * a, iw = -x * a - y * b - z * c; return [ix * w + iw * -x + iy * -z - iz * -y, iy * w + iw * -y + iz * -x - ix * -z, iz * w + iw * -z + ix * -y - iy * -x]; };
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   const walk = (ni, tf) => {
-    const n = J.nodes[ni];
+    const n = J.nodes[ni]; if (skip.has(n.name)) return;
     const me = (p) => { let v = [p[0] * (n.scale?.[0] ?? 1), p[1] * (n.scale?.[1] ?? 1), p[2] * (n.scale?.[2] ?? 1)]; if (n.rotation) v = qm(n.rotation, v); v = [v[0] + (n.translation?.[0] ?? 0), v[1] + (n.translation?.[1] ?? 0), v[2] + (n.translation?.[2] ?? 0)]; return tf(v); };
     if (n.mesh != null) for (const pr of J.meshes[n.mesh].primitives) {
       const a = J.accessors[pr.attributes.POSITION];
@@ -34,12 +34,12 @@ const SPEC = {   // 3D 모델 치수(폭 x · 높이 y · 길이 z, m)와 같은
   agv: { size: [1.12, 0.5, 1.52], mats: ['LED'], nodes: ['Deck', 'Lidar'] },
   forklift: { size: [1.4, 2.33, 3.1], mats: ['Lamp'], nodes: ['Guard', 'Mast_Top', 'Fork_0.3', 'ForkCarriage'] },
   drone: { size: [1.0, 0.36, 1.0], mats: ['NAV_R', 'NAV_G', 'STROBE'], nodes: ['Rotor_0', 'Rotor_1', 'Rotor_2', 'Rotor_3', 'Gimbal'] },
-  quadruped: { size: [0.54, 1.08, 1.08], mats: ['THERMAL'], nodes: ['Body', 'Cam', 'Hip_0', 'Hip_1', 'Hip_2', 'Hip_3', 'Knee_0', 'Knee_1', 'Knee_2', 'Knee_3'] },
+  quadruped: { size: [0.50, 0.74, 1.10], mats: ['THERMAL'], nodes: ['Body', 'Cam', 'Hip_0', 'Hip_1', 'Hip_2', 'Hip_3', 'Knee_0', 'Knee_1', 'Knee_2', 'Knee_3'] },
   doortrim: { size: [0.8, 0.6, 0.15], mats: ['TrimPlastic', 'Leather', 'Chrome'], nodes: ['Trim_Panel', 'Trim_Armrest', 'Trim_Speaker', 'Trim_Handle'] },
   eaxle: { size: [1.08, 0.58, 0.48], mats: ['Copper', 'HVOrange', 'GearSteel'], nodes: ['FastenBolts', 'MotorHousing', 'GearHousing', 'Inverter', 'Rotor'] },
   truck: { size: [3.14, 3.92, 10.6], mats: ['CabPaint', 'TAIL', 'Tarp'], nodes: ['Door_L', 'Door_R', 'Tail_L', 'Tail_R', 'Deflector'] },
   ammr: { size: [0.83, 1.42, 0.67], mats: ['LED'], nodes: ['Lift', 'Head', 'ChestPanel', 'Lidar'] },
-  humanoid: { size: [0.66, 1.94, 0.44], mats: ['VISOR', 'ACC'], nodes: ['Body', 'Waist', 'Head', 'Shoulder_L', 'Shoulder_R', 'Elbow_L', 'Elbow_R', 'Hip_L', 'Hip_R', 'Knee_L', 'Knee_R'] },
+  humanoid: { size: [0.70, 1.90, 0.40], mats: ['VISOR', 'ACC'], nodes: ['Body', 'Waist', 'Head', 'Shoulder_L', 'Shoulder_R', 'Elbow_L', 'Elbow_R', 'Hip_L', 'Hip_R', 'Knee_L', 'Knee_R'] },
 };
 console.log('== Blender 자산 (assets/blender)');
 const G6 = (J) => /Blender/i.test(J.asset?.generator ?? '');
@@ -75,14 +75,21 @@ check('미리보기 렌더 (Blender Eevee) preview.png', fs.existsSync(new URL('
   check('arm6.glb: 6축 팔 마디 7개(베이스·J1~J6) · 관절 중심 원점 · Blender 생성', G6(J) && !bad.length && J.materials.some((m) => m.name === 'ArmAcc'), bad.join(', ')); }
 for (const k of ['humanoid', 'quadruped', 'truck', 'eaxle', 'parts', 'doortrim', 'maint']) check(`미리보기 렌더 preview_${k}.png`, fs.existsSync(new URL(`preview_${k}.png`, DIR)) && fs.statSync(new URL(`preview_${k}.png`, DIR)).size > 30000);
 { const J = glb('humanoid').json, at = (n) => J.nodes.find((x) => x.name === n), hasRot = ['Body', 'Waist', 'Head', 'Shoulder_L', 'Elbow_L', 'Hip_L', 'Knee_L'].filter((n) => at(n).rotation);
-  // 관절 빈 객체는 회전 없이 놓여야 코드의 rotation.x가 3D 모델과 같은 방향으로 움직인다. 어깨·고관절 높이 = 3D 모델(1.52m · 0.92m)
+  // 관절 빈 객체는 회전 없이 놓여야 코드의 rotation.x가 3D 모델과 같은 방향으로 움직인다. Atlas 실제 키 1.90m에 맞춘 어깨·고관절 높이
   const y = (n) => { let v = 0; for (const [i, x] of J.nodes.entries()) if (x.name === n) { v = x.translation?.[1] ?? 0; let p = i; for (;;) { const q = J.nodes.findIndex((z) => z.children?.includes(p)); if (q < 0) break; v += J.nodes[q].translation?.[1] ?? 0; p = q; } } return v; };
-  check('휴머노이드 관절: 회전 없는 빈 객체 · 어깨 1.52m · 고관절 0.92m (3D 모델과 같은 자리)', !hasRot.length && Math.abs(y('Shoulder_L') - 1.52) < 0.01 && Math.abs(y('Hip_L') - 0.92) < 0.01, `어깨 ${y('Shoulder_L').toFixed(2)} · 고관절 ${y('Hip_L').toFixed(2)}${hasRot.length ? ' · 회전 ' + hasRot : ''}`); }
-{ const J = glb('quadruped').json, at = (n) => J.nodes.find((x) => x.name === n);
-  const rot = ['Body', 'Cam', 'Hip_0', 'Hip_1', 'Hip_2', 'Hip_3', 'Knee_0', 'Knee_1', 'Knee_2', 'Knee_3'].filter((n) => at(n).rotation);
-  // 다리 순서·자리 = 3D 모델 (0: −x 앞 · 1: +x 앞 · 2: −x 뒤 · 3: +x 뒤 — 대각 보행 위상이 이 순서에 맞춰져 있다), 몸통 높이 0.55m
-  const ok = [[-0.21, 0.36], [0.21, 0.36], [-0.21, -0.36], [0.21, -0.36]].every(([x, z], i) => { const t = at(`Hip_${i}`).translation; return Math.abs(t[0] - x) < 0.005 && Math.abs(t[2] - z) < 0.005; });
-  check('사족보행 관절: 회전 없는 빈 객체 · 다리 순서·자리 · 몸통 높이 0.55m (3D 모델과 같음)', !rot.length && ok && Math.abs(at('Body').translation[1] - 0.55) < 0.005, rot.length ? '회전 ' + rot : ''); }
+  check('휴머노이드 관절: 회전 없는 빈 객체 · 실제 키 1.90m에 맞춘 어깨·고관절', !hasRot.length && y('Shoulder_L') > 1.45 && y('Shoulder_L') < 1.55 && y('Hip_L') > 0.85 && y('Hip_L') < 0.95, `어깨 ${y('Shoulder_L').toFixed(2)} · 고관절 ${y('Hip_L').toFixed(2)}${hasRot.length ? ' · 회전 ' + hasRot : ''}`);
+  check('Atlas 공식 높이 1.90m (±5mm) · 공식 제원 출처 기록', Math.abs(bounds(J).size[1] - 1.9) < 0.005 && at('Atlas')?.extras?.mass_kg === 90); }
+{ const J = glb('quadruped').json, at = (n) => J.nodes.find((x) => x.name === n), pivots = J.nodes.filter((n) => n.extras?.original_joint);
+  check('Spot 공식 SDK: 원본 12축·관절 한계·320mm 무릎 링크', pivots.length === 12 && pivots.every((n) => n.extras.lower < n.extras.upper) && Math.abs(at('Knee_0_Origin').translation[1] + 0.32) < 0.00001);
+  const B = bounds(J, new Set(['Cam', 'PayloadMast', 'PayloadBase'])), meta = at('Spot').extras;
+  check('Spot 원본 SDK 메시 비율 유지 · 기본 보행 높이 610mm · 공식 제원 출처', Math.abs(B.size[1] - 0.61) < 0.005 && B.size[0] > 0.40 && B.size[0] < 0.51 && B.size[2] > 0.9 && B.size[2] < 1.11 && meta.length_m === 1.1 && meta.width_m === 0.5 && meta.dof === 12 && meta.mass_kg === 33.8 && meta.geometry_source.includes('spot-sdk')); }
+console.log('== 실물 셀 로봇 (UR20 · ABB IRB 4600 · RB-Y1 — 공개 ROS/URDF 형상·관절)');
+for (const [k, names] of [['ur20', ['J1', 'J2', 'J3', 'J4', 'J5', 'J6', 'ToolTCP', 'ToolFlange']], ['irb4600', ['J1', 'J2', 'J3', 'J4', 'J5', 'J6', 'ToolTCP', 'ToolFlange']],
+  ['rby1', ['Head', 'BodyCameraAnchor', 'L_ToolTCP', 'R_ToolTCP', ...['L', 'R'].flatMap((sd) => Array.from({ length: 7 }, (_, i) => `${sd}_J${i + 1}`)), ...Array.from({ length: 6 }, (_, i) => `torso_${i}`)]]]) {
+  const G = glb(k), J = G.json, nn = new Set(J.nodes.map((n) => n.name)), miss = names.filter((n) => !nn.has(n));
+  const lim = J.nodes.filter((n) => /^(J\d|[LR]_J\d|torso_\d)$/.test(n.name)).every((n) => Array.isArray(n.extras?.axis) && n.extras.lower < n.extras.upper);
+  check(`${k}.glb: GLB 2.0 · 코드가 쓰는 관절·TCP 이름 · 관절 축·한계`, G.ok && !miss.length && lim, `${(G.bytes / 1024).toFixed(0)}KB${miss.length ? ' · 없음 ' + miss.join(', ') : ''}`);
+}
 console.log('== 도형 라이브러리 (모든 로봇·시설·설비)');
 { const G = glb('primitives'), J = G.json, keys = JSON.parse(fs.readFileSync(new URL('../blender/primitives.json', import.meta.url))).keys;
   const name = (k) => k.replace(/\./g, 'p').replace(/\|/g, '_').replace(/-/g, 'm'), nn = new Set(J.nodes.map((n) => n.name));

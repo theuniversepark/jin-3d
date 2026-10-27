@@ -198,7 +198,7 @@ export class RobotTelemetry {
   jointDefs(R) {
     if (R.robot) return R.robot.jointDefs;
     if (R.kind === 'humanoid') return HUMANOID_JOINTS;
-    if (R.kind === 'quadruped') return QUAD_JOINTS;
+    if (R.kind === 'quadruped') { const ud = R.view?.g.userData; return ud?.nativeSpot ? ud.legs.flatMap((l, i) => [l.roll, l.hip, l.knee].map((n, j) => ({ name: `${['앞왼', '앞오른', '뒤왼', '뒤오른'][i]} ${['고관절 롤', '고관절 피치', '무릎'][j]}`, unit: 'deg', min: n.userData.lower, max: n.userData.upper }))) : QUAD_JOINTS; }
     if (R.kind === 'robot') return R.view.g.userData.arm ? MAINT_JOINTS : null;
     return null;
   }
@@ -207,7 +207,7 @@ export class RobotTelemetry {
     if (R.robot) return R.robot.joints();
     const ud = R.view?.g.userData;
     if (R.kind === 'humanoid') return [ud.waist?.rotation.y ?? 0, ud.head?.rotation.y ?? 0, ud.legL.rotation.x, ud.legR.rotation.x, ud.armL.rotation.x, ud.armR.rotation.x, ud.body.position.y];
-    if (R.kind === 'quadruped') return ud.legs.flatMap((l) => [l.hip.rotation.x, l.knee.rotation.x]);
+    if (R.kind === 'quadruped') return ud.nativeSpot ? ud.legs.flatMap((l) => [l.roll, l.hip, l.knee].map((n) => { const ax = n.userData.axis; return (n.userData.rest_angle ?? 0) + 2 * Math.atan2(n.quaternion.x * ax[0] + n.quaternion.y * ax[1] + n.quaternion.z * ax[2], n.quaternion.w); })) : ud.legs.flatMap((l) => [l.hip.rotation.x, l.knee.rotation.x]);
     if (R.kind === 'robot' && ud.arm) return ud.arm.joints();
     return null;
   }
@@ -294,7 +294,8 @@ export class RobotTelemetry {
       const safety = !cobot ? null : near < 1.0 ? ['보호 정지', 'bad'] : near < 2.0 ? ['협동 감속 50%', 'warn'] : ['정상 속도 100%', 'ok'];
       const vib = 0.6 + (100 - st.health) * 0.045 + (busy ? 0.4 : 0);
       out.title = `${st.robotUids?.[this.ref.idx] ? `[${st.robotUids[this.ref.idx]}] ` : ''}${st.name} · ${ROBOT_LABEL[r.kind]} ${R.view ? '' : `#${this.ref.idx + 1}`}`;
-      out.status = [['상태', busy ? `가동 (진행 ${(p * 100).toFixed(0)}%)` : st.state === 'DOWN' ? '설비 고장 — 정지' : st.state === 'MAINT' ? '정비 중 — 정지' : st.state === 'ESTOP' ? '비상정지 — 동력 차단' : st.state === 'PSTOP' ? '보호정지 — 자세 유지' : st.state === 'CHECK' ? '자가진단 중' : st.state === 'CSTOP' ? '사이클 정지' : '대기'], ['정격 가반하중', `${r.payload} kg`]];
+      out.status = [['상태', busy ? `가동 (진행 ${(p * 100).toFixed(0)}%)` : st.state === 'DOWN' ? '설비 고장 — 정지' : st.state === 'MAINT' ? '정비 중 — 정지' : st.state === 'ESTOP' ? '비상정지 — 동력 차단' : st.state === 'PSTOP' ? '보호정지 — 자세 유지' : st.state === 'CHECK' ? '자가진단 중' : st.state === 'CSTOP' ? '사이클 정지' : '대기'], ['정격 가반하중', `${r.payload} kg${r.payloadBasis ? ` · ${r.payloadBasis}` : ' (툴·카메라 포함)'}`]];
+      if (r.spec) out.status.push(['기준 로봇', `${r.spec.manufacturer} ${r.spec.model}`], ['리치', `${Math.round(r.spec.reach * 1000)} mm`]);
       if (st.vlaCell) { const uid = st.robotUids?.[this.ref.idx], n = this.view.epRec?.list(uid).length ?? 0, ps = this.view.sim.vla?.robotStats.get(uid); out.status.push(['VLA 추론 모델', this.view.sim.vla?.versionOf(uid) ?? 'v1.0'], ['VLA 에피소드', `보관 ${n} · 누적 ${ps?.n ?? 0}개${ps?.n ? ` · 성공률 ${Math.round((ps.ok / ps.n) * 100)}%` : ''}`]); }
       const xyz = (p) => `${p.x.toFixed(0)} / ${p.y.toFixed(0)} / ${p.z.toFixed(0)} mm`;
       out.sections.push({ title: 'TCP (툴 끝점, 베이스 기준)', rows: !this.tcp ? [] : this.tcp2 ? [

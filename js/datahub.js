@@ -6,6 +6,7 @@ import { ST_LABEL } from './sim.js';
 import { ROBOT_KINDS, STATION_TYPES, ZONE_MIXES, isZone } from './line.js';
 import { buildEnvironment, buildRobotEnvironment, detailCSV, toXML, toTurtle, toCSV, toAutomationML, aasId, smId, SEM, AAS_RECENT, addVideos, videoLinkFiles } from './aas.js';
 import { buildAASX } from './aasx.js';
+import { robotSpecTech } from './robot-specs.js';
 
 const DEG = 180 / Math.PI;
 export const PUBLISHER_ID = 'jin3d';
@@ -88,7 +89,7 @@ function buildAssets(sim, view) {
         const tcp2 = () => { const w = r.tip2.getWorldPosition(r.tip2.position.clone()), b = r.root.getWorldPosition(r.root.position.clone()); return { x: (w.x - b.x) * 1000, y: -(w.z - b.z) * 1000, z: (w.y - b.y) * 1000 }; };
         fields.push(f('Tcp2X', '오른팔 TCP X', 'double', 'mm', () => tcp2().x), f('Tcp2Y', '오른팔 TCP Y', 'double', 'mm', () => tcp2().y), f('Tcp2Z', '오른팔 TCP Z', 'double', 'mm', () => tcp2().z));
       }
-      assets.push({ id, kind: 'CellRobot', parent: st.id, name: `${st.name} ${ROBOT_KINDS[r.kind].label} #${i + 1}`, nameplate: plate(id, ROBOT_KINDS[r.kind].label), tech: { EquipmentId: st.robotUids?.[i] ?? id, RobotType: ROBOT_KINDS[r.kind].label, Axes: r.jointDefs.length, Payload: r.payload, Cell: st.id }, fields });
+      assets.push({ id, kind: 'CellRobot', parent: st.id, name: `${st.name} ${ROBOT_KINDS[r.kind].label} #${i + 1}`, nameplate: plate(id, r.spec?.model ?? ROBOT_KINDS[r.kind].label), tech: { EquipmentId: st.robotUids?.[i] ?? id, RobotType: ROBOT_KINDS[r.kind].label, Axes: r.jointDefs.length, Payload: r.payload, ...robotSpecTech(r), Cell: st.id }, fields });
     });
   }
   // 이동 로봇 AAS id: 영문 ID(AMR-01·AGV-1)는 그대로, 한글 이름은 역할 접두어 + 번호 (HUM_MNT_1 등)
