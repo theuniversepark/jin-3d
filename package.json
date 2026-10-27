@@ -11,7 +11,8 @@
     "postpackage": "codesign --force --deep --sign - \"dist/피지컬AI 실증 메타팩토리-darwin-arm64/피지컬AI 실증 메타팩토리.app\"",
     "test:ui": "electron tests/ui-scroll.cjs",
     "blender:assets": "blender -b --python blender/build_assets.py",
-    "blender:collect": "electron tools/collect-primitives.cjs"
+    "blender:collect": "electron tools/collect-primitives.cjs",
+    "check:interference": "electron tools/check-interference.cjs"
   },
   "keywords": [],
   "author": "Jin Park",

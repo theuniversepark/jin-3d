@@ -139,7 +139,7 @@ export const BATTERY = {
   drone: { pack: '6S 리튬폴리머 · 0.2kWh', charge: '이착륙장 무선 충전 (22% 이하 귀환)', low: 25 },
   ammr: { pack: '48V 리튬이온 · 2.4kWh', charge: '셀 작업 위치 도킹 접점 (작업 중 충전)', low: 25, drive: 0.06, work: 0.015, rate: 0.032 },
 };
-const LEFT = -35.5, RIGHT = 35;   // 좌우 끝 세로 통로 — 왼쪽은 투입 스테이션 AMR 진입로(x −30.6)와 충분히 떨어지게
+const LEFT = -35.5, RIGHT = 35;   // 좌우 끝 세로 통로 — 왼쪽은 투입 스테이션 AMR 진입로(x −33.2)와 차로가 겹치지 않게
 export const LOC = {
   // 물류존은 건물 왼쪽 확장동(x −51 ~ −38)에 있다. 물류 선반은 왼쪽 벽 입고 지게차 통로와 로봇 통로(x −35.5) 사이에 남북으로 선
   // 통과형 선반(남쪽 절반 원자재 · 북쪽 절반 부품): 입고 지게차는 통로 쪽 서쪽 면에 넣고, AGV·휴머노이드는 동쪽 면에서 꺼낸다.
@@ -412,7 +412,8 @@ export class Simulation {
 
     // 투입·적재 도크는 레이아웃에 따라 달라진다 (U자형이면 적재는 뒤쪽 통로)
     // 적재장 상차 위치: Zone 구분 적재장은 제품 구역(앞쪽 적재 팔레트)과 겹치지 않게 조금 더 앞에서 싣는다
-    this.loc = { ...LOC, SRC: localLoc(this.stations[0].def, 0, isZone(this.line) ? 4.5 : 4.2, '투입구'), SINK: localLoc(this.stations[this.stations.length - 1].def, 0, isZone(this.line) ? 5.4 : 4.2, '완제품 적재장') };
+    // 투입구 하역: 지게차(레거시)는 셀을 보고 서면 포크가 차체 중심 앞 1.9m까지 나오므로 5.5m에 선다 — 포크 끝이 남쪽 자재 용기 줄(z 2.2 ~ 3.5) 앞 0.1m (하역 뒤 그 자리에서 대기)
+    this.loc = { ...LOC, SRC: localLoc(this.stations[0].def, 0, isZone(this.line) ? (m.vehicleKind === 'forklift' ? 5.5 : 4.5) : 4.2, '투입구'), SINK: localLoc(this.stations[this.stations.length - 1].def, 0, isZone(this.line) ? 5.4 : 4.2, '완제품 적재장') };
     // 출하 지게차 상차 위치: 구분 적재장 앞쪽(도어트림 구역)·뒤쪽(e-axle 구역)
     const sinkDef = this.stations[this.stations.length - 1].def;
     // 구분 적재장 팔레트(포장 상자 적재 · z ±1.85 ~ ±3.45) 바깥 4.6m에 서서 포크(앞 0.75 ~ 1.9m)를 팔레트 앞쪽에 넣는다 (상위 meta-factory와 같음)
@@ -426,7 +427,7 @@ export class Simulation {
       this.vehicles.push(v);
     }
     // 출하 지게차: 구분 적재장 → 뒷벽 출하 도크 → 트럭 야드 화물트럭 (레거시·자동화는 사람이 운전, 피지컬AI만 자율 지게차)
-    this.forklifts = [new Mover(m.key === 'dark' ? '자율 지게차' : '출하 지게차 (유인)', 'forklift', { x: YARD.waitX, z: YARD.wallZ + 2.4, aisle: 'B', name: '출하 지게차 대기 (출하 도크 사이)' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
+    this.forklifts = [new Mover(m.key === 'dark' ? '자율 지게차' : '출하 지게차 (유인)', 'forklift', { x: YARD.waitX, z: YARD.forkParkZ, aisle: 'B', name: '출하 지게차 대기 (출하 도크 사이)' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1)];
     this.forklifts[0].shipper = true; this.forklifts[0].auto = m.key === 'dark';
     // 입고 지게차: 입고 도크(왼쪽 벽)에 접안한 공급사 트럭에서 팔레트를 내려 자재창고 랙에 넣는다 (피지컬AI만 자율)
     const rcv = new Mover(m.key === 'dark' ? '입고 자율 지게차' : '입고 지게차 (유인)', 'forklift', { ...INBOUND.park, aisle: 'B', name: '입고 지게차 대기 (뒷벽 쪽)' }, m.key === 'traditional' ? 1.5 : m.key === 'smart' ? 1.9 : 2.1);

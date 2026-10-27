@@ -90,8 +90,9 @@ export const ZONE_AMR = { count: 16, lineSpeed: 1.6, returnSpeed: 2.6, spacing: 
 // AMR 전용 동선 — AGV·정비 인력이 다니는 주 통로를 따라 달리지 않고, 두 곳에서 가로지르기만 한다.
 //  · 복귀: 구분 적재장 → 오른쪽 끝(x=31.2)에서 북쪽으로 → 건물 앞쪽 AMR 전용 복귀로(z=18.8)를 서쪽으로 → 대기열
 //  · 대기열: 앞쪽 왼편 빈 바닥(z=17, 충전소보다 서쪽)에 한 줄
-//  · 출동: 대기열 남쪽 출동 차로(z=15.4) → 투입 스테이션 왼쪽 진입로(x=-30.6) → 투입 위치
-export const AMR_LANES = { ret: 18.8, park: 17.0, out: 15.4, retX: 31.2, dockX: -30.6 };
+//  · 출동: 대기열 남쪽 출동 차로(z=15.4) → 투입 스테이션 왼쪽 진입로(x=-33.2) → 투입 위치
+//    진입로는 투입 로봇셀 남쪽 자재 줄(분리판 거치대 서쪽 끝 x −32.35) 바깥 — 진입 대기 지점(z 2.6)도 자재 줄과 같은 높이라 그 서쪽에 선다
+export const AMR_LANES = { ret: 18.8, park: 17.0, out: 15.4, retX: 31.2, dockX: -33.2 };
 export const amrPark = (i) => ({ x: -36.4 + i * 1.4, z: AMR_LANES.park, aisle: 'F', name: `AMR 대기 ${i + 1}` });
 export const amrDockVia = (p) => [{ x: p.x, z: AMR_LANES.out }, { x: AMR_LANES.dockX, z: AMR_LANES.out }, { x: AMR_LANES.dockX, z: 0 }];
 export const amrReturnVia = (from, slot) => [{ x: AMR_LANES.retX, z: from.z }, { x: AMR_LANES.retX, z: AMR_LANES.ret }, { x: slot.x, z: AMR_LANES.ret }];

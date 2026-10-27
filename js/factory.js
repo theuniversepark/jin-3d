@@ -510,8 +510,8 @@ function makeForklift() {
   return g;
 }
 
-// 트럭 적재함 바닥(1.27m) 위로 팔레트를 올리는 포크 높이 (팔레트 바닥 0.2m → 1.32m)
-const TRUCK_BED_LIFT = 1.12;
+// 트럭 적재함 바닥(1.27m) 위로 팔레트를 올리는 포크 높이 — 포크 밑면(0.125m → 1.345m)이 적재함 뒤 범퍼(윗면 1.31m)를 넘어 들어가게 (팔레트 바닥 0.2m → 1.42m)
+const TRUCK_BED_LIFT = 1.22;
 // 화물트럭 (로컬 +z = 운전석 방향). 적재함은 반투명 커튼 사이더라 실린 팔레트가 보이고, 뒷문은 도크 쪽으로 열린다
 const TRUCK_COLORS = [0x2a6fdb, 0xd23b3b, 0x2e9e6a, 0xf2a020, 0x6d5acf];
 // Blender 화물트럭 (캡오버 + 커튼 사이더 일반형): 뒷문 경첩(Door_L/R) · 후미등(TAIL) · 실린 팔레트 자리를 3D 모델과 같게 넘긴다
@@ -1836,7 +1836,9 @@ export class FactoryView {
     const doorW = 4.6, spans = [[19, YARD.bays[0] - doorW / 2], [YARD.bays[0] + doorW / 2, YARD.bays[1] - doorW / 2], [YARD.bays[1] + doorW / 2, 38]];
     for (const [a, b] of spans) put(box(b - a, 8, 0.3, MAT.wall), (a + b) / 2, 4, -20, r);
     for (const bx of YARD.bays) put(box(doorW, 8 - 4.9, 0.3, MAT.wall), bx, 4.9 + (8 - 4.9) / 2, -20, r);
-    put(box(19, 0.3, 0.32, MAT.steel), 28.5, 0.15, -20, r);
+    // 강철 문턱: 외벽 아래는 0.3m 걸레받이, 도크 문 아래는 도크 레벨러 높이(8cm)로 낮춘다 — 출하 지게차가 트럭에 싣고 내릴 때 앞바퀴·차체가 문턱을 넘어 지나간다
+    for (const [a, b] of spans) put(box(b - a, 0.3, 0.32, MAT.steel), (a + b) / 2, 0.15, -20, r);
+    for (const bx of YARD.bays) put(box(doorW, 0.08, 0.32, MAT.steel), bx, 0.04, -20, r);
     // 왼쪽 벽(확장동 x −51): 입고 도크 문(z −16.8~−12.2, 높이 4.9m)만 트럭 하차용으로 열고 나머지는 외벽
     // 왼쪽 벽은 그림자를 드리우지 않는다 (해가 왼쪽에서 비쳐 물류 확장동 바닥을 크게 덮던 그림자 제거 — 바닥은 다른 그림자를 그대로 받음)
     { const dz0 = INBOUND.dockZ - 2.3, dz1 = INBOUND.dockZ + 2.3;
@@ -2393,7 +2395,8 @@ export class FactoryView {
       st.zone = sim.zone;
       st.vla = mode === 'dark';   // 피지컬AI: 카메라 기반 VLA로 선반에서 부품을 집어 조립·체결
       if (sim.useAMR) cellBase(g, st.type === 'source' || st.type === 'sink' ? 3.6 : 4.6);
-      else this.conveyorTex.push(stationBase(g, st.type === 'source' || st.type === 'sink' ? 3.6 : 4.2).map);
+      // 수작업 공동 포장셀은 작업자가 벨트와 포장대 사이(z ±1.55 — js/sim.js setupWorkers)에 서므로 받침을 벨트 양옆 0.6m까지만 깐다
+      else this.conveyorTex.push(stationBase(g, st.type === 'source' || st.type === 'sink' ? 3.6 : 4.2, sim.zone && st.id === 'PACK' ? 2.4 : 3.6).map);
       const parts = BUILDERS[st.type](g, st, sim);
       const { group: robotGroup, robots, racks } = placeRobots(g, st, sim);
       parts.robots = robots; parts.racks = racks; parts.fenceDoor = robotGroup.getObjectByName('InterlockDoor') ?? null;
@@ -3943,7 +3946,7 @@ export class FactoryView {
       }
     }
     // 물류 대기: 출하 지게차 — 두 출하 도크(트럭) 사이 벽 앞
-    { const fx = YARD.waitX, fz = YARD.wallZ + 2.4; area(fx - 1.3, fz - 2.1, fx + 1.3, fz + 1.3, GREEN, '출하 대기', sim.mode.key === 'dark' ? '자율 지게차' : '출하 지게차 (유인)', fx, fz + 1.95, 3.2); }
+    { const fx = YARD.waitX, fz = YARD.forkParkZ; area(fx - 1.3, fz - 2.1, fx + 1.3, fz + 1.3, GREEN, '출하 대기', sim.mode.key === 'dark' ? '자율 지게차' : '출하 지게차 (유인)', fx, fz + 1.95, 3.2); }
   }
 
   // 화물트럭: 시뮬레이션 트럭 목록과 모델을 맞추고, 위치·방향·뒷문·적재 팔레트·라벨을 갱신한다

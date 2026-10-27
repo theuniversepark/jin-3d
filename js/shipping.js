@@ -7,6 +7,7 @@ export const YARD = {
   wallZ: -20, bays: [22.5, 31.5], waitX: 27, roadZ: -40,
   truckLen: 10.5, truckW: 2.5, cap: 32,      // 트럭 길이·폭(m), 적재 용량(개 = 팔레트 4개 × 8개)
   pallet: 8,                                   // 지게차 1회 운반량 (팔레트 1개)
+  forkParkZ: -17.3,                            // 출하 지게차 대기 자리 (두 도크 사이 x 27 · 벽을 보고 선다) — 포크 끝이 뒷벽 기둥(z −19.3 앞면)에서 0.3m 떨어지게
 };
 const DOCK_Z = YARD.wallZ - YARD.truckLen / 2 - 0.15;   // 접안 트럭 중심 (뒤쪽 끝이 벽 바로 바깥)
 const WAIT_Z = DOCK_Z - 2;
@@ -117,7 +118,7 @@ export function planForklift(sim, f) {
   const pick = product === 'eaxle' ? sim.loc.PICK_EA : sim.loc.PICK_DT;
   // 도크 앞(벽에서 2.6m)에서 트럭 쪽을 보고 서서 포크를 적재함 높이로 올린 뒤 들어가고, 내려놓으면 포크를 넣은 채 반듯이 후진해 나온 뒤 돈다
   const bx = t.bay, dock = { x: bx, z: YARD.wallZ + 2.6, aisle: 'B', name: `출하 도크 ${yard.bayNo(bx)}` };
-  const inside = { x: bx, z: YARD.wallZ + 0.7, aisle: 'B', name: `${t.id} 적재함` };   // 도크 레벨러 끝에서 포크를 적재함에 넣어 내려놓는다
+  const inside = { x: bx, z: YARD.wallZ + 0.85, aisle: 'B', name: `${t.id} 적재함` };   // 도크 레벨러 끝에서 포크를 적재함에 넣어 내려놓는다 — 캐리지·앞바퀴가 트럭 뒤 범퍼·도크 문턱(벽 z −20 ± 0.16) 앞에서 멈추게
   const pName = product === 'eaxle' ? 'e-axle' : product === 'doortrim' ? '도어트림' : '완제품';
   f.setTask(`${pName} 출하 → ${t.id}`, [
     { go: pick },
