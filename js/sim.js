@@ -14,7 +14,7 @@ import { FleetControl } from './fleet.js';
 import { Orchestrator, PRIORITY, prioOf } from './orchestrator.js';
 import { SpsMonitor, SPS_GEO, SORT_AMMR } from './sps.js';
 import { PACK_GEO, PACK_AMMR, PACK_EV } from './pack.js';
-import { MODE_CYCLE_MUL, fastenT, AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
+import { MODE_CYCLE_MUL, fastenT, AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia, AMR_CELL, cellEntryPath } from './line.js';
 
 export function mulberry32(a) {
   return function () {
@@ -390,7 +390,7 @@ export class Simulation {
     // 레거시 공장은 셀 사이를 고정 컨베이어로 잇고, 자동화·자율 공장은 AMR이 대상물을 싣고 다닌다
     this.useAMR = this.zone && modeKey !== 'traditional';
     // 입구 → 셀 중앙 진입 시간 (표시·텔레메트리용): AMR은 라인 주행 속도 그대로, 컨베이어는 0.5초
-    this.entryTime = this.useAMR ? 2 / ZONE_AMR.lineSpeed : 0.5;
+    this.entryTime = this.useAMR ? AMR_CELL.wait / ZONE_AMR.lineSpeed : 0.5;
     this.standby = []; this.idleLinks = [];
     // 설비 연결: 직렬 라인은 앞뒤로, 정밀조립Zone은 분기(부품분류 → 제품별 라인)·합류(→ 포장) 그래프
     // st.ins: 들어오는 연결들, st.outs[제품]: 제품별 나가는 연결 (공통이면 '*')
@@ -399,7 +399,7 @@ export class Simulation {
     const byId = new Map(this.stations.map((st) => [st.id, st]));
     lineEdges(this.line).forEach(([fa, fb, prod], i) => {
       const a = byId.get(fa), b = byId.get(fb);
-      const c = { idx: i, from: a, to: b, product: prod, path: linkPath(this.line, a.def, b.def), items: [], speed: this.useAMR ? ZONE_AMR.lineSpeed : 1.1, spacing: this.useAMR ? ZONE_AMR.spacing : 1.3 };
+      const c = { idx: i, from: a, to: b, product: prod, path: linkPath(this.line, a.def, b.def, this.useAMR), items: [], speed: this.useAMR ? ZONE_AMR.lineSpeed : 1.1, spacing: this.useAMR ? ZONE_AMR.spacing : 1.3 };
       c.len = pathLength(c.path);
       a.outs[prod ?? '*'] = c; b.ins.push(c);
       a.out ??= c; b.in ??= c;
@@ -702,11 +702,10 @@ export class Simulation {
     });
     for (const st of this.processing) {
       const c = st.item?.carrier; if (!c) continue;
-      const k = Math.min(1, st.itemT / this.entryTime);   // 입구 → 셀 중앙 진입 (화면과 같은 시간)
-      const from = st.itemFrom ?? toWorld(st.def, -2, 0);
-      const p = { x: from.x + (st.x - from.x) * k, z: from.z + (st.z - from.z) * k };
+      const k = Math.min(1, st.itemT / this.entryTime);   // 셀 밖 대기 지점 → 셀 중앙 진입 (화면과 같은 시간 · 합류 차로는 정렬점을 거쳐)
+      const P = cellEntryPath(st.def, st.itemFrom ?? toWorld(st.def, -AMR_CELL.wait, 0)), L = pathLength(P), p = pointAt(P, L * k), a = pointAt(P, Math.max(0, L * k - 0.2)), b = pointAt(P, Math.min(L, L * k + 0.2));
       const dir = toWorld(st.def, 1, 0);
-      place(c, p.x, p.z, Math.atan2(dir.x - st.x, dir.z - st.z), {
+      place(c, p.x, p.z, k < 1 ? Math.atan2(b.x - a.x, b.z - a.z) : Math.atan2(dir.x - st.x, dir.z - st.z), {
         where: 'cell', station: st.id,
         phase: k < 1 ? `${st.name} 진입 중` : st.state === 'BUSY' ? `${st.name} 정차 — 작업 중 (${Math.round(st.progress * 100)}%)`
           : st.state === 'BLOCKED' ? `${st.name} 정차 — 다음 구간 대기` : st.state === 'DOWN' ? `${st.name} 정차 — 설비 고장` : st.state === 'MAINT' ? `${st.name} 정차 — 정비 중` : `${st.name} 정차`,

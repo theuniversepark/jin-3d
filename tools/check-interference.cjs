@@ -33,7 +33,9 @@ const PAGE = `(() => { const process_env_verbose = ${process.env.IFC_VERBOSE ? '
     const bb = o.geometry.boundingBox, s = o.getWorldScale(new V3()); const dim = [(bb.max.x - bb.min.x) * s.x, (bb.max.y - bb.min.y) * s.y, (bb.max.z - bb.min.z) * s.z].map((n) => n.toFixed(2)).join('×');
     const c = new V3(); o.geometry.boundingBox.getCenter(c).applyMatrix4(mw); const chain = []; for (let p = o, i = 0; p && p !== V.root && p !== V.dyn && i < 6; p = p.parent, i++) chain.push((p.name || p.type) + (p.parent ? '#' + p.parent.children.indexOf(p) : ''));
     return (parts.length ? parts.reverse().slice(-3).join('/') : '건물·바닥 설비') + ' [' + (o.geometry.type.replace('Geometry', '')) + ' ' + dim + ' @' + c.x.toFixed(2) + ',' + c.z.toFixed(2) + (process_env_verbose ? ' ' + chain.join('<') : '') + ']'; };
-  const moverViews = () => [...(V.vehicleViews ?? []), ...(V.carrierViews ?? []), ...(V.techViews ?? []), ...(V.helperViews ?? []), ...(V.quadViews ?? []), ...(V.workerViews ?? [])];
+  // 라인 AMR: 대상물을 싣고 셀 사이·셀 안을 지나는 AMR은 대상물 메시(itemMeshes) 안에 AMR 모델이 들어 있다 — AMR이 보이는 대상물을 이동체로 본다
+  const lineAMRs = () => [...(V.itemMeshes ?? new Map())].filter(([, g]) => g.visible && g.userData.amr && shown(g.userData.amr)).map(([id, g]) => ({ g, v: { id: '라인 AMR(' + id + ')', kind: 'line-amr', x: g.position.x, z: g.position.z, state: 'line' } }));
+  const moverViews = () => [...(V.vehicleViews ?? []), ...(V.carrierViews ?? []), ...(V.techViews ?? []), ...(V.helperViews ?? []), ...(V.quadViews ?? []), ...(V.workerViews ?? []), ...lineAMRs()];
   const isLabel = (o) => o.isCSS2DObject || o.isSprite;
   // 이동체 차체 상자 (자기 그룹 기준) → 평면 다각형 + 높이
   const moverShape = (g) => { g.updateWorldMatrix(true, true); inv.copy(g.matrixWorld).invert(); let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
@@ -103,7 +105,7 @@ app.whenReady().then(async () => {
     for (let i = 0; i < MIN; i++) {
       const res = await js(`window.__ifc.run(${chunk}, 5, 0.03)`);
       // 같은 원인끼리 묶는다: 이동체 종류(번호 뗀 이름) × 대상 설비(셀 이름까지) — 자세히(IFC_VERBOSE)는 이동체·메시 하나하나
-      for (const r of res) { n++; const k = process.env.IFC_VERBOSE ? r.id + ' ↔ ' + r.what : r.id.replace(/-?\d+$/, '') + ' ↔ ' + (r.what.startsWith('건물') ? r.what.replace(/ @.*$/, '') : r.what.replace(/ \[.*$/, '')); const a = agg.get(k); if (!a) agg.set(k, { ...r, n: 1, maxD: r.d, ids: new Set([r.id]) }); else { a.n++; a.ids.add(r.id); if (r.d > a.maxD) Object.assign(a, r, { n: a.n, ids: a.ids, maxD: r.d }); } }
+      for (const r of res) { n++; const k = process.env.IFC_VERBOSE ? r.id + ' ↔ ' + r.what : r.id.replace(/-?\d+$/, '').replace(/\(.*\)$/, '') + ' ↔ ' + (r.what.startsWith('건물') ? r.what.replace(/ @.*$/, '') : r.what.replace(/ \[.*$/, '')); const a = agg.get(k); if (!a) agg.set(k, { ...r, n: 1, maxD: r.d, ids: new Set([r.id]) }); else { a.n++; a.ids.add(r.id); if (r.d > a.maxD) Object.assign(a, r, { n: a.n, ids: a.ids, maxD: r.d }); } }
     }
     console.log(`\n== ${mode}: ${MIN}분 · 겹침 표본 ${n}건 · 종류 ${agg.size}`);
     for (const a of [...agg.values()].sort((a, b) => b.maxD - a.maxD)) console.log(`  ${a.who}${a.ids.size > 1 ? ` 외 ${a.ids.size - 1}대` : ''}  ↔  ${a.what}  · 최대 ${a.maxD}m · ${a.n}회 · 예 t=${a.t} (${a.x}, ${a.z}) y ${a.y}`);

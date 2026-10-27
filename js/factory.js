@@ -16,7 +16,7 @@ import { buildLoader, stepLoader, visibleTop, containerSplit } from './loader.js
 import { PACK_BOX, PACK_GEO, PACK_GRIP, PACK_ARM, PACK_AMMR, PACK_EV, packState } from './pack.js';
 import { SPS_GEO, SPS_KITS, SPS_SIDE, kitSlot, SORT_AMMR, SORT_ARM, SORT_GRAB, SORT_DROP, SORT_TAKE, sortPlaced, sortGrabbed, sortPartWin } from './sps.js';
 import { equipmentList, STATUS_CLASS } from './assets.js';
-import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, fastenT, AMR_LANES, amrPark, ZONE_AMR, AMMR, AMMR_FETCH } from './line.js';
+import { ROBOT_KINDS, toWorld, pointAt, pathLength, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME, FG_ZONE_CAP, fastenT, AMR_LANES, amrPark, ZONE_AMR, AMMR, AMMR_FETCH, cellEntryPath } from './line.js';
 
 // ── 헬퍼 ─────────────────────────────
 const std = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.1, ...o });
@@ -2766,8 +2766,7 @@ export class FactoryView {
     }
     for (const st of sim.processing) if (st.item) {
       const k = Math.min(1, st.itemT / (sim.entryTime ?? 0.5));
-      const from = st.itemFrom ?? toWorld(st.def, -2, 0);   // 들어온 경로 끝점에서 셀 중앙으로
-      const q = { x: from.x + (st.x - from.x) * k, z: from.z + (st.z - from.z) * k };
+      const P = cellEntryPath(st.def, st.itemFrom ?? toWorld(st.def, -2, 0)), q = pointAt(P, pathLength(P) * k);   // 들어온 경로 끝점(AMR은 셀 밖 대기 지점)에서 셀 중앙으로 — 합류 차로는 게이트 앞 정렬점을 거쳐
       let y = BELT_Y;
       if (st.state === 'BUSY' && (st.type === 'cnc' || st.type === 'press')) y += Math.sin(this.time * 60) * 0.006;
       place(st.item, q.x, y, q.z, 0, st.type === 'sort', st);

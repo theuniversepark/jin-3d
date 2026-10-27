@@ -22,8 +22,8 @@ F.resume('agv'); const holds = s.vehicles.map((v) => v.holdUntil - s.time);
 check('AGV 시작: 1초 간격 순차 출발', holds.every((h, i) => Math.abs(h - i) < 1e-6), holds.map((h) => h.toFixed(1)).join(','));
 F.pause('all'); run(10);
 check('전체 정지: AMR·AGV 모두 0 m/s', F.summary('amr').moving === 0 && F.summary('agv').moving === 0);
-F.resume('all'); run(15);
-check('전체 시작 후 운행 재개', F.summary('amr').moving > 0);
+F.resume('all'); let resumed = 0; for (let k = 0; k < 150; k++) { run(0.1); resumed = Math.max(resumed, F.summary('amr').moving); }   // 한 순간이 아니라 15초 동안 — 라인 대상물이 적으면 이동 중인 AMR이 0~2대를 오간다
+check('전체 시작 후 운행 재개 (15초 안에 AMR 주행)', resumed > 0, `최대 ${resumed}대`);
 s.cmd.issue('ESTOP', 'all', null, { by: '테스트' }); run(3);
 check('명령 센터 비상정지가 관제보다 우선 (관제 운행 중이어도 정지)', !F.amr.paused && F.summary('amr').moving === 0 && F.stateOf(s.carriers[0], 'amr')[0] === '명령 정지');
 s.cmd.issue('RESET', 'all', null, { by: '테스트' }); run(5);

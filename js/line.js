@@ -321,16 +321,27 @@ export function conveyorPath(a, b) {
   const turnX = 31.5;
   return [{ x: a.x, z: az }, { x: turnX, z: az }, { x: turnX, z: bz }, entry];
 }
+// AMR 셀 진입: 셀이 작업 중(앞 AMR이 셀 안)이면 다음 AMR은 셀 밖 대기 지점(셀 중앙에서 wait 앞)에서 기다렸다가, 셀이 비면 들어간다.
+//  wait 3.4m — AMR 앞 끝(길이 1.47m)이 셀 바닥 판(±2.3m) 밖 0.36m · 포장셀 입구 게이트(x −2.05, 기둥 z ±1.0) 밖
+//  합류 대기 차로(±0.75m)는 게이트 앞 정렬점(셀 중앙에서 align 앞, 중심선)에 올라탄 뒤 게이트 가운데로 지난다 — 비스듬히 들어가며 기둥에 걸리지 않게
+//  구분 적재장은 다음 AMR이 앞 AMR 2m 뒤(판 밖)에서 기다리므로 그대로 2m
+export const AMR_CELL = { wait: 3.4, align: 2.6 };
+// 셀 진입 경로(월드): 대기 지점 → (중심선에서 비켜 있으면 정렬점) → 셀 중앙
+export function cellEntryPath(def, from) {
+  const c = toWorld(def, 0, 0), d = toWorld(def, 1, 0), ux = d.x - c.x, uz = d.z - c.z;
+  const lx = (from.x - c.x) * ux + (from.z - c.z) * uz, lz = (from.x - c.x) * uz - (from.z - c.z) * ux;
+  return Math.abs(lz) > 0.01 && lx < -AMR_CELL.align - 0.01 ? [from, toWorld(def, -AMR_CELL.align, 0), c] : [from, c];
+}
 // 정밀조립Zone 경로: 셀 중앙 → 셀 출구 → (대각 이동) → 다음 셀 입구. 포장셀로 합류하는 두 줄은
-// 입구 앞에서 좌우로 0.75m 떨어진 별도 대기 차로를 쓴다
-export function zonePath(a, b) {
+// 입구 앞에서 좌우로 0.75m 떨어진 별도 대기 차로를 쓴다 · amr: AMR 운반이면 셀 입구(경로 끝)가 셀 밖 대기 지점 (레거시 컨베이어는 셀 받침까지)
+export function zonePath(a, b, amr = false) {
   const az = a.z ?? 0, bz = b.z ?? 0;
   const merge = Math.abs(az - bz) > 0.01 && Math.abs(bz) < 0.01;
-  const entry = { x: b.x - 2, z: merge ? Math.sign(az - bz) * 0.75 : bz };
+  const entry = { x: b.x - (amr && b.type !== 'sink' ? AMR_CELL.wait : 2), z: merge ? Math.sign(az - bz) * 0.75 : bz };
   if (Math.abs(az - entry.z) < 0.01) return [{ x: a.x, z: az }, entry];
   return [{ x: a.x, z: az }, { x: a.x + 2.3, z: az }, { x: entry.x - 3, z: entry.z }, entry];
 }
-export function linkPath(line, a, b) { return isZone(line) ? zonePath(a, b) : conveyorPath(a, b); }
+export function linkPath(line, a, b, amr = false) { return isZone(line) ? zonePath(a, b, amr) : conveyorPath(a, b); }
 
 export function pathLength(pts) {
   let L = 0;

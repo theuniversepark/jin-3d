@@ -1,6 +1,6 @@
 // AMR·AGV 관제 — 운반 AMR(대상물 운반·복귀)과 자재 공급 AGV의 공통 설정·상태, 상황별 속도 변화, 전체 속도 배율(50~150%)·
 // 전체 정지/시작(AGV는 1초 간격 순차 재출발), 운행 대수(설치 대수 안에서 운행 제외 지정), 설정 변경 효과의 디지털트윈 예측(현재 설정 vs 기준 설정 · 대수별 비교). 렌더링과 분리되어 헤드리스에서도 같은 동작.
-import { ZONE_AMR } from './line.js';
+import { ZONE_AMR, AMR_CELL } from './line.js';
 
 export const FLEET_RANGE = { min: 0.5, max: 1.5, step: 0.1 };
 export const FLEET_NAMES = { amr: '운반 AMR', agv: '자재 공급 AGV' };
@@ -43,7 +43,7 @@ export class FleetControl {
       const v = this.speeds('amr');
       for (const c of s.conveyors) c.speed = v.line;
       for (const c of s.carriers) c.speed = v.drive;
-      s.entryTime = 2 / v.line;
+      s.entryTime = AMR_CELL.wait / v.line;
     }
     if (this.hasAGV) { const v = this.speeds('agv'); for (const m of s.vehicles) m.speed = v.drive; }
   }
