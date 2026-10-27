@@ -108,7 +108,7 @@ const ZONE_RECIPES = [
   { id: 'DT_FAST', robot: { kind: 'cobot', count: 2 }, cycle: 14, task: '스크류 자동 체결, 토크·각도 전수 판정' },
   { id: 'EA_ASSY', robot: { kind: 'cobot', count: 4 }, cycle: 16, task: '양쪽 협동로봇이 베어링 압입·로터·감속기어 삽입, 하우징 결합' },
   { id: 'EA_FAST', robot: { kind: 'articulated', count: 1 }, cycle: 12, task: '하우징 볼트 다축 너트러너 체결, 토크·각도 전수 판정' },
-  { id: 'PACK', robot: { kind: 'ammr', count: 2 }, cycle: 8, task: 'AMMR 양팔로 옆 선반에서 포장재를 가져와 제품별 포장·라벨' },
+  { id: 'PACK', robot: { kind: 'ammr', count: 2 }, cycle: 8, packXfer: true, task: '최종 외관·라벨 검사 → 그 제품 쪽 로봇이 접이식 상자를 펴서 제품을 넣고 뚜껑·QR 라벨 → 닫힌 상자를 AMR에' },
 ];
 
 export function zoneLine(mix = '1:1') {
@@ -151,7 +151,10 @@ export const robotForMode = (robot, modeKey) => (ROBOT_KINDS[robot?.kind]?.darkO
 const taskForMode = (s, modeKey) => (ROBOT_KINDS[s.robot?.kind]?.darkOnly && !ammrAllowed(modeKey) ? String(s.task ?? '').replace(/AMMR\s*양팔로\s*/, '양쪽 협동로봇이 ').replace(/옆\s*(부품\s*)?선반에서\s*\S+\s*가져와\s*/, '') : s.task);
 // 부품분류셀 키트 옮겨 싣기 명목 사이클 (초): 제품 쪽 로봇 1대가 키트를 가져와 부품 4개를 하나씩 키트 포켓에 넣는다 — 로봇이 여러 대여도 한 대상물은 그 제품 쪽 한 대가 하므로 대수로 줄지 않는다 (js/sps.js SORT_AMMR · SORT_ARM)
 export const SORT_CYCLE = 12;
+// 검사·포장셀 명목 사이클 (초): 상자 펴기 → 제품 넣기 → 뚜껑 → 라벨 → 닫힌 상자를 AMR에 — 제품 쪽 로봇 1대 (js/pack.js)
+export const PACK_CYCLE = 12;
 export function effCycle(s, modeKey = 'smart') {
+  if (s.packXfer) { const kind = robotForMode(s.robot, modeKey)?.kind ?? 'none'; return PACK_CYCLE * (modeKey === 'traditional' || kind === 'none' ? 1 : ROBOT_KINDS[kind].factor); }
   if (s.kitXfer) { const kind = robotForMode(s.robot, modeKey)?.kind ?? 'none'; return SORT_CYCLE * (modeKey === 'traditional' || kind === 'none' ? 1 : ROBOT_KINDS[kind].factor); }
   const n = Math.max(1, s.robot?.count ?? 0);
   const kind = robotForMode(s.robot, modeKey)?.kind ?? 'none';
@@ -207,6 +210,7 @@ export function normalizeLine(raw) {
     for (const s of stations) {
       const cell = ZONE_CELLS[s.id];
       if (cell && s.type !== cell.type) { warnings.push(`${cell.label}의 유형은 ${STATION_TYPES[cell.type].label}로 고정 → 되돌림`); s.type = cell.type; }
+      if (s.id === 'PACK') { s.packXfer = true; if (/옆 선반에서 포장재를 가져와 제품별 포장/.test(s.task)) s.task = ZONE_RECIPES.find((r) => r.id === 'PACK').task; }   // 포장 옮겨 싣기 (저장된 예전 레시피에도)
       if (s.id === 'SORT') { s.kitXfer = true; if (/부품 선반에서 부품을 가져와 판별·분류·키팅/.test(s.task)) s.task = ZONE_RECIPES.find((r) => r.id === 'SORT').task; }   // 서열 키팅 옮겨 싣기 (저장된 예전 레시피에도)
     }
   } else if (!LAYOUTS[layout]) { warnings.push(`알 수 없는 레이아웃 "${raw?.layout}" → 일자형`); out.layout = 'straight'; }

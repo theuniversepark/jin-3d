@@ -14,7 +14,8 @@ const run = (mode, seed, T, events) => {
 };
 
 console.log('== 원인별 손실 분해 (피지컬AI 1시간 · 10분마다 진로 이벤트)');
-const { s } = run('dark', 3, 3600, true);
+// 진로 이벤트에 로봇이 걸리는지는 시드에 따라 다르다 — 검사·포장셀·구분 적재장 배치(상위 meta-factory와 같음) 뒤 시드 3은 1시간 동안 걸린 로봇이 없어 시드 2로 본다
+const { s } = run('dark', 2, 3600, true);
 const R = s.impact.report(0), K = R.kpi, sumPts = R.rows.reduce((a, r) => a + r.oeePts, 0), by = Object.fromEntries(R.rows.map((r) => [r.key, r]));
 check('OEE + 원인별 OEE 손실 = 100%', Math.abs(K.oee + sumPts - 1) < 0.005, `OEE ${(K.oee * 100).toFixed(1)}% + 손실 ${(sumPts * 100).toFixed(1)}%p`);
 check('OEE·UPH가 kpi()와 같음', Math.abs(K.oee - s.kpi().OEE) < 0.01 && Math.abs(K.uph - s.kpi().good / (s.time / 3600)) < 3, `${(K.oee * 100).toFixed(1)}% · UPH ${Math.round(K.uph)}`);

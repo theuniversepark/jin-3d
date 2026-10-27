@@ -13,6 +13,7 @@ import { SecurityLayer } from './security.js';
 import { FleetControl } from './fleet.js';
 import { Orchestrator, PRIORITY, prioOf } from './orchestrator.js';
 import { SpsMonitor, SPS_GEO, SORT_AMMR } from './sps.js';
+import { PACK_GEO, PACK_AMMR, PACK_EV } from './pack.js';
 import { AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
 export function mulberry32(a) {
@@ -414,8 +415,9 @@ export class Simulation {
     this.loc = { ...LOC, SRC: localLoc(this.stations[0].def, 0, isZone(this.line) ? 4.5 : 4.2, '투입구'), SINK: localLoc(this.stations[this.stations.length - 1].def, 0, isZone(this.line) ? 5.4 : 4.2, '완제품 적재장') };
     // 출하 지게차 상차 위치: 구분 적재장 앞쪽(도어트림 구역)·뒤쪽(e-axle 구역)
     const sinkDef = this.stations[this.stations.length - 1].def;
-    this.loc.PICK_DT = { ...this.loc.SINK, name: isZone(this.line) ? '도어트림 적재 구역' : '완제품 적재장' };
-    this.loc.PICK_EA = localLoc(sinkDef, 0, -5.4, 'e-axle 적재 구역');
+    // 구분 적재장 팔레트(포장 상자 적재 · z ±1.85 ~ ±3.45) 바깥 4.6m에 서서 포크(앞 0.75 ~ 1.9m)를 팔레트 앞쪽에 넣는다 (상위 meta-factory와 같음)
+    this.loc.PICK_DT = isZone(this.line) ? localLoc(sinkDef, 0, 4.6, '도어트림 적재 구역') : { ...this.loc.SINK, name: '완제품 적재장' };
+    this.loc.PICK_EA = localLoc(sinkDef, 0, -4.6, 'e-axle 적재 구역');
 
     this.vehicles = [];
     for (let i = 0; i < m.vehicles; i++) {
@@ -458,6 +460,8 @@ export class Simulation {
     if (m.partsCap) for (const st of this.processing) { if (this.zone && st.id === 'SORT') continue; st.parts = m.partsCap; st.partsReq = null; }
     // 부품분류셀 정비 자리: 셀 서쪽(입구 쪽) — 셀 앞(통로 쪽)은 키팅 구역이라 통로에서 곧장 내려오면 흐름 랙·컨베이어를 지난다
     if (this.zone) for (const st of this.processing) if (st.id === 'SORT') st.svc = localLoc(st.def, -3.0, 1.6, st.name);
+    // 검사·포장셀 정비 자리: 셀 앞 가운데는 포장대·매거진·뚜껑 받침이라 뚜껑 받침 동쪽 바깥 (x 2.6 — 휴머노이드 팔꿈치가 받침에 닿지 않게)
+    if (this.zone) for (const st of this.processing) if (st.id === 'PACK') st.svc = localLoc(st.def, 2.6, SVC_Z, st.name);
     // AMMR 셀: 대상물 하나마다 옆 부품 선반에서 부품을 가져와 작업한다 (레거시 단계는 사람이 대신 작업)
     for (const st of this.processing) {
       if (st.def.robot.kind !== 'ammr' || modeKey === 'traditional') continue;
@@ -582,6 +586,13 @@ export class Simulation {
   planAmmrRacks(st) {
     const zone = this.zone, zr = 1.7;
     const slots = zone ? [[-0.75, -1], [-0.75, 1], [0.95, -1], [0.95, 1]] : [[-0.6, -1], [0.6, 1], [1.3, -1], [-1.3, 1]];
+    // 검사·포장셀: 선반 대신 셀 밖 포장대 · 매거진 · 뚜껑 랙 (js/pack.js) — 대기 자리는 AMR 가운데 맞은편, 포장대 앞까지 나간다
+    if (zone && st.id === 'PACK') {
+      const G = PACK_GEO;
+      st.ammrRacks = st.ammr.map((u, i) => { const [sx0, side] = slots[i] ?? slots[0], sx = i < 2 ? 0 : sx0; return { mode: 'z', sps: true, rack: { x: sx, z: side * G.table.z }, pick: { x: sx, z: side * G.ammr.out }, side, slot: { x: sx, z: side * AMMR.slotZ } }; });
+      for (const [i, u] of st.ammr.entries()) { const p = st.ammrRacks[i]; u.rack = p; u.travel = Math.abs(p.pick.z - p.slot.z); }
+      return;
+    }
     // 부품분류셀: 선반 대신 셀 양옆 키팅 구역의 키트 컨베이어(서열 버퍼) — 로봇은 자기 쪽 컨베이어 앞까지 나가 키트를 꺼낸다 (js/sps.js SPS_GEO)
     if (zone && st.id === 'SORT') {
       const G = SPS_GEO;
@@ -733,12 +744,13 @@ export class Simulation {
     if (k === 'traditional') {
       for (const st of this.stations) {
         const edge = st.type === 'source' || st.type === 'sink';
-        const op = toWorld(st.def, edge ? -2.3 : -1.0, edge ? 1.2 : 2.4);
+        const packZ = this.zone && st.id === 'PACK';   // 검사·포장셀: 작업자는 포장대·매거진·AMR 사이 (협동로봇 자리 — js/pack.js)
+        const op = packZ ? toWorld(st.def, PACK_GEO.arm.x, PACK_GEO.arm.z) : toWorld(st.def, edge ? -2.3 : -1.0, edge ? 1.2 : 2.4);
         const w = add(`작업자-${st.id}`, st.def.inspect ? '검사원' : '작업자', op.x, op.z);
         w.station = st;
         // 로봇 대수만큼 수작업 인원 배치 (2번째부터는 라인 뒤편)
         for (let k = 1; k < (st.def.robot?.count ?? 0); k++) {
-          const ep = toWorld(st.def, -1.2 + (k - 1) * 1.2, -2.4);
+          const ep = packZ && k === 1 ? toWorld(st.def, PACK_GEO.arm.x, -PACK_GEO.arm.z) : toWorld(st.def, -1.2 + (k - 1) * 1.2, -2.4);
           const e = add(`작업자-${st.id}-${k + 1}`, '작업자', ep.x, ep.z, 0);
           e.station = st;
         }
@@ -1051,7 +1063,7 @@ export class Simulation {
     st.gate = {
       id: it.id, product: it.product, t: this.time, lead,
       text: sort ? `${P} → ${P} 라인 · ${P} 키트` : `${P} → ${tray ? '트레이' : '크레이트'} 포장`,
-      role: sort ? { lead: `${P} 키트 4개를 AMR 키트 포켓에 옮겨 담기`, support: `대기 — 다른 제품 담당 (${P}는 맡지 않음)` } : { lead: `${P} ${tray ? '트레이' : '크레이트'} 포장`, support: '작업물 고정 · 라벨' },
+      role: sort ? { lead: `${P} 키트 4개를 AMR 키트 포켓에 옮겨 담기`, support: `대기 — 다른 제품 담당 (${P}는 맡지 않음)` } : this.zone ? { lead: `${P} ${tray ? '트레이 박스' : '폴딩 크레이트'} 포장 (상자 펴기 → 제품 넣기 → 뚜껑 · 라벨 → AMR에)`, support: `대기 — 다른 제품 담당 (${P}는 맡지 않음)` } : { lead: `${P} ${tray ? '트레이' : '크레이트'} 포장`, support: '작업물 고정 · 라벨' },
     };
     st.gateCount ??= {}; st.gateCount[it.product] = (st.gateCount[it.product] ?? 0) + 1;
     // 결정 기록 (FACOS 셀·게이트 화면): 최근 40건 + 로봇별 주 작업 횟수
@@ -1089,6 +1101,7 @@ export class Simulation {
   }
   updateAMMR(st) {
     if (this.zone && st.id === 'SORT' && this.sps?.on) return this.updateSortAMMR(st);
+    if (this.zone && st.id === 'PACK') return this.updatePackAMMR(st);
     const work = st.item && !st.item.scrap && !st.done && ['BUSY', 'DOWN', 'MAINT', 'ESTOP', 'PSTOP', 'CHECK', 'CSTOP'].includes(st.state);
     for (const u of st.ammr) {
       if (!work || !this.isLead(st, u.i)) { if (!st.item || st.done || work) { u.phase = 'work'; u.pos = 0; u.turn = 0; u.carry = false; } continue; }   // 보조 역할은 자리에서 작업물 고정
@@ -1118,6 +1131,19 @@ export class Simulation {
       else if (p < A.driveIn[1]) { u.phase = 'driveIn'; u.turn = 0; u.pos = 1 - k(A.driveIn); }
       else { u.phase = 'work'; u.turn = 0; u.pos = 0; }
       u.carry = p >= A.pick[0] + (A.pick[1] - A.pick[0]) * 0.4 && p < A.place[1];
+      if (u.phase === 'pick' && u.lastItem !== st.item.id) { u.lastItem = st.item.id; u.trips++; }
+    }
+  }
+
+  // 검사·포장셀 AMMR: 그 제품 쪽 로봇만 포장한다 (js/pack.js PACK_AMMR — 화면 factory.js packAMMR과 같은 구간) · 다른 로봇은 대기 자리
+  updatePackAMMR(st) {
+    const work = st.item && !st.item.scrap && !st.done && ['BUSY', 'DOWN', 'MAINT', 'ESTOP', 'PSTOP', 'CHECK', 'CSTOP'].includes(st.state), A = PACK_AMMR, E = PACK_EV.ammr, p = st.progress ?? 0;
+    const inW = (w) => p >= w[0] && p < w[1];
+    for (const u of st.ammr) {
+      if (u.side < 0) { u.phase = 'work'; u.carry = false; continue; }   // e-axle 쪽은 고가반 6축 (AMMR 없음 — 화면 factory.js placeRobots)
+      if (!work || !this.isLead(st, u.i) || u.i !== this.isLeadFirst(st)) { if (!st.item || st.done || work) { u.phase = 'work'; u.pos = 0; u.turn = 0; u.carry = false; } continue; }
+      u.phase = inW(A.turnOut) || inW(A.turnOut2) ? 'turnOut' : inW(A.driveOut) ? 'driveOut' : inW(A.box) || inW(A.drop) || inW(A.lid) || inW(A.label) || inW(A.pickBox) ? 'pick' : inW(A.turnIn) || inW(A.turnIn2) ? 'turnIn' : inW(A.driveIn) || inW(A.driveIn2) ? 'driveIn' : 'work';
+      u.carry = (p >= E.boxGrab && p < E.boxSet) || (p >= E.prodGrab && p < E.prodSet) || (p >= E.lidGrab && p < E.lidSet) || (p >= E.packGrab && p < E.packSet);
       if (u.phase === 'pick' && u.lastItem !== st.item.id) { u.lastItem = st.item.id; u.trips++; }
     }
   }
@@ -1350,6 +1376,7 @@ export class Simulation {
 
   // 휴머노이드가 부품 선반을 채우는 자리: 선반 바깥쪽 (셀 옆쪽 선반이면 선반 뒤, 긴 쪽 선반이면 선반 옆)
   rackServiceLoc(st) {
+    if (this.zone && st.id === 'PACK') return localLoc(st.def, PACK_GEO.lay.ammr.mag.x, PACK_GEO.lay.ammr.mag.z + 0.75, `${st.name} 포장재 매거진`);   // 포장대 매거진 뒤 (바깥쪽) — 접이식 상자·뚜껑 보충
     const p = st.ammrRacks?.[0];
     if (!p || p.mode === 'z') return localLoc(st.def, -2.4, AMMR.rackZ, `${st.name} 부품 선반`);
     return localLoc(st.def, p.rack.x + p.dir * 0.9, p.rack.z, `${st.name} 부품 선반`);   // 선반 뒤 (통로·AMR 경로와 떨어진 쪽)
