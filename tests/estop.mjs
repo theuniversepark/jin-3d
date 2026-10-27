@@ -48,7 +48,7 @@ for (const mode of ['traditional', 'smart', 'dark']) {
   // 7) 셀 단위 비상정지: 그 셀만 정지, 나머지는 가동, 리셋하면 복귀
   { const { s, run } = mk(mode); run(240);
     const st = s.processing.find((x) => x.id === 'DT_ASSY'), other = s.processing.find((x) => x.id === 'EA_ASSY');
-    s.cmd.issue('ESTOP', st.id); run(5); const p0 = st.progress, o0 = other.c.processed; run(60);
+    s.cmd.issue('ESTOP', st.id); run(5); const p0 = st.progress, o0 = other.c.processed; run(200);   // 실제 작업 시간 (e-axle 조립 레거시 77초)
     check(mode, '셀 비상정지: 대상 셀 진행 정지', st.state === 'ESTOP' && st.progress === p0, `${st.state}`);
     check(mode, '셀 비상정지: 다른 라인 셀은 계속 생산', other.c.processed > o0, `+${other.c.processed - o0}`);
     check(mode, '셀 비상정지: 이동로봇은 계속 움직임', !s.cmd.estopAll);

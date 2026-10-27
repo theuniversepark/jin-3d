@@ -31,6 +31,7 @@ check('처음 마주친 로봇이 오케스트레이터 인시던트에 "진로�
 check('대응하지 않는 이동 로봇이 해결 전 이벤트 반경 안으로 들어가지 않음', inside === 0, `${inside}회`);
 check('이벤트가 해결되면 대기하던 로봇이 이동 재개', resumed > 0, `재개 ${resumed}회`);
 check('모든 이벤트가 150초 안에 해결 (대기 로봇이 대응을 막지 않음)', slow === 0, `늦음 ${slow}건`);
-check('생산·출하가 계속됨', shipped > 1000, `2시간 × 2 출하 ${shipped}`);
+check('생산·출하가 계속됨', shipped > 150,   // 실제 작업 시간: 2시간 × 2 약 250 (이전 약 1200)
+   `2시간 × 2 출하 ${shipped}`);
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);
 process.exitCode = fail ? 1 : 0;

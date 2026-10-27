@@ -72,7 +72,7 @@ console.log('== 우선순위 하에서도 운영 지속 (피지컬AI 2시간 · 
   const avg = (a) => a.reduce((x, e) => x + cmdT(e), 0) / Math.max(1, a.length);
   check('모든 현장 이벤트 해결', evs.every((e) => e.cleared), `${evs.filter((e) => e.cleared).length}/${evs.length}`);
   check('P1(화재·인명) 대응 명령이 P2보다 빠름', avg(p1) < avg(p2), `감지 → 명령 P1 ${avg(p1).toFixed(2)}초 · P2 ${avg(p2).toFixed(2)}초`);
-  check('생산 계속 (출하)', s.stats.shipped > 400, `출하 ${s.stats.shipped} · 선점 ${s.stats.preempts ?? 0}회 · 보류 ${s.stats.deferred ?? 0}건`);
+  check('생산 계속 (출하)', s.stats.shipped > 80,   /* 실제 작업 시간 */ `출하 ${s.stats.shipped} · 선점 ${s.stats.preempts ?? 0}회 · 보류 ${s.stats.deferred ?? 0}건`);
 }
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);
 process.exitCode = fail ? 1 : 0;

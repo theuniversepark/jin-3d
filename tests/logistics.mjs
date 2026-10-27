@@ -9,6 +9,7 @@ const Z = INBOUND.zone;
 for (const mode of ['traditional', 'smart', 'dark']) {
   console.log(`== ${mode}`);
   const s = new Simulation(mode, 2, { line: zoneLine(), quiet: true }); const ag = new FactoryAgent(s);
+  s.whRaw = 110;   // 실제 작업 시간은 원자재 소비가 느리다 — 재주문점(80) 바로 위에서 시작해 2시간 안에 입고 순환을 본다
   const rcv = s.forklifts.find((f) => f.receiver);
   let intr = 0, who = '', out = 0, minRaw = 1e9, docks = [], seen = new Set();
   let parked = 0, crooked = 0, worst = 0;
@@ -29,7 +30,7 @@ for (const mode of ['traditional', 'smart', 'dark']) {
   }
   check('입고 지게차 전용 영역에 다른 이동체 침입 없음', intr === 0, intr ? `${intr}회 · ${who}` : '');
   check('입고 지게차는 전용 영역 안에서만 작업', out === 0, out ? `${out}회` : '');
-  check('입고 트럭 도착·하차·출차 순환', s.inbound.stats.trucks >= 2, `완료 ${s.inbound.stats.trucks}대`);
+  check('입고 트럭 도착·하차·출차 순환 (실제 작업 시간 — 2시간에 1대 이상)', s.inbound.stats.trucks >= 1, `완료 ${s.inbound.stats.trucks}대`);
   check('접안 트럭이 도크 중심선에 반듯이 정렬', docks.length > 0 && docks.every((d) => Math.abs(d.z - INBOUND.dockZ) < 1e-6 && Math.abs(d.heading + Math.PI / 2) < 1e-6), `${docks.length}대`);
   check('입고 지게차가 대기 주차 칸에 반듯이 주차', parked > 0 && crooked === 0, `주차 ${(parked / 10).toFixed(0)}초 · 최대 어긋남 ${(worst * 180 / Math.PI).toFixed(1)}°`);
   check('창고 원자재가 바닥나지 않음 (소진 직전 재입고)', minRaw > 0 && minRaw <= WH.rawReorder, `최저 ${minRaw}박스`);

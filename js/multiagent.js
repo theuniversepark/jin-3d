@@ -2,7 +2,7 @@
 // ① 반사 계층 (매 1초, 바로 실행): 자재 배차 · 절전 · AGV 충전 · 정지 설비 앞 투입 보류 — 빨라야 하는 판단은 규칙 그대로
 // ② 도메인 에이전트 (각자 주기, 제안만): 정비(5초) · 품질(2초) · 흐름(3초) — 공장 상태 스냅샷을 보고 "제안 + 근거"를 메인에 올린다
 // ③ 메인 조정자 (매 1초): 안전 우선순위(오케스트레이터 P1이면 예지정비·재보정 보류) → 상태 확인(이미 처리된 제안 정리) →
-//    충돌 판정(병목 셀 가동 중 정비는 위급하지 않으면 대기 구간까지 미룸 · 정비 중·건강도 낮은 셀 고속 운전 거절 ·
+//    충돌 판정(가동 중인 셀 정비는 위급하지 않으면 대기 구간까지 미룸 · 정비 중·건강도 낮은 셀 고속 운전 거절 ·
 //    투입 간격은 20초 안에 되돌리지 않음) → 승인한 제안만 실행. 제안 → 실행 지연 · 충돌 · 되돌림을 센다.
 // 디지털트윈 비교(compareArchitectures): 같은 라인·시드·현장 이벤트로 단일 vs 혼합형을 실제로 돌려 UPH·OEE·WIP·kWh/개·판단 지연·충돌을 잰다.
 import { FactoryAgent } from './agent.js';
@@ -105,12 +105,14 @@ export class HybridAgent extends FactoryAgent {
     if (src.state === 'HOLD' && !s.releaseHold && !s.cmd.feedHold) src.state = 'BUSY';
   }
   arbitrate() {
-    const s = this.sim, m = this.m, t = s.time, P1 = s.orch.urgentOpen(1).length > 0;
+    // 안전(P1) 보류: 대응 로봇이 아직 정해지지 않은 P1이 있을 때만 — 대응 로봇이 배정된 뒤에는(필요하면 예지정비 중인 휴머노이드도 중단시켜 데려간다 · sim.js pickResponder) 정비를 미루지 않는다
+    const s = this.sim, m = this.m, t = s.time, P1 = s.orch.urgentOpen(1).some((i) => !i.ev || !i.ev.responder);
     // 병목 = 실효 부하가 가장 큰 셀
     let bott = null, bc = 0; for (const st of s.processing) { const c = st.def.cycle * m.cycleMul * st.speedMul * (st.def.share ?? 1); if (c > bc) { bc = c; bott = st; } }
     const keep = [];
     const order = [...this.queue].sort((a, b) => a.prio - b.prio || (a.st?.health ?? 100) - (b.st?.health ?? 100));
-    let pmSlots = Math.max(0, (s.techs?.length ?? 1) - s.requests.filter((r) => r.kind === 'pm' && !r.st?.request?.self).length);   // 동시에 걸 수 있는 예지정비 (정비 인력 수)
+    // 동시에 걸 수 있는 예지정비 = 정비 인력 수 − 걸려 있는 예지정비
+    let pmSlots = Math.max(0, (s.techs?.length || 1) - s.requests.filter((r) => r.kind === 'pm' && !r.st?.request?.self).length);
     for (const p of order) {
       const st = p.st;
       // 이미 처리됐거나 상태가 바뀐 제안은 정리
@@ -118,11 +120,11 @@ export class HybridAgent extends FactoryAgent {
       if (t - p.t0 > 60) { this.ma.stale++; this.ma.rule.stale++; continue; }   // 1분 넘은 제안은 버리고 다시 받는다
       if (p.kind === 'pm') {
         if (P1) { this.ma.deferred++; this.ma.rule.p1++; keep.push(p); continue; }                       // 안전(P1) 대응 중 보류
-        const busyBott = st === bott && st.state === 'BUSY';
-        if (busyBott && !p.critical) { this.ma.deferred++; this.ma.conflicts++; this.ma.rule.bott++; keep.push(p); continue; }   // 병목 가동 중 — 대기 구간 또는 위급까지
-        if (st.state === 'BUSY' && !p.critical && st.health > m.pmThreshold - 4 && st !== bott && (st.def.cycle * m.cycleMul * (st.def.share ?? 1)) / bc > 0.85) { this.ma.deferred++; this.ma.rule.nearBott++; keep.push(p); continue; }   // 병목에 가까운 셀도 조금 더 기다림
+        // 가동 중인 셀은 위급하지 않으면 대기 구간까지 미룬다 — 직렬 라인이라 병목이 아닌 셀도 작업 중에 서면 그 대상물이 멈춰 흐름이 끊긴다 (단일 에이전트와 같은 기준)
+        // 사족보행 순찰 보고(p.source)로 올라온 정비는 미루지 않는다 — 순찰이 이른 징후를 잡은 것이라 미루다 60초가 지나 버려지면 그 이점이 사라진다 (단일 에이전트도 바로 정비 요청)
+        if (st.state === 'BUSY' && !p.critical && !p.source) { this.ma.deferred++; if (st === bott) { this.ma.conflicts++; this.ma.rule.bott++; } else this.ma.rule.nearBott++; keep.push(p); continue; }
         if (pmSlots <= 0 && !p.critical) { this.ma.deferred++; this.ma.rule.slots++; keep.push(p); continue; }   // 정비 인력이 모두 바쁨
-        if (s.requestTech(st, 'pm')) { pmSlots--; this.exec(p, `${st.name} 예지정비 지시`, { obs: p.why, dec: `메인 조정: ${st.state === 'BUSY' ? (st === bott ? '병목이지만 위급' : '병목 아님 — 가동 중 정비 영향 작음') : '설비 대기 구간 활용'}`, act: '정비 인력 배정' }, 'plan'); }
+        if (s.requestTech(st, 'pm')) { pmSlots--; this.exec(p, `${st.name} 예지정비 지시`, { obs: p.why, dec: `메인 조정: ${st.state === 'BUSY' ? '고장 임박 — 가동 중이지만 즉시' : '설비 대기 구간 활용'}`, act: '정비 인력 배정' }, 'plan'); }
         else { this.ma.deferred++; keep.push(p); }
       } else if (p.kind === 'cal') {
         if (P1 && m.key !== 'dark') { this.ma.deferred++; this.ma.rule.p1++; keep.push(p); continue; }

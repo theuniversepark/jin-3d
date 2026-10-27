@@ -35,7 +35,7 @@ ${catalogText()}
 운영자가 공정도, 레이아웃 도면, 설비 목록, 공정표(엑셀), 기획서 같은 파일을 첨부하면 그 내용을 근거로 라인 컨셉을 새로 잡습니다.
 - 파일에서 공정 순서, 각 공정의 작업 내용, 설비·로봇 종류와 대수, 사이클 타임(또는 택트·생산량), 라인 형태(일자형/U자형)를 찾아 extracted에 근거와 함께 한 줄씩 적으십시오. 예: "공정표 3행: 스폿 용접, 로봇 2대, CT 45초".
 - 파일의 공정을 위 카탈로그에서 가장 가까운 유형으로 대응시키고, 대응이 애매하면 warnings에 "원문 '실링' → 도장(paint)으로 근사" 처럼 적으십시오.
-- 사이클이 2~40초 범위를 벗어나면 비율을 유지한 채 시뮬레이션 범위로 환산하고 그 사실을 warnings에 적으십시오. 생산량(예: 시간당 300개)만 있으면 택트 = 3600/생산량으로 병목 공정 사이클을 잡으십시오.
+- 사이클이 2~300초 범위를 벗어나면 비율을 유지한 채 시뮬레이션 범위로 환산하고 그 사실을 warnings에 적으십시오. 생산량(예: 시간당 300개)만 있으면 택트 = 3600/생산량으로 병목 공정 사이클을 잡으십시오.
 - 공정이 ${MAX_STATIONS}개를 넘으면 인접한 유사 공정을 묶고 무엇을 묶었는지 적으십시오.
 - 도면이 U자·셀 형태이거나 투입과 출하가 같은 쪽이면 layout을 "u", 그렇지 않으면 "straight"로 하십시오.
 - 이 경우 summary는 잡은 컨셉(라인 성격, 레이아웃, 자동화 수준, 예상 병목)을 2~4문장으로 설명합니다.
@@ -112,7 +112,7 @@ export async function designLine(client, { line, request, attachments = [] }) {
   const files = attachmentBlocks(attachments);
   const fileNote = attachments.length ? `\n\n## 첨부 파일 (${attachments.length}개)\n${attachments.map((a) => `- ${a.name}${a.note ? ` (${a.note})` : ''}`).join('\n')}\n위 첨부 파일의 내용을 근거로 라인 컨셉을 잡아 주십시오.` : '';
   const zone = isZone(current);
-  const zoneNote = zone ? `\n\n## ${ZONE_NAME} 제약\n현재 라인은 메타팩토리 테스트베드 ${ZONE_NAME}의 혼류 라인(도어트림 ${ZONE_PRODUCTS.doortrim.customer} + e-axle ${ZONE_PRODUCTS.eaxle.customer})입니다. 흐름: 자재 투입 → 부품분류셀(공동)에서 부품 종류 판별·분기 → 도어트림 라인(조립셀→체결셀) / e-axle 라인(조립셀→체결셀) → 포장셀(공동)에서 합류·제품별 포장 → 구분 적재장의 제품별 구역. 6개 셀(${Object.values(ZONE_CELLS).map((c) => `${c.no}.${c.label}: ${c.use}`).join(', ')})이 바닥에 고정 배치되어 있어, stations의 id·순서·type은 그대로 두고 name·robot_kind·robot_count·cycle_s·task(셀 레시피)만 바꿀 수 있습니다. 제품 전용 셀의 부하는 사이클×혼류 비중입니다(현재 혼류 ${ZONE_MIXES[current.mix]?.label ?? '1 : 1'}). layout은 "straight"로 두면 됩니다(서버가 셀 배치로 되돌립니다). 셀 추가·삭제·순서 변경 요청이면 feasible을 false로 하고 사용자 라인에서 하도록 summary에 안내하십시오.` : '';
+  const zoneNote = zone ? `\n\n## ${ZONE_NAME} 제약\n현재 라인은 메타팩토리 테스트베드 ${ZONE_NAME}의 혼류 라인(도어트림 ${ZONE_PRODUCTS.doortrim.customer} + e-axle ${ZONE_PRODUCTS.eaxle.customer})입니다. 흐름: 자재 투입 → 부품분류셀(공동)에서 부품 종류 판별·분기 → 도어트림 라인(조립셀→체결셀) / e-axle 라인(조립셀→체결셀) → 포장셀(공동)에서 합류·제품별 포장 → 구분 적재장의 제품별 구역. 6개 셀(${Object.values(ZONE_CELLS).map((c) => `${c.no}.${c.label}: ${c.use}`).join(', ')})이 바닥에 고정 배치되어 있어, stations의 id·순서·type은 그대로 두고 name·robot_kind·robot_count·cycle_s·task(셀 레시피)만 바꿀 수 있습니다. 이 셀들의 cycle_s는 자동화 단계 실제 작업 시간(초)이며 레거시·피지컬AI 단계는 같은 비율로 바뀝니다(로봇 배율·대수 병렬 이득을 쓰지 않음 · 체결·압입 셀은 로봇당 2~4점). 제품 전용 셀의 부하는 사이클×혼류 비중입니다(현재 혼류 ${ZONE_MIXES[current.mix]?.label ?? '1 : 1'}). layout은 "straight"로 두면 됩니다(서버가 셀 배치로 되돌립니다). 셀 추가·삭제·순서 변경 요청이면 feasible을 false로 하고 사용자 라인에서 하도록 summary에 안내하십시오.` : '';
   const user = `## 현재 라인 (레이아웃 ${current.layout}, 병목: ${m.bottleneck?.name}, 이론 UPH ${Math.round(m.uph)})\n\`\`\`json\n${JSON.stringify(toWire(current))}\n\`\`\`${zoneNote}${fileNote}\n\n## 운영자 요청\n${request}`;
 
   const response = await client.beta.messages.create({

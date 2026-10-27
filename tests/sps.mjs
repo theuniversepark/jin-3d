@@ -2,7 +2,7 @@
 // 부품분류셀 연결(선반 대신 키트 컨베이어 · 정비 자리 · 부품 선반 재고 대상 아님), 피지컬AI ①~⑥이 단계별로 다르게 기록되는지와 셀 대기 시간, 센서값 · 데이터(MQTT 토픽)를 확인한다
 // (트레이·피킹 로봇·키트 포켓 동작은 화면 factory.js sortAMMR · sortArm · animSps). 실행: npm test
 import { Simulation } from '../js/sim.js';
-import { zoneLine, AMMR, effCycle, SORT_CYCLE, ROBOT_KINDS } from '../js/line.js';
+import { zoneLine, AMMR, effCycle, ZONE_T, MODE_CYCLE_MUL } from '../js/line.js';
 import { SPS_SPEC, SPS_SENSORS, SPS_TOPIC, SPS_KITS, SPS_RACKS, SPS_GEO, SPS_SIDE, SPS_LINE, SPS_T, kitSlot, SORT_AMMR, SORT_ARM, sortPlaced, sortGrabbed } from '../js/sps.js';
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => { ok ? pass++ : fail++; console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  — ' + info : ''}`); };
@@ -20,7 +20,7 @@ check('배치: 피킹 길은 컨베이어와 흐름 랙 사이 · 클린 부스�
 check('진행 구간: 키팅 피킹(부품 4개 · 0.2씩) → 검증 · 부품분류셀 옮겨 싣기는 부품 4개를 하나씩 (집은 수 ≥ 넣은 수 · 끝에 4개)',
   SPS_T.pick === 0.8 && SPS_T.verify === 1 && [true, false].every((am) => [0.3, 0.5, 0.6, 0.7, 0.8, 0.9].every((p) => sortGrabbed(am, p) >= sortPlaced(am, p)) && sortPlaced(am, 0.99) === 4 && sortPlaced(am, am ? 0.45 : 0.04) === 0)
   && SORT_AMMR.pick[1] < SORT_AMMR.parts[0][0] && SORT_ARM.parts[1] <= SORT_ARM.ret[0]);
-check('부품분류셀 사이클: 키트 옮겨 싣기 명목 12초 × 로봇 계수 · 제품 쪽 로봇 1대가 하므로 대수로 줄지 않음', (() => { const l = zoneLine(), sr = l.stations[0]; const two = effCycle(sr, 'dark'), four = effCycle({ ...sr, robot: { ...sr.robot, count: 4 } }, 'dark'); return sr.kitXfer && two === four && effCycle(sr, 'traditional') === SORT_CYCLE && Math.abs(effCycle(sr, 'dark') - SORT_CYCLE * ROBOT_KINDS.ammr.factor) < 1e-9; })(), `피지컬AI ${effCycle(zoneLine().stations[0], 'dark').toFixed(1)}초 · 자동화 ${effCycle(zoneLine().stations[0], 'smart').toFixed(1)}초`);
+check('부품분류셀 사이클: 실제 작업 시간 · 제품 쪽 로봇 1대가 하므로 대수로 줄지 않음 (레거시 18 · 자동화 25 · 피지컬AI 30초)', (() => { const l = zoneLine(), sr = l.stations[0]; const two = effCycle(sr, 'dark'), four = effCycle({ ...sr, robot: { ...sr.robot, count: 4 } }, 'dark'); return sr.kitXfer && two === four && ['traditional', 'smart', 'dark'].every((m, i) => Math.abs(effCycle(sr, m) * MODE_CYCLE_MUL[m] - ZONE_T.SORT[i]) < 1e-9) && ZONE_T.SORT.join() === '18,25,30'; })());
 
 console.log('== 부품분류셀 연결');
 const sims = Object.fromEntries(['dark', 'smart', 'traditional'].map((m) => [m, new Simulation(m, 17, { line: zoneLine(), quiet: true })]));

@@ -25,7 +25,7 @@ export const PACK_GEO = {
 };
 // e-axle을 위에서 잡는 자리 (대상물 좌표): 감속기 하우징 윗면(x −0.27 · 0.49m) — 인버터(x 0.03~0.37 · 0.57m)를 피해
 export const PACK_GRIP = { doortrim: { x: 0, y: 0.075, z: 0 }, eaxle: { x: -0.27, y: 0.49, z: 0.08 } };
-// 진행률 구간 (셀 사이클 = line.js PACK_CYCLE)
+// 진행률 구간 (셀 사이클 = 실제 작업 시간 line.js ZONE_T.PACK — 제품마다)
 export const PACK_ARM = { box: [0.04, 0.2], prod: [0.2, 0.46], lid: [0.46, 0.6], label: [0.6, 0.7], back: [0.7, 0.9], home: [0.9, 1] };
 export const PACK_AMMR = {
   turnOut: [0.04, 0.09], driveOut: [0.09, 0.14], box: [0.14, 0.27], turnIn: [0.27, 0.31], driveIn: [0.31, 0.36], grab: [0.36, 0.44], backOff: [0.44, 0.48],

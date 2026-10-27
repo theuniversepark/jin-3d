@@ -33,7 +33,7 @@ for (const [mode, label] of [['traditional', '레거시'], ['smart', '자동화'
   check(`${label}: 포크가 다른 로봇·AMR·사람과 겹치지 않음 (30분, 지게차 ${forks.length}대 · 주행 ${moved.toFixed(0)}m)`, !hit.mover.length && moved > 50, hit.mover.slice(0, 3).join(', '));
   check(`${label}: 포크가 셀(로봇·설비)·충전 기둥·정비실 비품과 겹치지 않음`, !hit.cell.length && !hit.fixed.length, [...hit.cell, ...hit.fixed].slice(0, 3).join(', '));
   check(`${label}: 트럭 앞 2.2m 안에서는 트럭 쪽을 본 채 들어가고 후진으로 나온다 (적재함 안에서 돌지 않음)`, backOut > 0 && turnIn === 0, `트럭 쪽 ${backOut} · 돌아섬 ${turnIn}`);
-  check(`${label}: 출하가 계속 진행됨 (교착 없음)`, (s.stats.shipped ?? 0) > 50, `출하 ${s.stats.shipped}`);
+  check(`${label}: 출하가 계속 진행됨 (교착 없음)`, (s.stats.shipped ?? 0) > 10, `출하 ${s.stats.shipped}`);   // 실제 작업 시간: 30분 출하 16~32
 }
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);
 process.exitCode = fail ? 1 : 0;

@@ -201,7 +201,7 @@ export class LineDesigner {
         <div class="r">
           <select data-f="kind" title="${!ammrOk && ROBOT_KINDS[s.robot.kind]?.darkOnly ? `이 셀은 피지컬AI 단계에서 ${ROBOT_KINDS[s.robot.kind].short} — 레거시·자동화 단계에서는 협동로봇으로 운영` : '로봇 종류'}">${robotOpts(robotForMode(s.robot, mode).kind)}</select>${!ammrOk && ROBOT_KINDS[s.robot.kind]?.darkOnly ? `<small class="ammr-note" title="피지컬AI 단계에서는 ${ROBOT_KINDS[s.robot.kind].short}">피지컬AI: ${ROBOT_KINDS[s.robot.kind].short}</small>` : ''}
           <label>대수<input data-f="count" type="number" min="0" max="${MAX_ROBOTS}" value="${s.robot.count}" ${s.robot.kind === 'none' ? 'disabled' : ''} /></label>
-          <label>기준<input data-f="cycle" type="number" min="2" max="40" step="0.5" value="${s.cycle}" />초</label>
+          <label>기준<input data-f="cycle" type="number" min="2" max="300" step="0.5" value="${s.cycle}" />초</label>
           <span class="eff" data-eff="${i}"></span>
         </div>
         <div class="r"><input class="task" data-f="task" value="${esc(s.task)}" maxlength="60" placeholder="이 공정이 하는 일" /></div>

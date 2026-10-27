@@ -14,7 +14,7 @@ import { FleetControl } from './fleet.js';
 import { Orchestrator, PRIORITY, prioOf } from './orchestrator.js';
 import { SpsMonitor, SPS_GEO, SORT_AMMR } from './sps.js';
 import { PACK_GEO, PACK_AMMR, PACK_EV } from './pack.js';
-import { AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
+import { MODE_CYCLE_MUL, fastenT, AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
 export function mulberry32(a) {
   return function () {
@@ -28,7 +28,7 @@ export function mulberry32(a) {
 export const MODES = {
   traditional: {
     key: 'traditional', label: '레거시 공장', short: '레거시',
-    cycleMul: 1.22, cycleVar: 0.22, defectBase: 0.028, catchRate: 0.85, wearMul: 1.15,
+    cycleMul: MODE_CYCLE_MUL.traditional, cycleVar: 0.22, defectBase: 0.028, catchRate: 0.85, wearMul: 1.15,
     repairTime: 160, pmTime: 0, pmEnabled: false, alarmDelay: 10, andon: true,   // 설비 알람 자동 호출(안돈): 고장 발견·호출 35초 → 10초 — KPI 영향·개선 제안 적용 (2시간 × 시드 3 고장 정지 −12% · WIP −7%)
     vehicles: 1, vehicleKind: 'forklift', vehicleSpeed: 1.7, batteryDrain: 0, vehicleCap: 24,
     techs: 2, techKind: 'human', techSpeed: 1.3,
@@ -37,7 +37,7 @@ export const MODES = {
   },
   smart: {
     key: 'smart', label: '자동화 공장', short: '자동화',
-    cycleMul: 1.0, cycleVar: 0.08, defectBase: 0.015, catchRate: 0.98, wearMul: 1.0,
+    cycleMul: MODE_CYCLE_MUL.smart, cycleVar: 0.08, defectBase: 0.015, catchRate: 0.98, wearMul: 1.0,
     repairTime: 90, pmTime: 45, pmEnabled: true, pmThreshold: 50, alarmDelay: 0,
     vehicles: 3, vehicleKind: 'agv', vehicleSpeed: 2.3, batteryDrain: 0.22, vehicleCap: 16, chargeAt: 30,
     techs: 1, techKind: 'human', techSpeed: 1.5,
@@ -47,7 +47,7 @@ export const MODES = {
   },
   dark: {
     key: 'dark', label: '피지컬AI 자율공장', short: '자율',
-    cycleMul: 0.92, cycleVar: 0.04, defectBase: 0.008, catchRate: 0.995, wearMul: 0.9,
+    cycleMul: MODE_CYCLE_MUL.dark, cycleVar: 0.04, defectBase: 0.008, catchRate: 0.995, wearMul: 0.9,
     repairTime: 60, pmTime: 28, pmEnabled: true, pmThreshold: 55, alarmDelay: 0,
     vehicles: 4, vehicleKind: 'agv', vehicleSpeed: 2.6, batteryDrain: 0.22, vehicleCap: 16, chargeAt: 55,
     techs: 2, techKind: 'humanoid', techSpeed: 1.6,
@@ -1072,6 +1072,8 @@ export class Simulation {
     if (st.gateLog.length > 40) st.gateLog.shift();
   }
   // 게이트 결정에서 이 로봇이 주 작업을 맡는가 (게이트가 없는 셀은 모두 주 작업)
+  // 셀 입구 → 셀 중앙 진입 정도 (0 ~ 1 — 화면 syncItems와 같은 시간): 체결·압입 점은 다 들어온 뒤에 잡는다
+  entryK(st) { return Math.min(1, (st.itemT ?? 0) / (this.entryTime ?? 0.5)); }
   // 게이트 결정의 주 작업 로봇 가운데 첫 로봇 (부품분류셀에서 키트를 AMR에 옮겨 싣는 로봇)
   isLeadFirst(st) { return !st.gate || !st.item || st.gate.id !== st.item.id ? 0 : st.gate.lead[0] ?? 0; }
   isLead(st, i) { return !st.gate || !st.item || st.gate.id !== st.item.id || st.gate.lead.includes(i); }
@@ -1094,9 +1096,9 @@ export class Simulation {
       h.battery = clamp(h.battery + (h.chgNow ? B.humanoid.rate : -(h.moving ? B.humanoid.move : h.task ? B.humanoid.work : B.humanoid.idle)) * dt);
     }
     for (const st of this.processing) for (const u of st.ammr ?? []) {
-      const drive = u.phase !== 'work';
-      u.chgNow = !drive;   // 작업 위치에 도킹해 있으면 접점 충전 (작업 소모보다 조금 많이)
-      u.battery = clamp((u.battery ?? 100) + (drive ? -B.ammr.drive : B.ammr.rate - (st.state === 'BUSY' ? B.ammr.work : 0)) * dt);
+      const docked = u.phase === 'work', drive = !docked && u.phase !== 'pick';   // pick: 작업 위치 밖에 서서 팔만 쓴다 (주행 소모 없음 · 충전 접점 밖)
+      u.chgNow = docked;   // 작업 위치에 도킹해 있으면 접점 충전 (작업 소모보다 조금 많이)
+      u.battery = clamp((u.battery ?? 100) + (drive ? -B.ammr.drive : docked ? B.ammr.rate - (st.state === 'BUSY' ? B.ammr.work : 0) : -B.ammr.work) * dt);
     }
   }
   updateAMMR(st) {
@@ -1176,7 +1178,12 @@ export class Simulation {
       st.itemFrom = inC.path[inC.path.length - 1];   // 들어온 경로의 끝점 (합류 대기 차로는 중심선에서 비켜 있음)
       st.item = e.item; st.progress = 0; st.done = false; st.itemT = 0;
       this.gateDecide(st);
-      const base = st.def.cycle * m.cycleMul * st.speedMul * (this.vla?.cycleFactor(st) ?? 1);   // 배포된 VLA 모델 버전만큼 사이클 단축
+      // 체결·압입 셀: 로봇마다 이번 대상물에 체결할 점 수(2~4, 대상물 번호로 정함 — 난수 흐름을 바꾸지 않는다) · 사이클은 가장 많은 로봇 기준
+      const F = st.def.fasten;
+      const seed = Math.abs(Number(String(st.item.id).replace(/\D/g, '')) || 0), R = F ? F.max - F.min + 1 : 1;
+      st.fastenPts = F && !st.item.scrap ? Array.from({ length: Math.max(1, st.def.robot?.count ?? 1) }, (_, i) => F.min + (seed * 7 + i * 2) % R) : null;
+      const nominal = st.fastenPts ? fastenT(F, st.fastenPts) * (st.def.fastenK ?? 1) : st.def.cycleBy?.[st.item.product] ?? st.def.cycle;   // 정밀조립: 실제 작업 시간 (line.js ZONE_T — 체결 점 수 · 제품마다)
+      const base = nominal * m.cycleMul * st.speedMul * (this.vla?.cycleFactor(st) ?? 1);   // 배포된 VLA 모델 버전만큼 사이클 단축
       st.cycleTime = st.item.scrap ? 0.5 : Math.max(base * 0.6, base * (1 + m.cycleVar * gauss(this.rand)));
       if (this.sps && !st.item.scrap) st.cycleTime += this.sps.plan(st, st.item);   // 서열 키팅: 버퍼가 비면 키트를 기다림 · 조립셀에서 키트 오류 발견 · 라인사이드 공용 부품 결품
     }
