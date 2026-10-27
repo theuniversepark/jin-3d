@@ -103,7 +103,7 @@ export const AMMR = { rackZ: 3.75, pickZ: 2.95, slotZ: 1.9 };
 export const AMMR_FETCH = { turnOut: 0.06, driveOut: 0.14, pick: 0.24, turnIn: 0.3, driveIn: 0.38, place: 0.5 };   // 구분 적재장의 제품별 구역 용량
 
 const ZONE_RECIPES = [
-  { id: 'SORT', robot: { kind: 'ammr', count: 2 }, cycle: 7, task: 'AMMR 양팔로 옆 부품 선반에서 부품을 가져와 판별·분류·키팅' },
+  { id: 'SORT', robot: { kind: 'ammr', count: 2 }, cycle: 7, kitXfer: true, task: '게이트 판별 → 그 제품 쪽 로봇이 키트 컨베이어에서 키트를 꺼내 AMR 키트 포켓에 부품 4개를 옮겨 담음' },
   { id: 'DT_ASSY', robot: { kind: 'cobot', count: 4 }, cycle: 14, task: '양쪽 협동로봇이 패널에 암레스트·스피커그릴·스위치 조립, 클립 압입' },
   { id: 'DT_FAST', robot: { kind: 'cobot', count: 2 }, cycle: 14, task: '스크류 자동 체결, 토크·각도 전수 판정' },
   { id: 'EA_ASSY', robot: { kind: 'cobot', count: 4 }, cycle: 16, task: '양쪽 협동로봇이 베어링 압입·로터·감속기어 삽입, 하우징 결합' },
@@ -149,7 +149,10 @@ export const AMMR_MODES = ['dark'];
 export const ammrAllowed = (modeKey) => AMMR_MODES.includes(modeKey);
 export const robotForMode = (robot, modeKey) => (ROBOT_KINDS[robot?.kind]?.darkOnly && !ammrAllowed(modeKey) ? { ...robot, kind: 'cobot' } : robot);   // 피지컬AI 전용 로봇(AMMR·휴머노이드)
 const taskForMode = (s, modeKey) => (ROBOT_KINDS[s.robot?.kind]?.darkOnly && !ammrAllowed(modeKey) ? String(s.task ?? '').replace(/AMMR\s*양팔로\s*/, '양쪽 협동로봇이 ').replace(/옆\s*(부품\s*)?선반에서\s*\S+\s*가져와\s*/, '') : s.task);
+// 부품분류셀 키트 옮겨 싣기 명목 사이클 (초): 제품 쪽 로봇 1대가 키트를 가져와 부품 4개를 하나씩 키트 포켓에 넣는다 — 로봇이 여러 대여도 한 대상물은 그 제품 쪽 한 대가 하므로 대수로 줄지 않는다 (js/sps.js SORT_AMMR · SORT_ARM)
+export const SORT_CYCLE = 12;
 export function effCycle(s, modeKey = 'smart') {
+  if (s.kitXfer) { const kind = robotForMode(s.robot, modeKey)?.kind ?? 'none'; return SORT_CYCLE * (modeKey === 'traditional' || kind === 'none' ? 1 : ROBOT_KINDS[kind].factor); }
   const n = Math.max(1, s.robot?.count ?? 0);
   const kind = robotForMode(s.robot, modeKey)?.kind ?? 'none';
   const kf = modeKey === 'traditional' || kind === 'none' || !(s.robot?.count > 0) ? 1 : ROBOT_KINDS[kind].factor;
@@ -204,6 +207,7 @@ export function normalizeLine(raw) {
     for (const s of stations) {
       const cell = ZONE_CELLS[s.id];
       if (cell && s.type !== cell.type) { warnings.push(`${cell.label}의 유형은 ${STATION_TYPES[cell.type].label}로 고정 → 되돌림`); s.type = cell.type; }
+      if (s.id === 'SORT') { s.kitXfer = true; if (/부품 선반에서 부품을 가져와 판별·분류·키팅/.test(s.task)) s.task = ZONE_RECIPES.find((r) => r.id === 'SORT').task; }   // 서열 키팅 옮겨 싣기 (저장된 예전 레시피에도)
     }
   } else if (!LAYOUTS[layout]) { warnings.push(`알 수 없는 레이아웃 "${raw?.layout}" → 일자형`); out.layout = 'straight'; }
   return { line: out, errors, warnings };

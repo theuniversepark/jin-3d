@@ -2,6 +2,7 @@
 import { Simulation, MODES, ST_LABEL, RAW_CAP, FG_CAP } from './sim.js';
 import { STATION_TYPES, ROBOT_KINDS } from './line.js';
 import { FactoryAgent } from './agent.js';
+import { spsHtml, SPS_CELLS } from './spsview.js';
 
 const $ = (id) => document.getElementById(id);
 const pct = (v, d = 1) => (v * 100).toFixed(d) + '%';
@@ -299,6 +300,7 @@ export class UI {
       </div>
       ${sim.mode.key === 'traditional' ? '<div class="note">※ 레거시 공장에는 센서가 없어 건강도·RUL은 현장에서 보이지 않는 시뮬레이션 내부값입니다.</div>' : ''}
       ${this.erpLine(st)}
+      ${sim.zone && sim.sps && SPS_CELLS.includes(st.id) ? spsHtml(sim.sps, st.id) : ''}
       <div class="btns"><button data-act="fault">⚡ 고장 주입</button><button data-act="pm">🔧 정비 지시</button></div>
       <div class="pcap-box" id="pcapBox"></div>`;
     this.onDetailRendered?.();

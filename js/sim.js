@@ -12,6 +12,7 @@ import { AIOSPipeline } from './aios.js';
 import { SecurityLayer } from './security.js';
 import { FleetControl } from './fleet.js';
 import { Orchestrator, PRIORITY, prioOf } from './orchestrator.js';
+import { SpsMonitor, SPS_GEO, SORT_AMMR } from './sps.js';
 import { AMMR, AMMR_FETCH, PARALLEL_GAIN, DEFAULT_LINE, buildStationDefs, linkPath, lineEdges, pathLength, pointAt, toWorld, isZone, ZONE_AMR, ZONE_MIXES, ZONE_PRODUCTS, FG_ZONE_CAP, amrPark, AMR_DOCK, amrDockVia, amrReturnVia } from './line.js';
 
 export function mulberry32(a) {
@@ -158,7 +159,7 @@ export const chgLoc = (i) => ({ x: -14 + i * 3.2, z: 13.5, aisle: 'F', name: '�
 export const localLoc = (def, lx, lz, name) => { const p = toWorld(def, lx, lz); return { ...p, aisle: p.z >= 0 ? 'F' : 'B', name }; };
 // 설비 앞 작업 위치: 셀 앞 모서리(2.3m)와 통로 차로 사이, 지나가는 이동체와 겹치지 않는 거리
 export const SVC_Z = 2.7;
-export const svcLoc = (st) => localLoc(st.def, 0.9, SVC_Z, st.name);
+export const svcLoc = (st) => st.svc ?? localLoc(st.def, 0.9, SVC_Z, st.name);   // st.svc: 셀이 따로 정한 정비 자리
 
 // 통로(폭 2.6m)는 진행 방향별 차로로 나눈다 (+x 방향은 통로 중심 -0.7, -x 방향은 +0.7 / 세로 통로도 같은 방식)
 // → 마주 오는 이동체끼리 정면으로 만나지 않고, AGV끼리도 0.3m 여유를 두고 엇갈린다
@@ -274,7 +275,12 @@ export class Mover {
     return true;
   }
   get idle() { return this.steps.length === 0; }
-  setTask(name, steps) { this.task = name; this.steps = steps; this.path = null; this.detourPts = 0; }   // 이동 중 재지시되면 새 경로로
+  setTask(name, steps) {   // 이동 중 재지시되면 새 경로로
+    // 통로를 가다 재지시되면 지금 자리에서 새 경로를 잡는다 — 떠나온 자리(loc)로 되돌아갔다 가면 충전 도크·설비를 가로지른다 (순찰 중 사족보행 → 현장 이벤트 등)
+    const g = this.steps[0]?.go;
+    if (g && AISLE[g.aisle] != null && this.path?.length && !this.path[0].detour && this.loc && Math.hypot(this.x - this.loc.x, this.z - this.loc.z) > 0.5) this.loc = { x: this.x, z: this.z, aisle: g.aisle, name: this.loc.name };
+    this.task = name; this.steps = steps; this.path = null; this.detourPts = 0;
+  }
   update(dt) {
     this.moving = false; this.charging = false;
     if (this.passT > 0 && !this.instant) this.passT -= dt;
@@ -448,7 +454,10 @@ export class Simulation {
       q.battery = 55 + this.rand() * 40; q.chargeRate = 0.45;   // 도킹 충전 약 0.45%/초 (20→95% 약 3분)
       this.quads.push(q);
     }
-    if (m.partsCap) for (const st of this.processing) { st.parts = m.partsCap; st.partsReq = null; }
+    // 부품분류셀은 부품 선반 대신 양옆 키팅 구역의 서열 버퍼에서 키트를 꺼낸다 (js/sps.js) — 선반 재고·보충 휴머노이드 대상이 아니다
+    if (m.partsCap) for (const st of this.processing) { if (this.zone && st.id === 'SORT') continue; st.parts = m.partsCap; st.partsReq = null; }
+    // 부품분류셀 정비 자리: 셀 서쪽(입구 쪽) — 셀 앞(통로 쪽)은 키팅 구역이라 통로에서 곧장 내려오면 흐름 랙·컨베이어를 지난다
+    if (this.zone) for (const st of this.processing) if (st.id === 'SORT') st.svc = localLoc(st.def, -3.0, 1.6, st.name);
     // AMMR 셀: 대상물 하나마다 옆 부품 선반에서 부품을 가져와 작업한다 (레거시 단계는 사람이 대신 작업)
     for (const st of this.processing) {
       if (st.def.robot.kind !== 'ammr' || modeKey === 'traditional') continue;
@@ -502,6 +511,7 @@ export class Simulation {
     this.cctvAgent = new CCTVAgent(this);   // 피지컬AI: CCTV 에이전트 (영상 감시 · 오케스트레이터 보고 · 이벤트 이력)
     this.net = new Private5G(this);   // Private 5G 특화망: 음영 없는 기지국 배치 · 이동 로봇 5G 모뎀 · 핸드오버 · 무손실 업링크 (자동화·피지컬AI)
     this.erp = new OdooBridge(this);   // Odoo ERP 연동: 발주·재고·설비보전 (자동화·피지컬AI)
+    new SpsMonitor(this);   // 정밀조립Zone 서열 키팅(부품분류셀 양옆 키팅 구역 · AMR 키트 포켓) · 라인사이드 투빈 칸반 (js/sps.js)
   }
 
   // 설비·로봇 고유 ID — 현황판·라벨·텔레메트리·데이터 연동에 같은 ID를 쓴다 (사람은 제외)
@@ -514,6 +524,8 @@ export class Simulation {
       st.robotUids = Array.from({ length: st.def.robot?.count ?? 0 }, (_, i) => `RB-${two(k + 1)}-${i + 1}`);
     });
     (this.standby ?? []).forEach((st, k) => { st.uid = `CL-S${k + 1}`; });
+    // 부품분류셀 키팅 구역 피킹 로봇 (도어트림 K1 · e-axle K2 — 셀 로봇 다음 번호로 클릭·정보 창 · 레거시는 작업자)
+    for (const st of this.processing) if (this.zone && st.id === 'SORT' && this.mode.key !== 'traditional') st.spsUids = ['RB-01-K1', 'RB-01-K2'];
     this.sinkRobotUids = this.zone ? ['RB-PL-1', 'RB-PL-2'] : [];
     this.carriers.forEach((m, i) => { m.uid = `AM-${two(i + 1)}`; });
     this.vehicles.forEach((m, i) => { m.uid = `${m.kind === 'agv' ? 'AG' : 'FL'}-${two(i + 1)}`; });
@@ -570,6 +582,14 @@ export class Simulation {
   planAmmrRacks(st) {
     const zone = this.zone, zr = 1.7;
     const slots = zone ? [[-0.75, -1], [-0.75, 1], [0.95, -1], [0.95, 1]] : [[-0.6, -1], [0.6, 1], [1.3, -1], [-1.3, 1]];
+    // 부품분류셀: 선반 대신 셀 양옆 키팅 구역의 키트 컨베이어(서열 버퍼) — 로봇은 자기 쪽 컨베이어 앞까지 나가 키트를 꺼낸다 (js/sps.js SPS_GEO)
+    if (zone && st.id === 'SORT') {
+      const G = SPS_GEO;
+      // 대기 자리는 AMR 가운데 맞은편(x 0) — 키트 포켓 앞뒤 칸에 양팔이 고르게 닿고, 컨베이어 맨 앞 칸(x 0)으로 곧장 나간다 (3·4번째 로봇은 원래 자리)
+      st.ammrRacks = st.ammr.map((u, i) => { const [sx0, side] = slots[i] ?? slots[0], sx = i < 2 ? 0 : sx0; return { mode: 'z', sps: true, rack: { x: sx, z: side * G.conv.z }, pick: { x: sx, z: side * G.pickZ }, side, slot: { x: sx, z: side * AMMR.slotZ } }; });
+      for (const [i, u] of st.ammr.entries()) { const p = st.ammrRacks[i]; u.rack = p; u.travel = Math.abs(p.pick.z - p.slot.z); }
+      return;
+    }
     const RW = 1.46, RD = 0.52, M = 0.35;   // 선반 폭·깊이, 여유
     const worldRect = (cx, cz, w, d) => {   // 셀 기준 사각형 → 월드 AABB
       const pts = [[-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2]].map(([a, b]) => toWorld(st.def, cx + a, cz + b));
@@ -895,6 +915,7 @@ export class Simulation {
     // 출하: 트럭은 건물 밖이라 계속 움직이고, 지게차는 Zone 명령(정지·감속·대피)을 따른다
     this.yard.update(dt);
     this.vla?.update(dt);
+    this.sps?.tick(dt);
     this.aios?.update(dt);
     this.dispatchDrones();
     for (const d of this.drones) d.update(dt);
@@ -1030,7 +1051,7 @@ export class Simulation {
     st.gate = {
       id: it.id, product: it.product, t: this.time, lead,
       text: sort ? `${P} → ${P} 라인 · ${P} 키트` : `${P} → ${tray ? '트레이' : '크레이트'} 포장`,
-      role: sort ? { lead: `${P} 부품 키팅`, support: '작업물 고정 · ID 태그' } : { lead: `${P} ${tray ? '트레이' : '크레이트'} 포장`, support: '작업물 고정 · 라벨' },
+      role: sort ? { lead: `${P} 키트 4개를 AMR 키트 포켓에 옮겨 담기`, support: `대기 — 다른 제품 담당 (${P}는 맡지 않음)` } : { lead: `${P} ${tray ? '트레이' : '크레이트'} 포장`, support: '작업물 고정 · 라벨' },
     };
     st.gateCount ??= {}; st.gateCount[it.product] = (st.gateCount[it.product] ?? 0) + 1;
     // 결정 기록 (FACOS 셀·게이트 화면): 최근 40건 + 로봇별 주 작업 횟수
@@ -1039,6 +1060,8 @@ export class Simulation {
     if (st.gateLog.length > 40) st.gateLog.shift();
   }
   // 게이트 결정에서 이 로봇이 주 작업을 맡는가 (게이트가 없는 셀은 모두 주 작업)
+  // 게이트 결정의 주 작업 로봇 가운데 첫 로봇 (부품분류셀에서 키트를 AMR에 옮겨 싣는 로봇)
+  isLeadFirst(st) { return !st.gate || !st.item || st.gate.id !== st.item.id ? 0 : st.gate.lead[0] ?? 0; }
   isLead(st, i) { return !st.gate || !st.item || st.gate.id !== st.item.id || st.gate.lead.includes(i); }
 
   // ── AMMR: 대상물마다 부품 선반에서 부품을 가져와 작업 ─────────────────
@@ -1065,6 +1088,7 @@ export class Simulation {
     }
   }
   updateAMMR(st) {
+    if (this.zone && st.id === 'SORT' && this.sps?.on) return this.updateSortAMMR(st);
     const work = st.item && !st.item.scrap && !st.done && ['BUSY', 'DOWN', 'MAINT', 'ESTOP', 'PSTOP', 'CHECK', 'CSTOP'].includes(st.state);
     for (const u of st.ammr) {
       if (!work || !this.isLead(st, u.i)) { if (!st.item || st.done || work) { u.phase = 'work'; u.pos = 0; u.turn = 0; u.carry = false; } continue; }   // 보조 역할은 자리에서 작업물 고정
@@ -1076,6 +1100,24 @@ export class Simulation {
       else if (q < AMMR_FETCH.turnIn) { u.phase = 'turnIn'; u.turn = 1 - seg(AMMR_FETCH.pick, AMMR_FETCH.turnIn); u.pos = 1; u.carry = true; }
       else if (q < AMMR_FETCH.driveIn) { u.phase = 'driveIn'; u.turn = 0; u.pos = 1 - seg(AMMR_FETCH.turnIn, AMMR_FETCH.driveIn); u.carry = true; }
       else { u.phase = 'work'; u.turn = 0; u.pos = 0; u.carry = q < AMMR_FETCH.place; }
+      if (u.phase === 'pick' && u.lastItem !== st.item.id) { u.lastItem = st.item.id; u.trips++; }
+    }
+  }
+
+  // 부품분류셀 AMMR: 그 제품 쪽 로봇만 키트를 가져와 옮겨 싣는다 (js/sps.js SORT_AMMR — 화면 factory.js sortAMMR과 같은 구간) · 다른 로봇은 대기 자리에서 쉼
+  updateSortAMMR(st) {
+    const work = st.item && !st.item.scrap && !st.done && ['BUSY', 'DOWN', 'MAINT', 'ESTOP', 'PSTOP', 'CHECK', 'CSTOP'].includes(st.state), A = SORT_AMMR, p = st.progress ?? 0;
+    const k = (w) => Math.min(1, Math.max(0, (p - w[0]) / (w[1] - w[0])));
+    for (const u of st.ammr) {
+      if (!work || !this.isLead(st, u.i) || u.i !== this.isLeadFirst(st)) { if (!st.item || st.done || work) { u.phase = 'work'; u.pos = 0; u.turn = 0; u.carry = false; } continue; }
+      if (p < A.turnOut[0]) { u.phase = 'work'; u.turn = 0; u.pos = 0; }
+      else if (p < A.turnOut[1]) { u.phase = 'turnOut'; u.turn = k(A.turnOut); u.pos = 0; }
+      else if (p < A.driveOut[1]) { u.phase = 'driveOut'; u.turn = 1; u.pos = k(A.driveOut); }
+      else if (p < A.pick[1]) { u.phase = 'pick'; u.turn = 1; u.pos = 1; }
+      else if (p < A.turnIn[1]) { u.phase = 'turnIn'; u.turn = 1 - k(A.turnIn); u.pos = 1; }
+      else if (p < A.driveIn[1]) { u.phase = 'driveIn'; u.turn = 0; u.pos = 1 - k(A.driveIn); }
+      else { u.phase = 'work'; u.turn = 0; u.pos = 0; }
+      u.carry = p >= A.pick[0] + (A.pick[1] - A.pick[0]) * 0.4 && p < A.place[1];
       if (u.phase === 'pick' && u.lastItem !== st.item.id) { u.lastItem = st.item.id; u.trips++; }
     }
   }
@@ -1110,6 +1152,7 @@ export class Simulation {
       this.gateDecide(st);
       const base = st.def.cycle * m.cycleMul * st.speedMul * (this.vla?.cycleFactor(st) ?? 1);   // 배포된 VLA 모델 버전만큼 사이클 단축
       st.cycleTime = st.item.scrap ? 0.5 : Math.max(base * 0.6, base * (1 + m.cycleVar * gauss(this.rand)));
+      if (this.sps && !st.item.scrap) st.cycleTime += this.sps.plan(st, st.item);   // 서열 키팅: 버퍼가 비면 키트를 기다림 · 조립셀에서 키트 오류 발견 · 라인사이드 공용 부품 결품
     }
     if (!st.item && cycleStop) { st.state = 'CSTOP'; st.c.stop = (st.c.stop ?? 0) + dt; }
     else if (!st.item) {
@@ -1151,6 +1194,7 @@ export class Simulation {
     const m = this.mode, it = st.item;
     if (it.scrap) return;   // 빈 AMR(불량 배출 후)은 작업 없이 통과
     st.c.processed++;
+    this.sps?.done(st, it);   // 키트를 AMR 키트 포켓에 실음 · 조립셀 키트 소진 · 라인사이드 공용 부품 소모
     if (st.parts != null) {   // 대상물 하나에 부품 한 세트 (AMMR 셀은 로봇이 선반에서 가져간 만큼)
       st.parts = Math.max(0, st.parts - 1);
       if (st.parts <= m.partsReorder && !st.partsReq) { st.partsReq = { st, helper: null }; this.partsReq.push(st.partsReq); }

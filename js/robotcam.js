@@ -182,12 +182,12 @@ export class RobotCamWall {
     const sim = this.sim, view = this.view; if (!sim || !ref) return null;
     const front = (m, label, h, fwd, ahead, down) => ({ label, pose: () => { const fx = Math.sin(m.heading), fz = Math.cos(m.heading); return { pos: new THREE.Vector3(m.x + fx * fwd, h, m.z + fz * fwd), dir: new THREE.Vector3(fx, -down, fz).normalize(), ahead }; } });
     if (ref.type === 'cell') {
-      const sv = view?.stationViews.find((x) => x.st.id === ref.stationId), r = sv?.parts.robots?.[ref.idx];
+      const cr = view?.cellRobot(ref.stationId, ref.idx), r = cr?.robot, st = cr?.st;   // 셀 로봇 · 서열 키팅 피킹 로봇
       if (!r) return null;
       if (r.vla && r.wristCameraAnchor) return { label: `${r.spec ? `${r.spec.model} ` : ''}손목 카메라 · VLA`, pose: () => wristPose(r.wristCameraAnchor) };
       if (r.vla) { const up = new THREE.Vector3(); return { label: '손목 카메라 · VLA', pose: () => { const p = r.tip.getWorldPosition(new THREE.Vector3()); up.set(0, 1, 0).transformDirection(r.tip.parent.matrixWorld); return { pos: p.addScaledVector(up, -0.06), dir: up.clone(), ahead: 1.2 }; } }; }
       if ((r.kind === 'ammr' || r.kind === 'humanoid') && r.cams) return this.anchorCam(r.cams, ref.cam, r.kind === 'ammr' ? 'AMMR' : '휴머노이드');
-      return { label: '셀 상부 카메라', pose: () => { const p = r.root.getWorldPosition(new THREE.Vector3()); const c = new THREE.Vector3(sv.st.x, 1.2, sv.st.z); return { pos: p.add(new THREE.Vector3(0, 2.6, 0)), dir: c.sub(p).normalize(), ahead: 3 }; } };
+      return { label: '셀 상부 카메라', pose: () => { const p = r.root.getWorldPosition(new THREE.Vector3()); const c = new THREE.Vector3(st.x, 1.2, st.z); return { pos: p.add(new THREE.Vector3(0, 2.6, 0)), dir: c.sub(p).normalize(), ahead: 3 }; } };
     }
     const m = [...sim.movers, ...(sim.drones ?? [])].find((x) => x.id === ref.id);
     if (!m) return null;
@@ -230,7 +230,7 @@ export class RobotCamWall {
   // 로봇에 달린 카메라 목록 (휴머노이드·AMMR = 머리 · 왼손 · 오른손 · 등)
   camsOf(ref) {
     if (!ref || !this.view) return [];
-    if (ref.type === 'cell') { const r = this.view.stationViews.find((x) => x.st.id === ref.stationId)?.parts.robots?.[ref.idx]; return r?.cams ? ROBOT_CAMS.filter(([k]) => r.cams[k]) : []; }
+    if (ref.type === 'cell') { const r = this.view.cellRobot(ref.stationId, ref.idx)?.robot; return r?.cams ? ROBOT_CAMS.filter(([k]) => r.cams[k]) : []; }
     const mv = [...(this.view.techViews ?? []), ...(this.view.helperViews ?? [])].find((x) => x.v.id === ref.id);
     return mv?.g.userData.cams ? ROBOT_CAMS : [];
   }

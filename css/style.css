@@ -817,3 +817,13 @@ em.up { color: var(--good); } em.dn { color: var(--bad); }
 .dh-ver { font-size: 12px; color: var(--ink2); margin: 4px 0 6px; display: flex; align-items: center; gap: 6px; }
 .dh-ver select { background: rgba(255, 255, 255, 0.06); color: var(--ink); border: 1px solid var(--line); border-radius: 7px; padding: 2px 6px; }
 .rb-rec { display: block; font-size: 10.5px; color: var(--ink2); margin-top: 3px; line-height: 1.4; }
+/* 서열 키팅 · 라인사이드 칸반 정보 (부품분류셀 · 조립·체결셀 정보 창 — js/spsview.js) */
+#detail .mm { margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px; }
+#detail .mm h4 { margin: 0 0 6px; font-size: 13px; }
+#detail .mm-dec { border-left: 3px solid; padding: 4px 8px; margin-bottom: 6px; background: rgba(255,255,255,0.03); display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+#detail .mm-t { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+#detail .mm-t td, #detail .mm-t th { padding: 2px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); text-align: left; }
+#detail .mm-t th { color: #8fa3b8; font-weight: 600; }
+#detail .mm-h { margin: 8px 0 3px; color: #8fa3b8; font-size: 11.5px; }
+#detail .mm-r { margin: 0; padding-left: 16px; font-size: 11.5px; }
+#detail .mm-r li { margin: 2px 0; }
