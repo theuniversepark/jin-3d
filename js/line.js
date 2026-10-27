@@ -318,7 +318,7 @@ export function pointAt(pts, s) {
 export function buildStationDefs(line, modeKey) {
   const n = line.stations.length;
   const nodes = placeNodes(n + 2, line.layout ?? 'straight', line);
-  const defs = [{ id: 'SRC', type: 'source', ...nodes[0], name: modeKey === 'traditional' ? '자재 투입 (수작업)' : '자재 투입 (AS/RS)' }];
+  const defs = [{ id: 'SRC', type: 'source', ...nodes[0], name: modeKey === 'traditional' ? '자재 투입 (수작업)' : '자재 투입 로봇셀' }];
   line.stations.forEach((s, i) => {
     const T = STATION_TYPES[s.type];
     const manual = modeKey === 'traditional' && s.robot.count > 0;

@@ -405,7 +405,7 @@ export class Simulation {
 
     // 투입·적재 도크는 레이아웃에 따라 달라진다 (U자형이면 적재는 뒤쪽 통로)
     // 적재장 상차 위치: Zone 구분 적재장은 제품 구역(앞쪽 적재 팔레트)과 겹치지 않게 조금 더 앞에서 싣는다
-    this.loc = { ...LOC, SRC: localLoc(this.stations[0].def, 0, 4.2, '투입구'), SINK: localLoc(this.stations[this.stations.length - 1].def, 0, isZone(this.line) ? 5.4 : 4.2, '완제품 적재장') };
+    this.loc = { ...LOC, SRC: localLoc(this.stations[0].def, 0, isZone(this.line) ? 4.5 : 4.2, '투입구'), SINK: localLoc(this.stations[this.stations.length - 1].def, 0, isZone(this.line) ? 5.4 : 4.2, '완제품 적재장') };
     // 출하 지게차 상차 위치: 구분 적재장 앞쪽(도어트림 구역)·뒤쪽(e-axle 구역)
     const sinkDef = this.stations[this.stations.length - 1].def;
     this.loc.PICK_DT = { ...this.loc.SINK, name: isZone(this.line) ? '도어트림 적재 구역' : '완제품 적재장' };
@@ -507,7 +507,7 @@ export class Simulation {
   // 설비·로봇 고유 ID — 현황판·라벨·텔레메트리·데이터 연동에 같은 ID를 쓴다 (사람은 제외)
   assignIds() {
     const two = (n) => String(n).padStart(2, '0');
-    this.stations[0].uid = 'AS-01';                                     // 자재 투입 AS/RS
+    this.stations[0].uid = 'AS-01';                                     // 자재 투입 로봇셀
     this.stations[this.stations.length - 1].uid = 'PL-01';              // 완제품·구분 적재장
     this.processing.forEach((st, k) => {
       st.uid = `CL-${two(k + 1)}`;
@@ -950,6 +950,7 @@ export class Simulation {
     if (this.releaseTimer >= this.releaseInterval) {
       const car = this.useAMR ? this.carriers.find((c) => c.state === 'atSrc') : null;
       if (this.useAMR && !car) { src.state = 'NOAMR'; src.c.blocked += dt; return; }
+      if (this.loaderGate && !this.loaderGate()) { src.state = 'BUSY'; return; }   // 투입 로봇셀(화면)이 자재를 지그에 내려놓은 뒤에 투입 — 헤드리스 시뮬레이션은 연결점이 없어 기다리지 않는다
       if (this.hasSpace(src.out)) {
         const product = this.mix ? this.nextProduct() : null;
         if (product) this.releasedBy[product]++;
@@ -1586,7 +1587,7 @@ export class Simulation {
       { go: LOC.WH },
       { until: () => this.time >= this.supplyDisruptedUntil, task: '출고 대기 (공급 차질)' },
       { until: () => this.whRaw > 0, task: '창고 재고 대기 (입고 트럭 대기)' },
-      { wait: 4, done: () => { const n = Math.min(PALLET_RAW, this.whRaw); this.whRaw -= n; v.load = { type: 'raw', n }; this.erp?.consume('raw', n, '투입구 (AS/RS)'); } },
+      { wait: 4, done: () => { const n = Math.min(PALLET_RAW, this.whRaw); this.whRaw -= n; v.load = { type: 'raw', n }; this.erp?.consume('raw', n, '투입구 (투입 로봇셀)'); } },
       { go: this.loc.SRC },
       { wait: 4, done: () => {
         const n = v.load?.n ?? PALLET_RAW;

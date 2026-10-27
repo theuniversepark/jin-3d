@@ -13,7 +13,7 @@ export function equipmentList(sim, view = null) {
   const stStatus = (st) => [ST_LABEL[st.state] ?? st.state, ST_CLS[st.state] ?? 'idle'];
   // 셀 설비
   const src = sim.stations[0], sink = sim.stations[sim.stations.length - 1];
-  add(src.uid, '자재 투입 AS/RS', '설비', ...stStatus(src));
+  add(src.uid, '자재 투입 로봇셀', '설비', ...stStatus(src));
   for (const st of sim.processing) add(st.uid, st.name.replace(/\s*\(.*\)$/, ''), '설비', ...stStatus(st));
   add(sink.uid, sim.zone ? '구분 적재장' : '완제품 적재장', '설비', ...stStatus(sink));
   // 셀 로봇
