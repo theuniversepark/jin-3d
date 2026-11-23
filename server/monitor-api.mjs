@@ -13,7 +13,7 @@ import { execFile } from 'node:child_process';
 
 export const MON_PROJECT = 'jin3d-mon';   // 구성 이름 — 컨테이너 · 볼륨 이름 앞에 붙는다 (meta-factory의 metafactory-mon과 겹치지 않게)
 export const RESET_CONFIRM = MON_PROJECT;
-const PORTS = { grafana: 3310, influx: 8196 };   // meta-factory(3300 · 8186)와 다른 포트 — 두 앱을 같이 켤 수 있다
+const PORTS = { grafana: 3320, influx: 8206 };   // meta-factory(3300 · 8186) · micro-assembly(3310 · 8196)와 다른 포트 — 세 앱을 같이 켤 수 있다
 const DOCKER = [process.env.DOCKER_BIN, 'docker', '/opt/homebrew/bin/docker', '/usr/local/bin/docker', '/Applications/Docker.app/Contents/Resources/bin/docker', 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe'].filter(Boolean);
 const COLIMA = [process.env.COLIMA_BIN, 'colima', '/opt/homebrew/bin/colima', '/usr/local/bin/colima'].filter(Boolean);
 const PATH_EXTRA = ['/opt/homebrew/bin', '/usr/local/bin', '/Applications/Docker.app/Contents/Resources/bin'];

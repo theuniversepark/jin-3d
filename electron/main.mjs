@@ -15,7 +15,7 @@ app.setName(APP_NAME);
 app.setPath('userData', path.join(app.getPath('appData'), 'Jin-3D'));
 
 const keyFile = () => path.join(app.getPath('userData'), 'anthropic-key.bin');
-let win = null, origin = null, keySource = null;
+let win = null, origin = null, keySource = null, keyUnreadable = false;
 
 function loadStoredKey() {
   try {
@@ -23,12 +23,15 @@ function loadStoredKey() {
       const key = safeStorage.decryptString(fs.readFileSync(keyFile()));
       if (key) { setApiKey(key); keySource = 'keychain'; return; }
     }
-  } catch (e) { console.error('저장된 키를 읽지 못했습니다:', e.message); }
+  } catch (e) {
+    // 앱 이름을 바꾸기 전(Jin-3D)에 저장한 키는 키체인 항목 이름이 달라 풀리지 않는다 — 설정 창에서 다시 입력하라고 알린다 (파일은 새로 저장할 때 덮어쓴다)
+    keyUnreadable = true; console.error('저장된 키를 읽지 못했습니다 — ⚙ 설정에서 다시 입력하세요:', e.message);
+  }
   keySource = setApiKey(null) ? 'env' : null;
 }
 
 function keyStatus() {
-  return { hasKey: hasApiKey(), source: keySource, encryption: safeStorage.isEncryptionAvailable() };
+  return { hasKey: hasApiKey(), source: keySource, encryption: safeStorage.isEncryptionAvailable(), unreadable: keyUnreadable && !hasApiKey() };
 }
 
 ipcMain.handle('key:status', () => keyStatus());
@@ -38,11 +41,11 @@ ipcMain.handle('key:set', (_e, raw) => {
   if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: IS_MAC ? '키체인 암호화를 사용할 수 없습니다.' : '윈도우 데이터 보호(DPAPI) 암호화를 사용할 수 없습니다.' };
   fs.mkdirSync(path.dirname(keyFile()), { recursive: true });
   fs.writeFileSync(keyFile(), safeStorage.encryptString(key), { mode: 0o600 });
-  setApiKey(key); keySource = 'keychain';
+  setApiKey(key); keySource = 'keychain'; keyUnreadable = false;
   return { ok: true, ...keyStatus() };
 });
 ipcMain.handle('key:clear', () => {
-  fs.rmSync(keyFile(), { force: true });
+  fs.rmSync(keyFile(), { force: true }); keyUnreadable = false;
   keySource = setApiKey(null) ? 'env' : null;
   return { ok: true, ...keyStatus() };
 });

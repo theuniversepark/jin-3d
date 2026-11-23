@@ -7,10 +7,12 @@
 **버전 1.1.1 (2026-11-24) — micro-assembly 1.1.1과 같은 기능**: 이 저장소에서 갈라져 나간 [micro-assembly](https://github.com/theuniversepark/micro-assembly)(Jin-micro)의 1.1.1 소스를 그대로 옮겨 기능을 같게 맞췄습니다. 아래만 다릅니다.
 - **이 앱 고유값은 그대로**: 앱 이름 「피지컬AI 실증 메타팩토리」 · 번들 ID `kr.or.camtic.jin3d` · 앱 아이콘 · 사용자 데이터 폴더 `Jin-3D` · 브라우저 저장 키 `jin3d.*`(저장해 둔 라인 설정을 이어서 씀) · 저장소·웹 주소 `jin-3d`.
 - **Odoo 연동 → FAC**: `js/odoo.js` · `server/odoo-gateway.mjs`를 없애고 FACOS 업무 기록 계층 FAC(`js/fac.js` · `server/fac-api.mjs`)와 ERPNext 연동(`server/erpnext-bridge.mjs`)을 씁니다.
-- **모니터링 · 브로커 이름은 `jin3d`**: Docker 구성 `jin3d-mon` · `jin3d-sensors`, InfluxDB 조직 `jin3d`, MQTT 클라이언트 ID `jin3d-…` — micro-assembly(`jinmicro-…`)와 컨테이너 · 데이터가 섞이지 않습니다. 포트(Grafana 3310 · InfluxDB 8196)는 micro-assembly와 같고 앱에 고정되어 있어, 두 앱의 설비 대시보드는 동시에 켤 수 없습니다(한쪽을 끄고 켭니다).
+- **모니터링 · 브로커 이름은 `jin3d`**: Docker 구성 `jin3d-mon` · `jin3d-sensors`, InfluxDB 조직 `jin3d`, MQTT 클라이언트 ID `jin3d-…` — micro-assembly(`jinmicro-…`)와 컨테이너 · 데이터가 섞이지 않습니다. 포트도 Grafana 3320 · InfluxDB 8206으로 달리해(micro-assembly 3310 · 8196 · meta-factory 3300 · 8186) 세 앱의 설비 대시보드를 함께 켤 수 있습니다.
 - **토리 안내 2문장**: 앱 내려받기 안내의 「Jin-micro.exe를 실행해」를 「폴더 안의 실행 파일을 실행해」로 바꾸고 그 문장만 다시 녹음했습니다(한국어 · 영어).
-- **바닥 · 서버 랙 로고는 캠틱종합기술원**: 과학기술정보통신부 · 정보통신산업진흥원 로고 대신 캠틱종합기술원 로고를 넣었습니다(아래 「캠틱종합기술원 표시」).
-- **사용자 가이드 PDF · Word · 그림**(`docs/USER_GUIDE.pdf` · `.docx` · `docs/guide-images/`)은 아직 micro-assembly에서 만든 것이라 앱 이름 · 로고가 다르게 보입니다 — `npm run guide:pdf` · `npm run guide:docx`로 다시 만듭니다. 본문 `docs/USER_GUIDE.md`는 이 앱 기준입니다.
+- **바닥 · 서버 랙 로고는 캠틱종합기술원**: 과학기술정보통신부 · 정보통신산업진흥원 로고 대신 캠틱종합기술원 로고를 넣었습니다(아래 「캠틱종합기술원 표시」). 로고 이미지는 원본(550px)을 4배(2200px)로 키우고 가장자리를 세워 가까이서도 선명합니다.
+- **사용자 가이드 PDF · Word · 그림**(`docs/USER_GUIDE.pdf` · `.docx` · `docs/guide-images/` 40장)도 이 앱 화면으로 다시 만들었습니다(`tools/guide-shots.cjs` → `npm run guide:docx`).
+- **저장 키 안내**: 앱 이름을 바꾸기 전(Jin-3D)에 저장한 Claude API 키는 키체인 항목 이름이 달라 읽지 못합니다 — ⚙ 설정 창에 「예전에 저장한 키를 읽지 못했습니다 … 다시 입력해 저장하세요」로 알리고, 다시 저장하면 해결됩니다.
+- **패키징**: 개발용 폴더 `.claude/`를 앱 묶음에서 뺍니다(맥 약 709MB · 윈도우 약 770MB).
 
 **문서**: [사용자 가이드](docs/USER_GUIDE.md)(설치 · 화면 조작 · 운영 시나리오 실습 · 기능별 사용법 · 문제 해결 — PDF는 `npm run guide:pdf` 로 `docs/USER_GUIDE.pdf` 를 만들며 화면 상단 📘로 내려받음 · Word는 `npm run guide:docx` 로 `docs/USER_GUIDE.docx`, LibreOffice 필요) · [설계서](docs/DESIGN.md)(요구 · 아키텍처 · 데이터 · 인터페이스 · AI · 보안 · 테스트 · 운영 · 위험 · 로드맵) · [AAS 스키마](docs/AAS_SCHEMA.md) · [KPI 영향 분석 보고서](docs/KPI_IMPACT_REPORT.md)
 
@@ -199,8 +201,8 @@ ES 모듈을 쓰기 때문에 `index.html`을 파일로 바로 열면 동작하�
 ### 설비 대시보드 (Telegraf → InfluxDB → Grafana · 선택 · 앱 전용 · `server/monitor-api.mjs` · `monitoring/`)
 정밀조립Zone 설비 건강도·RUL · 환경·설비 센서 · Zone OEE·품질 표본 · 운영 이벤트를 시계열로 쌓아 Grafana로 봅니다.
 - **준비**: Docker Desktop(맥·윈도우) 또는 Colima(맥). Docker Desktop은 먼저 실행해 둡니다. Colima는 꺼져 있으면 「대시보드 켜기」가 `colima start`로 먼저 켭니다(1분 안팎).
-- **켜기**: 「📡 데이터 연동」 → 「📈 설비 대시보드」 → 「대시보드 켜기」. 앱이 `monitoring/` 구성을 데이터 폴더 `monitoring/`에 복사하고 무작위 토큰·비밀번호 `.env`(권한 600)를 만든 뒤 `docker compose -p jin3d-mon up -d`로 컨테이너 3개(InfluxDB 2.7.12 · Telegraf 1.34 · Grafana OSS 12.4.3)를 띄웁니다. 처음에는 이미지 내려받기로 몇 분(메모리 약 1GB). 「대시보드 열기」 → `http://127.0.0.1:3310/` (이 PC 안에서만 · 로그인 없이 보기 전용).
-- **meta-factory와 같이 켜기**: 구성 이름 `jin3d-mon`(컨테이너 `jin3d-mon-*` · 볼륨 `jin3d-mon_influx-data` · `jin3d-mon_grafana-data`) · Grafana 3310 · InfluxDB 8196 · 조직 `jin3d`라 meta-factory(`metafactory-mon` · 3300 · 8186)와 겹치지 않습니다.
+- **켜기**: 「📡 데이터 연동」 → 「📈 설비 대시보드」 → 「대시보드 켜기」. 앱이 `monitoring/` 구성을 데이터 폴더 `monitoring/`에 복사하고 무작위 토큰·비밀번호 `.env`(권한 600)를 만든 뒤 `docker compose -p jin3d-mon up -d`로 컨테이너 3개(InfluxDB 2.7.12 · Telegraf 1.34 · Grafana OSS 12.4.3)를 띄웁니다. 처음에는 이미지 내려받기로 몇 분(메모리 약 1GB). 「대시보드 열기」 → `http://127.0.0.1:3320/` (이 PC 안에서만 · 로그인 없이 보기 전용).
+- **meta-factory와 같이 켜기**: 구성 이름 `jin3d-mon`(컨테이너 `jin3d-mon-*` · 볼륨 `jin3d-mon_influx-data` · `jin3d-mon_grafana-data`) · Grafana 3320 · InfluxDB 8206 · 조직 `jin3d`라 meta-factory(`metafactory-mon` · 3300 · 8186)와 겹치지 않습니다.
 - **수집**: Telegraf가 `host.docker.internal`로 앱 브로커(기본 1883)에 붙어 `metafactory/telemetry/v1/main/{설비}`(2초마다) · `metafactory/sensors/v1/+/+` · `metafactory/events/v1/{수준}` · `metafactory/oee/v1/main` · `metafactory/quality/v1/main`을 받습니다. 원시값 7일 · 1분 집계 90일.
 - **대시보드 4종**: 공장 개요(`jm-overview`) · 설비 건강도·RUL(`jm-health`) · 환경·설비 센서(`jm-sensors`) · 정밀조립Zone 운영 분석(`jm-zone`). JSON은 `node tools/gen-grafana.mjs`로 다시 만듭니다.
 - **끄기 · 초기화**: 「끄기」는 데이터를 남깁니다(`compose stop`). 「데이터 초기화…」는 화면에서 한 번 더 확인한 뒤에만 볼륨을 지웁니다. 저장 공간 토큰이 어긋나면 지우지 않고 멈춥니다.

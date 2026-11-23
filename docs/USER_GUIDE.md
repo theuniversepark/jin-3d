@@ -446,12 +446,12 @@ npm start          # → http://localhost:8765  (포트 변경: PORT=9000 npm st
 **설비 대시보드 (Telegraf → InfluxDB → Grafana · 선택 · 앱 전용)**
 
 - **준비**: Docker Desktop(맥·윈도우) 또는 Colima(맥)를 설치함. Docker Desktop은 먼저 실행해 둠. Colima는 꺼져 있으면 「대시보드 켜기」가 `colima start`로 먼저 켬(1분 안팎).
-- **켜기**: 「📡 데이터 연동」 → 「📈 설비 대시보드」 → 「대시보드 켜기」. 앱이 구성 파일을 데이터 폴더 `monitoring/`에 복사해 컨테이너 3개(InfluxDB · Telegraf · Grafana)를 띄움. 처음에는 이미지 내려받기로 몇 분 걸림 (메모리 약 1GB). 「대시보드 열기」 → 브라우저에서 `http://127.0.0.1:3310/` (이 PC 안에서만 열림, 로그인 없이 보기 전용).
+- **켜기**: 「📡 데이터 연동」 → 「📈 설비 대시보드」 → 「대시보드 켜기」. 앱이 구성 파일을 데이터 폴더 `monitoring/`에 복사해 컨테이너 3개(InfluxDB · Telegraf · Grafana)를 띄움. 처음에는 이미지 내려받기로 몇 분 걸림 (메모리 약 1GB). 「대시보드 열기」 → 브라우저에서 `http://127.0.0.1:3320/` (이 PC 안에서만 열림, 로그인 없이 보기 전용).
 - **대시보드 4종**: 정밀조립Zone 운영 분석(OEE·파레토·관리도·산점도) · 공장 개요 · 설비 건강도·RUL · 환경·설비 센서. 고장·정비·품질 NG 같은 운영 이벤트가 그래프 위에 겹쳐 보임.
 - **보내는 데이터**: 설비 요약 `metafactory/telemetry/v1/main/{설비}`(2초마다) · 센서 `metafactory/sensors/v1/+/+` · 운영 이벤트 `metafactory/events/v1/{수준}` · Zone OEE `metafactory/oee/v1/main` · 품질 표본 `metafactory/quality/v1/main`. 「최근 1분 수신」에서 수신 건수를 확인함.
 - **보관**: 원시값 7일 · 1분 집계 90일.
 - **끄기 · 초기화**: 「끄기」는 컨테이너만 멈추고 쌓인 데이터는 남김. 「데이터 초기화…」는 한 번 더 확인한 뒤에만 쌓인 시계열을 지움.
-- **포트**: Grafana 3310 · InfluxDB 8196 (127.0.0.1에만 열림). 구성 이름이 `jin3d-mon` 이라 상위 meta-factory 앱(3300 · 8186)과 같이 켤 수 있음. 저장소 토큰·비밀번호는 처음 켤 때 무작위로 만들어 데이터 폴더 `monitoring/.env`에만 보관함.
+- **포트**: Grafana 3320 · InfluxDB 8206 (127.0.0.1에만 열림). 구성 이름이 `jin3d-mon` 이라 상위 meta-factory 앱(3300 · 8186)과 같이 켤 수 있음. 저장소 토큰·비밀번호는 처음 켤 때 무작위로 만들어 데이터 폴더 `monitoring/.env`에만 보관함.
 - ※ 실제 컨테이너 기동은 자동 검증(`tests/monitor.mjs`)에 들어 있지 않음.
 
 ### 5.8 센서망
@@ -738,7 +738,7 @@ FAC 기록 · 공장 오더 · 품질 기록을 오픈소스 ERP인 ERPNext에 �
 | 내장 MQTT 5 브로커 (Mosquitto) | 127.0.0.1:1883 | `MQTT_HOST`·`MQTT_PORT` 로 변경, 외부 PC 공개는 `MQTT_HOST=0.0.0.0`, 외부 브로커 연동은 UNS 탭 또는 `MQTT_BRIDGE_URL`. 엔진 선택 `MQTT_ENGINE`(auto · mosquitto · aedes) |
 | 센서 서버 | 자동 (단독 실행 8793) | `npm run sensor-server` |
 | RCA 서버 (더미) | 앱 서버 내장 (단독 실행 8775) | `npm run rca-server` |
-| 설비 대시보드 (선택 · Docker) | Grafana 3310 · InfluxDB 8196 | 5.7절 |
+| 설비 대시보드 (선택 · Docker) | Grafana 3320 · InfluxDB 8206 | 5.7절 |
 
 - 내장 서버는 127.0.0.1에만 열리고, 이 앱 화면이 보낸 요청과 브라우저가 아닌 프로그램(curl · MES)의 요청만 받음. 다른 웹 페이지가 보낸 요청은 403으로 거부함.
 - 상위 meta-factory 앱(브로커 1885 · 센서 서버 8791 · Grafana 3300 · InfluxDB 8186)과 포트가 달라 두 앱을 같이 켤 수 있음.

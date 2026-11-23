@@ -67,7 +67,7 @@ check('질의가 읽는 측정·필드가 모두 Telegraf가 실제로 쓰는 �
 const prov = fs.readFileSync(path.join(MON, 'grafana/provisioning/datasources/influxdb.yml'), 'utf8'), cmp = fs.readFileSync(path.join(MON, 'compose.yml'), 'utf8');
 check('데이터 원본 uid jm-influx · Flux · 토큰은 환경 변수로 (파일에 비밀 없음)', /uid: jm-influx/.test(prov) && /Flux/.test(prov) && /\$\{?JIN3D_INFLUX_TOKEN/.test(prov) && !/token: [A-Za-z0-9_-]{20,}/.test(prov));
 check('compose — 포트는 127.0.0.1에만 · host.docker.internal → host-gateway · 이미지 버전 고정', [...cmp.matchAll(/- "?([\d.]+):\$?\{?\w*:?-?\d*\}?:\d+/g)].every((m) => m[1] === '127.0.0.1') && /127\.0\.0\.1:/.test(cmp) && /host\.docker\.internal:host-gateway/.test(cmp) && [...cmp.matchAll(/image: (\S+)/g)].every((m) => /:\d/.test(m[1]) && !/:latest/.test(m[1])));
-check('meta-factory와 겹치지 않음 — 포트 3310 · 8196 (meta 3300 · 8186) · 브로커 기본 1883 · 조직 jin3d · 컨테이너 이름 고정 없음', /JIN3D_GRAFANA_PORT:-3310\}/.test(cmp) && /JIN3D_INFLUX_PORT:-8196\}/.test(cmp) && /JIN3D_MQTT_PORT:-1883\}/.test(cmp) && !/[:"]3300\b|[:"]8186\b/.test(cmp.replace(/^#.*$/gm, '')) && /INIT_ORG: jin3d/.test(cmp) && !/container_name|MF_|metafactory/.test(cmp.replace(/^#.*$/gm, '')));
+check('meta-factory와 겹치지 않음 — 포트 3320 · 8206 (meta 3300 · 8186) · 브로커 기본 1883 · 조직 jin3d · 컨테이너 이름 고정 없음', /JIN3D_GRAFANA_PORT:-3320\}/.test(cmp) && /JIN3D_INFLUX_PORT:-8206\}/.test(cmp) && /JIN3D_MQTT_PORT:-1883\}/.test(cmp) && !/[:"]3300\b|[:"]8186\b/.test(cmp.replace(/^#.*$/gm, '')) && /INIT_ORG: jin3d/.test(cmp) && !/container_name|MF_|metafactory/.test(cmp.replace(/^#.*$/gm, '')));
 const init = fs.readFileSync(path.join(MON, 'influxdb/init/10-downsample.sh'), 'utf8');
 check('보관 — raw 7일(compose) · agg_1m 90일 · 1분 평균 작업', /DOCKER_INFLUXDB_INIT_RETENTION[=:]\s*"?7d/.test(cmp) && /agg_1m/.test(init) && /90d|2160h|7776000/.test(init) && /every: 1m/.test(init));
 
@@ -99,12 +99,12 @@ influxAuth = 200;   // 볼륨을 지우고 새로 켜면 지금 .env 토큰으�
 const rr = await api.route('POST', '/api/monitor/v1/reset', new URLSearchParams({ confirm: 'jin3d-mon' })); const jr = await waitJob();
 check('데이터 초기화 — 확인값 있으면 down -v → up -d → restart → 완료 · 초기화 표시', rr.code === 202 && jr.ok === true && jr.reset === true && calls().join(' | ') === 'down -v | up -d | restart telegraf grafana', calls().join(' | '));
 const env1 = fs.readFileSync(path.join(dir, '.env'), 'utf8'), tok1 = env1.match(/JIN3D_INFLUX_TOKEN=(.*)/)[1];
-check('.env — 무작위 토큰·비밀번호 · 브로커 포트 반영 · 권한 600', tok1.length >= 40 && /JIN3D_MQTT_PORT=1999/.test(env1) && /JIN3D_GRAFANA_PASSWORD=\S{15,}/.test(env1) && /JIN3D_GRAFANA_PORT=3310/.test(env1) && /JIN3D_INFLUX_PORT=8196/.test(env1) && (os.platform() === 'win32' || (fs.statSync(path.join(dir, '.env')).mode & 0o777) === 0o600));
+check('.env — 무작위 토큰·비밀번호 · 브로커 포트 반영 · 권한 600', tok1.length >= 40 && /JIN3D_MQTT_PORT=1999/.test(env1) && /JIN3D_GRAFANA_PASSWORD=\S{15,}/.test(env1) && /JIN3D_GRAFANA_PORT=3320/.test(env1) && /JIN3D_INFLUX_PORT=8206/.test(env1) && (os.platform() === 'win32' || (fs.statSync(path.join(dir, '.env')).mode & 0o777) === 0o600));
 fs.writeFileSync(log, '');
 await api.route('POST', '/api/monitor/v1/start'); const j2 = await waitJob();
 check('다시 켜기 — 토큰 유지 · 토큰 맞으면 초기화 안 함', j2.ok && !j2.reset && fs.readFileSync(path.join(dir, '.env'), 'utf8').match(/JIN3D_INFLUX_TOKEN=(.*)/)[1] === tok1 && calls().join(' | ') === 'up -d | restart telegraf grafana');
 const st = (await api.route('GET', '/api/monitor/v1/status')).body;
-check('상태 — Docker · 컨테이너 · Grafana/InfluxDB 응답 · 최근 1분 건수(측정별) · 주소', st.docker?.compose === '2.99.0' && st.containers[0]?.service === 'grafana' && st.grafana && st.influx && st.counts?.equipment === 120 && st.counts?.event === 3 && st.url === 'http://127.0.0.1:3310/', JSON.stringify(st.counts));
+check('상태 — Docker · 컨테이너 · Grafana/InfluxDB 응답 · 최근 1분 건수(측정별) · 주소', st.docker?.compose === '2.99.0' && st.containers[0]?.service === 'grafana' && st.grafana && st.influx && st.counts?.equipment === 120 && st.counts?.event === 3 && st.url === 'http://127.0.0.1:3320/', JSON.stringify(st.counts));
 check('상태 응답·작업 기록에 토큰·비밀번호 없음', !JSON.stringify(st).includes(tok1) && !JSON.stringify(st).includes(env1.match(/JIN3D_GRAFANA_PASSWORD=(.*)/)[1]));
 fs.writeFileSync(log, ''); fs.rmSync(engine);
 await api.route('POST', '/api/monitor/v1/start'); const j3 = await waitJob();

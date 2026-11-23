@@ -1,13 +1,13 @@
 # Jin-3D 설비 대시보드 (정밀조립Zone) — 앱 MQTT 브로커 → Telegraf(MIT) → InfluxDB 2(MIT) → Grafana OSS(AGPL-3.0, 수정 없이 별도 서비스)
 # 앱 「데이터 연동 → 📈 설비 대시보드 → 대시보드 켜기」가 이 폴더를 데이터 폴더(monitoring/)로 복사하고 .env(무작위 토큰·비밀번호)를 만든 뒤
 #   docker compose -p jin3d-mon up -d 로 띄운다. 접속 포트는 이 PC 안(127.0.0.1)에서만 연다.
-#   구성 이름(jin3d-mon) · 포트(Grafana 3310 · InfluxDB 8196)는 meta-factory 것(metafactory-mon · 3300 · 8186)과 겹치지 않는다 — 두 앱을 같이 켤 수 있다 (컨테이너 · 볼륨 이름은 구성 이름이 앞에 붙는다)
+#   구성 이름(jin3d-mon) · 포트(Grafana 3320 · InfluxDB 8206)는 meta-factory 것(metafactory-mon · 3300 · 8186)과 겹치지 않는다 — 두 앱을 같이 켤 수 있다 (컨테이너 · 볼륨 이름은 구성 이름이 앞에 붙는다)
 # 컨테이너 → 앱 브로커: host.docker.internal(host-gateway) — 브로커를 사내망에 열지 않는다 (Docker Desktop · Colima 공통)
 services:
   influxdb:
     image: influxdb:2.7.12
     restart: unless-stopped
-    ports: ["127.0.0.1:${JIN3D_INFLUX_PORT:-8196}:8086"]
+    ports: ["127.0.0.1:${JIN3D_INFLUX_PORT:-8206}:8086"]
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: jin3d
@@ -33,7 +33,7 @@ services:
     image: grafana/grafana-oss:12.4.3
     restart: unless-stopped
     depends_on: [influxdb]
-    ports: ["127.0.0.1:${JIN3D_GRAFANA_PORT:-3310}:3000"]
+    ports: ["127.0.0.1:${JIN3D_GRAFANA_PORT:-3320}:3000"]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${JIN3D_GRAFANA_PASSWORD:?}
       GF_AUTH_ANONYMOUS_ENABLED: "true"            # 이 PC 안에서만 열리므로 보기 전용은 로그인 없이

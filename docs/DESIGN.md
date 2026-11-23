@@ -107,7 +107,7 @@ flowchart TB
   BRK["내장 MQTT 5 브로커<br/>Eclipse Mosquitto 2.1.2 (자식 프로세스) · :1883<br/>대비 aedes 3.1.1"]
   SS["센서 서버<br/>별도 프로세스 · 구독·경보·집계"]
   DB[("센서 DB<br/>SQLite · 원시 48h · 1분 30일")]
-  MON["설비 대시보드 (선택 · Docker)<br/>Telegraf → InfluxDB :8196 → Grafana :3310"]
+  MON["설비 대시보드 (선택 · Docker)<br/>Telegraf → InfluxDB :8206 → Grafana :3320"]
   EXT["외부 연동 (설정 시)<br/>외부 MQTT 5 브로커 · EPCIS 저장소 · ERPNext"]
   CL["Claude (외부 · 키 또는 구독 설정 시)<br/>지시 해석·설계 초안"]
   Client -- "REST 호출 · MQTT 발행 요청 (HTTP)" --> App
@@ -255,7 +255,7 @@ flowchart TB
 
 | 영역 | 현재 설계 | 운영 전환 시 추가 |
 | --- | --- | --- |
-| 네트워크 노출 | 앱 서버·브로커·센서 서버·RCA 서버 모두 127.0.0.1에만 열림. 설비 대시보드(Grafana 3310 · InfluxDB 8196)도 127.0.0.1에만 게시 | 방화벽 구역 분리(OT/IT), 필요한 포트만 개방 |
+| 네트워크 노출 | 앱 서버·브로커·센서 서버·RCA 서버 모두 127.0.0.1에만 열림. 설비 대시보드(Grafana 3320 · InfluxDB 8206)도 127.0.0.1에만 게시 | 방화벽 구역 분리(OT/IT), 필요한 포트만 개방 |
 | 요청 출처 | 로컬 서버는 루프백 Host · 같은 출처 Origin · Sec-Fetch-Site를 검사해 이 앱 화면의 요청만 받음(거부 403). 정적 파일은 공개 폴더만 | REST 토큰 또는 mTLS |
 | 인증·권한 | MQTT는 UNS 역할별 계정·ACL(Mosquitto 비밀번호·ACL 파일 자동 생성, 권한 밖 발행은 버림). REST는 인증 없음 | MQTT TLS, DB 암호, Grafana 관리자 암호 |
 | 비밀 정보 | Claude API 키는 safeStorage(맥 키체인 · 윈도우 DPAPI)로 암호화해 사용자 데이터 폴더에 저장하고 화면으로 전달하지 않음. 연동 키(EPCIS 토큰 · ERPNext 키 · 브리지 비밀번호)는 `server/secrets.mjs`로 암호문 저장. `.env`는 저장소 제외 | 비밀 관리 서비스 |
@@ -341,7 +341,7 @@ flowchart TB
 | 윈도우 앱 (Electron) | 내부 운영·실증 담당 | 맥 앱과 같음 | `npm run package:win` → `dist/피지컬AI 실증 메타팩토리-win32-x64/피지컬AI 실증 메타팩토리.exe` (실제 윈도우 PC 실행은 미확인) |
 | 브라우저 + 로컬 서버 | 개발자 | 맥 앱과 같음 | `npm start` → http://localhost:8765 (`PORT`로 변경) |
 | 웹 버전 | 외부 설명·데모 | 화면 기능 (자연어 공정 설계·MQTT 발행 제외, 대화 기반 Agent는 API 키 입력 시 브라우저 직접 호출, EPCIS 저장소는 브라우저 메모리) | GitHub Pages(`main`) — https://theuniversepark.github.io/jin-3d/ |
-| 설비 대시보드 (선택) | 운영·데이터 담당 | Telegraf 1.34 → InfluxDB 2.7.12 → Grafana OSS 12.4.3, 대시보드 4종(`jm-overview` · `jm-health` · `jm-sensors` · `jm-zone`) | 앱 「데이터 연동 → 설비 대시보드 → 대시보드 켜기」 (`docker compose -p jin3d-mon`, Docker Desktop 또는 Colima) → http://127.0.0.1:3310/ |
+| 설비 대시보드 (선택) | 운영·데이터 담당 | Telegraf 1.34 → InfluxDB 2.7.12 → Grafana OSS 12.4.3, 대시보드 4종(`jm-overview` · `jm-health` · `jm-sensors` · `jm-zone`) | 앱 「데이터 연동 → 설비 대시보드 → 대시보드 켜기」 (`docker compose -p jin3d-mon`, Docker Desktop 또는 Colima) → http://127.0.0.1:3320/ |
 | 운영 서버 스택 (참고 구성) | 실제 공장 연동 준비 | Mosquitto·Node-RED·Telegraf·TimescaleDB·Grafana·linuxptp/chrony | `deploy/sensors` docker compose (구성 이름 `jin3d-sensors` · 앱은 실행하지 않음 · 설치 검증 필요) |
 
 **포트**
@@ -353,9 +353,9 @@ flowchart TB
 | 내장 MQTT 브로커 | 1883 (막히면 빈 포트) | `MQTT_PORT` · `MQTT_HOST` · `MQTT_ENGINE` · `MOSQUITTO_BIN` |
 | RCA 서버 (단독 실행) | 8775 | `RCA_PORT` · `RCA_HOST` |
 | 센서 서버 (단독 실행) | 8793 | `SENSOR_PORT` · `SENSOR_HOST` · `SENSOR_DB` · `SENSOR_MQTT` |
-| Grafana · InfluxDB (설비 대시보드) | 3310 · 8196 | `JIN3D_GRAFANA_PORT` · `JIN3D_INFLUX_PORT` |
+| Grafana · InfluxDB (설비 대시보드) | 3320 · 8206 | `JIN3D_GRAFANA_PORT` · `JIN3D_INFLUX_PORT` |
 
-상위 meta-factory 앱(브로커 1885 · Grafana 3300 · InfluxDB 8186 · 센서 서버 8791)과 값이 달라 두 앱을 같이 켤 수 있다.
+상위 meta-factory 앱(브로커 1885 · Grafana 3300 · InfluxDB 8186 · 센서 서버 8791) · micro-assembly 앱(Grafana 3310 · InfluxDB 8196)과 값이 달라 같이 켤 수 있다.
 
 **운영 중 확인 항목**
 
