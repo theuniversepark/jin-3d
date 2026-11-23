@@ -40,7 +40,7 @@ export class FactoryAgent {
 
   update(dt) {
     this.t += dt;
-    if (this.t >= 1) { this.t = 0; this.think(); }
+    if (this.t >= 1 - 1e-9) { this.t = 0; this.think(); }   // 0.1초 간격 10번의 합은 0.9999… — 여유 없이 비교하면 1.1초마다 돈다
   }
 
   think() {

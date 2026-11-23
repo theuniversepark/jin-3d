@@ -4,6 +4,7 @@
 // AI 오버레이(피지컬AI): 객체 검출 상자·클래스·신뢰도·트랙 ID(YOLO11 + ByteTrack), 바닥 이상 분할 마스크(YOLO11-seg),
 // 연기 검출(D-Fire 학습 모델), 지오펜스 침입 경보 — 장면의 실제 위치·크기를 카메라로 투영해 모델 출력을 만든다.
 import * as THREE from 'three';
+import { renderAux } from './viewcull.js';
 import { moverRadius } from './sim.js';
 import { AI_MODELS, EVENT_MODEL, blocked } from './cctv.js';
 
@@ -156,7 +157,7 @@ export class CCTVView {
     // 그림자 맵은 렌더러마다 한 번은 그려야 한다 (안 그린 맵을 샘플링하면 GL 형식 불일치 오류)
     const auto = r.shadowMap.autoUpdate; r.shadowMap.autoUpdate = this.shadowR === r ? false : auto; this.shadowR = r; const prev = r.getRenderTarget();
     if (viewport) { target.viewport.copy(viewport); target.scissor.copy(viewport); target.scissorTest = true; }
-    r.setRenderTarget(target); if (!viewport) r.clear(); r.render(this.scene, cam); r.setRenderTarget(prev);
+    r.setRenderTarget(target); if (!viewport) r.clear(); renderAux(r, this.scene, cam, viewport ? viewport.w : target.height, { data: true });   // 전광판 칸은 NVR 녹화, 영상 창은 개별 녹화 · 스냅샷 · 영상 프레임 발행의 원본 — 작은 물체를 빼지 않는다 r.setRenderTarget(prev);
     r.shadowMap.autoUpdate = auto; hide.forEach((o, i) => (o.visible = vis[i]));
   }
   renderTile(k) {
@@ -194,7 +195,11 @@ export class CCTVView {
     if (!this.sim || this.lost) return null;
     const c = this.plan().cams.find((x) => x.id === camId); if (!c) return null;
     const w = canvas.width, h = canvas.height;
-    if (!this.pRT || this.pRT.width !== w || this.pRT.height !== h) { this.pRT?.dispose(); this.pRT = new THREE.WebGLRenderTarget(w, h); this.pRT.texture.colorSpace = THREE.SRGBColorSpace; this.pBuf = new Uint8Array(w * h * 4); this.pImg = new ImageData(w, h); }
+    // 크기별 렌더 타깃 (CCTV 영상 창 · 현장 대응 팝업을 함께 띄워도 다시 만들지 않음)
+    if (!this.pRTs || this.pRTs.r !== this.getRenderer()) { for (const P of this.pRTs?.m.values() ?? []) P.rt.dispose(); this.pRTs = { r: this.getRenderer(), m: new Map() }; }
+    let P = this.pRTs.m.get(`${w}x${h}`);
+    if (!P) { P = { rt: new THREE.WebGLRenderTarget(w, h), buf: new Uint8Array(w * h * 4), img: new ImageData(w, h) }; P.rt.texture.colorSpace = THREE.SRGBColorSpace; this.pRTs.m.set(`${w}x${h}`, P); }
+    this.pRT = P.rt; this.pBuf = P.buf; this.pImg = P.img;
     this.pCam ??= new THREE.PerspectiveCamera(78, w / h, 0.3, 90); this.pCam.aspect = w / h; this.setCam(this.pCam, c);
     this.render(this.pCam, this.pRT, null);
     const r = this.getRenderer(); r.readRenderTargetPixels(this.pRT, 0, 0, w, h, this.pBuf);

@@ -1,0 +1,54 @@
+# Jin-3D 설비 대시보드 (정밀조립Zone) — 앱 MQTT 브로커 → Telegraf(MIT) → InfluxDB 2(MIT) → Grafana OSS(AGPL-3.0, 수정 없이 별도 서비스)
+# 앱 「데이터 연동 → 📈 설비 대시보드 → 대시보드 켜기」가 이 폴더를 데이터 폴더(monitoring/)로 복사하고 .env(무작위 토큰·비밀번호)를 만든 뒤
+#   docker compose -p jin3d-mon up -d 로 띄운다. 접속 포트는 이 PC 안(127.0.0.1)에서만 연다.
+#   구성 이름(jin3d-mon) · 포트(Grafana 3310 · InfluxDB 8196)는 meta-factory 것(metafactory-mon · 3300 · 8186)과 겹치지 않는다 — 두 앱을 같이 켤 수 있다 (컨테이너 · 볼륨 이름은 구성 이름이 앞에 붙는다)
+# 컨테이너 → 앱 브로커: host.docker.internal(host-gateway) — 브로커를 사내망에 열지 않는다 (Docker Desktop · Colima 공통)
+services:
+  influxdb:
+    image: influxdb:2.7.12
+    restart: unless-stopped
+    ports: ["127.0.0.1:${JIN3D_INFLUX_PORT:-8196}:8086"]
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: jin3d
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${JIN3D_INFLUX_PASSWORD:?}
+      DOCKER_INFLUXDB_INIT_ORG: jin3d
+      DOCKER_INFLUXDB_INIT_BUCKET: raw
+      DOCKER_INFLUXDB_INIT_RETENTION: 7d
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${JIN3D_INFLUX_TOKEN:?}
+    volumes:
+      - influx-data:/var/lib/influxdb2
+      - ./influxdb/init:/docker-entrypoint-initdb.d:ro
+  telegraf:
+    image: telegraf:1.34
+    restart: unless-stopped
+    depends_on: [influxdb]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    environment:
+      JIN3D_MQTT_URL: tcp://host.docker.internal:${JIN3D_MQTT_PORT:-1883}
+      JIN3D_INFLUX_TOKEN: ${JIN3D_INFLUX_TOKEN:?}
+    volumes:
+      - ./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+  grafana:
+    image: grafana/grafana-oss:12.4.3
+    restart: unless-stopped
+    depends_on: [influxdb]
+    ports: ["127.0.0.1:${JIN3D_GRAFANA_PORT:-3310}:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${JIN3D_GRAFANA_PASSWORD:?}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"            # 이 PC 안에서만 열리므로 보기 전용은 로그인 없이
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_DEFAULT_LANGUAGE: ko-KR
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/jm-overview.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"     # 외부 사용 통계 전송 끔
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      JIN3D_INFLUX_TOKEN: ${JIN3D_INFLUX_TOKEN:?}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+volumes:
+  influx-data: {}
+  grafana-data: {}

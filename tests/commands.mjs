@@ -34,7 +34,8 @@ const mk = (mode) => { const s = new Simulation(mode, 3, { line: zoneLine(), qui
   const st = s.processing.find((x) => x.id === DT);
   const ev = s.injectFieldEvent('intrusion', st.x, st.z + 4); run(0.5); s.detectFieldEvent(ev, '사족보행-1', 0.9); run(4);
   check('사람 진입 → 주변 셀 감속', st.cmd?.safe === true);
-  run(70); check('이탈 후 감속 해제·인시던트 종료', !st.cmd.safe && ev.inc.status === 'resolved', ev.inc.status);
+  run(200); check('이탈 후 감속 해제·인시던트 종료',   // 진입자가 통로를 따라 건물 앞 개방면까지 걸어 나간 뒤 닫힌다 (60초 고정 → 걸어 나가는 시간)
+    !st.cmd.safe && ev.inc.status === 'resolved', ev.inc.status);
   console.log('== 명령 메시지');
   const states = K.out.filter((x) => x.c.code === 'ESTOP').map((x) => x.state).join('>');
   check('비상정지 메시지 순서', states === 'sent>ack>exec>done', states);

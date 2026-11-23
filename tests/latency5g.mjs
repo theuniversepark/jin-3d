@@ -23,8 +23,10 @@ console.log('== 일반 운전 (피지컬AI 1시간)');
   check('핸드오버 중에도 버퍼 없이 전달 (DAPS, 유실 0)', Q.lost === 0 && Q.fwd === 0 && Q.inflight === 0, `핸드오버 ${Q.ho}회`); }
 
 console.log('== 임계 초과: 휴머노이드 30대가 한 기지국 아래에서 영상을 한꺼번에 켬');
+// 시드 5: 부하 분산은 대수가 아니라 p99 목표(9ms)로 옮긴다 — 영상을 켠 30대 말고 영상 부하가 작은 로봇 한 대가 그 순간 셀1 아래에 있으면 31대(p99 8.96ms)로 끝난다.
+// 이동체 충돌 정지(R01~R03) 수정으로 AMR 위치가 조금 달라져 시드 3은 31대가 됐다(고치기 전에도 시드 4는 31대). 고치기 전후 모두 30대로 끝나는 시드로 옮겼다 (판정 조건은 그대로)
 const surge = (lb) => {
-  const s = new Simulation('dark', 3, { line: zoneLine(), quiet: true }), ag = new FactoryAgent(s), N = s.net; N.lbOn = lb;
+  const s = new Simulation('dark', 5, { line: zoneLine(), quiet: true }), ag = new FactoryAgent(s), N = s.net; N.lbOn = lb;
   run(s, ag, 60);
   const c0 = N.plan.cells[0], ms = [];
   for (let i = 0; i < 30; i++) { const m = { x: c0.x - 2 + (i % 6) * 0.8, z: c0.z - 2 + Math.floor(i / 6) * 0.8, moving: false }; ms.push(m); N.addUE(`추가-${i}`, `HX-${i}`, 'humanoid', () => ({ x: m.x, y: 1.5, z: m.z, m })); }

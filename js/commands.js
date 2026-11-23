@@ -131,6 +131,8 @@ export class CommandCenter {
   // 셀 컨트롤러 수신 → 안전 규칙 확인(ACK/거부) → 실행. 같은 상태로 다시 보내는 명령(이미 정지 등)은 받아들이고 그대로 둔다
   receive(c) {
     const o = this.sim.orch, av = this.availability(c.code, c.target, c.arg, c);
+    for (const st of this.targets(c.target)) this.sim.fos?.validate(st, 'cmd', !(!av.ok && av.hard), av.reason ? `거부 — ${av.reason}` : '', `${this.label(c)} #${c.id}`);   // 셀 OCS 명령 검증
+    this.sim.fos?.bus.send('zone:main', c.target === 'all' ? 'cell:*' : `cell:${c.target}`, 'command', { body: { code: c.code, id: c.id }, text: `${this.label(c)} #${c.id}${!av.ok && av.hard ? ` — 거부: ${av.reason}` : ' — ACK'}` });
     if (!av.ok && av.hard) {
       this.mark(c, 'rejected', av.reason);
       o.step(c.inc, 'cell', 'report', `명령 #${c.id} 거부: ${av.reason}`);

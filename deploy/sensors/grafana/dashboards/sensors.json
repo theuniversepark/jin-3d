@@ -1,0 +1,18 @@
+{
+  "title": "메타팩토리 센서망",
+  "uid": "metafactory-sensors",
+  "schemaVersion": 39,
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [
+    { "name": "zone", "type": "query", "datasource": "SensorDB", "query": "SELECT DISTINCT zone FROM sensor ORDER BY 1", "multi": true, "includeAll": true },
+    { "name": "sensor", "type": "query", "datasource": "SensorDB", "query": "SELECT id FROM sensor WHERE zone IN ($zone) ORDER BY 1", "multi": true, "includeAll": true }
+  ] },
+  "panels": [
+    { "type": "timeseries", "title": "센서 값 (1분 집계)", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 10 }, "datasource": "SensorDB",
+      "targets": [ { "rawSql": "SELECT bucket AS time, s AS metric, avg FROM sensor_1m WHERE $__timeFilter(bucket) AND s IN ($sensor) ORDER BY 1", "format": "time_series" } ] },
+    { "type": "table", "title": "진행 중 경보", "gridPos": { "x": 0, "y": 10, "w": 12, "h": 8 }, "datasource": "SensorDB",
+      "targets": [ { "rawSql": "SELECT time, s, level, v FROM sensor_alarm WHERE cleared_at IS NULL ORDER BY time DESC LIMIT 100", "format": "table" } ] },
+    { "type": "stat", "title": "엣지 시계 잔차 |e| 최대 (µs)", "gridPos": { "x": 12, "y": 10, "w": 12, "h": 8 }, "datasource": "SensorDB",
+      "targets": [ { "rawSql": "SELECT max(abs(e)) FROM sensor_reading WHERE $__timeFilter(time) AND s IN ($sensor)", "format": "table" } ] }
+  ]
+}

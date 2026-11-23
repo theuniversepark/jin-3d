@@ -2,7 +2,8 @@
 // 한 분할 화면(칸 256×144)으로 렌더해 WebM 영상으로 계속 녹화하고 5분 구간 파일로 로컬(서버 data/robotcam/)에 저장한다.
 // 구간마다 칸 색인(JSON: 로봇 · 카메라 · AAS 자산 · 칸 좌표)을 같이 남기고, AAS 파일을 만들 때 그 로봇이 찍힌 영상 파일 링크를 넣는다(aas.js videoSubmodel).
 import * as THREE from 'three';
-import { recSupported, pickMime, saveBlob } from './cctvrec.js';
+import { renderAux } from './viewcull.js';
+import { recSupported, pickMime, saveBlob, convertSegs } from './cctvrec.js';
 // 카메라별 MP4 파일 이름 (server/video-convert.mjs camFile과 같은 규칙)
 export const camFile = (t) => `${String(t.robot ?? t.id ?? 'cam').replace(/[^A-Za-z0-9_-]/g, '_')}_${String(t.camera ?? 'view').replace(/[^A-Za-z0-9_-]/g, '_')}.mp4`;
 
@@ -16,8 +17,8 @@ export class RobotVideoRecorder {
     this.canvas = document.createElement('canvas'); this.ctx = this.canvas.getContext('2d');
   }
   attach(sim, runId, iso) {
-    this.sim = sim; this.runId = runId; this.iso = iso;
-    if (this.rec) this.stopSegment();
+    if (this.rec) this.stopSegment();   // 이전 실행의 시계로 먼저 닫는다 (새 시뮬레이션을 붙인 뒤 닫으면 종료 시각이 0초 근처로 찍혀 길이가 음수가 됐다)
+    this.sim = sim; this.runId = runId; this.iso = iso; this.gen = (this.gen ?? 0) + 1;   // 실행 세대 — 이전 실행에서 건 비동기 읽기를 가려낸다
     this.on = recSupported() && !globalThis.window?.JIN3D_SHARED;
     this.acc = 1e9;
   }
@@ -48,7 +49,7 @@ export class RobotVideoRecorder {
   }
   stopSegment() {
     if (!this.rec) return null;
-    const seg = this.seg; seg.t1 = this.sim.time; seg.iso1 = this.iso(this.sim.time); seg.realS = (performance.now() - seg.real0) / 1000;
+    const seg = this.seg; seg.t1 = this.sim.time; seg.iso1 = new Date(Date.parse(seg.iso0) + (seg.t1 - seg.t0) * 1000).toISOString(); seg.realS = (performance.now() - seg.real0) / 1000;
     try { this.rec.stop(); } catch { seg.resolve(); }
     this.rec = null; this.seg = null;
     return seg;
@@ -63,8 +64,8 @@ export class RobotVideoRecorder {
     if (this.server && blob.size) {
       try {
         const r = await fetch(`/api/robotcam?id=${encodeURIComponent(seg.id)}&ext=webm`, { method: 'POST', body: blob });
-        await fetch(`/api/robotcam?id=${encodeURIComponent(seg.id)}&ext=json`, { method: 'POST', body: JSON.stringify(seg.meta, null, 1) });
-        if (r.ok) { this.saved++; this.bytes += blob.size; seg.stored = true; } else this.failed++;
+        const rj = await fetch(`/api/robotcam?id=${encodeURIComponent(seg.id)}&ext=json`, { method: 'POST', body: JSON.stringify(seg.meta, null, 1) });
+        if (r.ok && rj.ok) { this.saved++; this.bytes += blob.size; seg.stored = true; } else this.failed++;
       } catch { this.failed++; }
     }
     seg.resolve();
@@ -89,16 +90,26 @@ export class RobotVideoRecorder {
       this.cw.setCam(this.cams[i], f);
       const H = this.rows * RREC.th, [x, y] = this.rect(i);
       this.rt.viewport.set(x, H - (y - RREC.head) - RREC.th, RREC.tw, RREC.th); this.rt.scissor.copy(this.rt.viewport); this.rt.scissorTest = true;
-      r.setRenderTarget(this.rt); r.render(this.cw.scene, this.cams[i]);
+      r.setRenderTarget(this.rt); renderAux(r, this.cw.scene, this.cams[i], RREC.th, { data: true });   // 녹화 영상은 데이터 — 작은 물체를 빼지 않는다
     }
     r.setRenderTarget(prev); r.shadowMap.autoUpdate = auto; hide.forEach((o, i) => (o.visible = vis[i]));
-    this.acc += rdt; if (this.acc < 1 / RREC.fps) return; this.acc = 0;
+    // 녹화 주기는 실제 경과 시간으로 (프레임 시간 rdt는 0.1초로 잘려 들어와, 화면이 느리면 2장/초보다 훨씬 덜 찍혔다)
+    const now = performance.now() / 1000; this.acc += Math.min(1, now - (this.lastNow ?? now)); this.lastNow = now;
+    if (this.acc < 1 / RREC.fps) return; this.acc = Math.min(this.acc - 1 / RREC.fps, 1 / RREC.fps);   // 남은 시간을 넘겨 평균 주기를 맞춤
     this.capture();
   }
+  // 녹화 한 장: 칸 렌더 타깃을 비동기로 읽어(GPU를 멈추지 않음 — 지금 내용을 GPU 쪽 버퍼로 복사만 걸어 둠) 받으면 캔버스에 그린다.
+  // 시각·구간 표시는 읽기를 건 시점 값. 앞 읽기가 아직이면 이번 장은 건너뛴다 (그 사이 칸 내용은 다음 장에 담김)
+  // 읽기를 건 구간 · 실행 세대 · 시계를 잡아 두고, 끝났을 때 그 구간이 그대로 열려 있을 때만 그린다 — 버퍼 · 해상도만 보면 구간을 바꾼 뒤(같은 해상도) 이전 구간 프레임이 새 구간 영상에 들어가고, 실행을 바꾼 뒤에는 새 시계로 이전 시각이 찍혔다
   capture() {
-    const r = this.cw.renderer, W = this.cols * RREC.tw, H = this.rows * RREC.th, g = this.ctx;
-    if (this.canvas.width !== W) return;
-    r.readRenderTargetPixels(this.rt, 0, 0, W, H, this.buf);
+    const r = this.cw.renderer, W = this.cols * RREC.tw, H = this.rows * RREC.th;
+    if (this.canvas.width !== W || this.reading || !this.seg) return;
+    const buf = this.buf, seg = this.seg, gen = this.gen, iso = this.iso, t = this.sim.time, label = `REC · 로봇 카메라 ${this.tiles.length}대 전체 · ${this.sim.mode.label}`;
+    this.reading = true;
+    r.readRenderTargetPixelsAsync(this.rt, 0, 0, W, H, buf).then(() => { this.reading = false; if (this.seg === seg && this.gen === gen && this.buf === buf && this.canvas.width === W) this.paint(W, H, t, seg.no, label, iso); }, () => { this.reading = false; });
+  }
+  paint(W, H, t, no, label, iso = this.iso) {
+    const g = this.ctx;
     const row = W * 4; for (let y = 0; y < H; y++) this.img.data.set(this.buf.subarray((H - 1 - y) * row, (H - y) * row), y * row);
     g.putImageData(this.img, 0, RREC.head);
     // 칸 라벨: 로봇 · 카메라
@@ -109,8 +120,8 @@ export class RobotVideoRecorder {
     for (let k = 1; k < this.rows; k++) { g.beginPath(); g.moveTo(0, RREC.head + k * RREC.th); g.lineTo(W, RREC.head + k * RREC.th); g.stroke(); }
     g.fillStyle = '#05080c'; g.fillRect(0, 0, W, RREC.head);
     g.fillStyle = Math.floor(performance.now() / 600) % 2 ? '#ff4d4d' : '#7a2020'; g.beginPath(); g.arc(16, RREC.head / 2, 6, 0, Math.PI * 2); g.fill();
-    g.font = `800 16px ${FONT}`; g.fillStyle = '#e8edf2'; g.fillText(`REC · 로봇 카메라 ${this.tiles.length}대 전체 · ${this.sim.mode.label}`, 30, RREC.head / 2);
-    g.textAlign = 'right'; g.fillStyle = '#7fb8cc'; g.fillText(`${this.iso(this.sim.time).replace('T', ' ').slice(0, 19)} UTC · 구간 #${this.seg?.no ?? '-'}`, W - 10, RREC.head / 2); g.textAlign = 'left';
+    g.font = `800 16px ${FONT}`; g.fillStyle = '#e8edf2'; g.fillText(label, 30, RREC.head / 2);
+    g.textAlign = 'right'; g.fillStyle = '#7fb8cc'; g.fillText(`${iso(t).replace('T', ' ').slice(0, 19)} UTC · 구간 #${no ?? '-'}`, W - 10, RREC.head / 2); g.textAlign = 'left';
   }
   // AAS 자산 하나가 찍힌 영상 목록 (끝난 구간): 파일 이름 · URL · 로컬 경로 · 카메라 · 칸 · 시각
   videosFor(assetKey) {
@@ -125,15 +136,11 @@ export class RobotVideoRecorder {
       // ffmpeg MP4: 이 카메라만 잘라낸 영상 (칸 좌표 없이 바로 재생)
       ...(mp4 ? { mp4Url: `${this.origin}/videos/robotcam/${s.id}/${cf}`, mp4Path: this.dir ? `${this.dir}/${s.id}/${cf}` : `${s.id}/${cf}`, mosaicMp4: `${this.origin}/videos/robotcam/${s.id}.mp4` } : {}) };
   }
-  // AAS 저장 전: 저장된 구간들의 MP4 변환(전체 + 카메라별)을 서버(ffmpeg)에 요청하고 끝날 때까지 기다린다
-  async convertAll(kind = 'robotcam', segs = this.segs) {
-    if (!this.server || !this.ffmpeg) return 0;
-    let n = 0;
-    for (const s of segs) {
-      if (!s.stored || s.mp4) continue;
-      try { const r = await fetch(`/api/convert?kind=${kind}&id=${encodeURIComponent(s.id)}`); if (r.ok) { s.mp4 = await r.json(); n++; } } catch { /* 변환 실패 — WebM 링크만 */ }
-    }
-    return n;
+  // AAS 저장 전: 구간 MP4 변환(전체 + 카메라별)을 서버(ffmpeg)에 요청 — assetKey가 있으면 그 로봇이 찍힌 구간만, 최근 것부터, budgetMs까지만 기다린다
+  async convertAll(kind = 'robotcam', segs = this.segs, opts = {}) {
+    if (!this.server || !this.ffmpeg) return { done: 0, ready: 0, total: 0, pending: 0 };
+    const pick = opts.assetKey ? segs.filter((s) => s.index.some((t) => t.asset === opts.assetKey)) : segs;
+    return convertSegs(kind, pick, opts);
   }
   stats() { return { on: this.on, server: this.server, seq: this.seq, saved: this.saved, bytes: this.bytes, cams: this.tiles.length, cur: this.seg ? (performance.now() - this.seg.real0) / 1000 : 0 }; }
 }

@@ -5,7 +5,7 @@ import { zoneLine } from '../js/line.js';
 import { Simulation } from '../js/sim.js';
 import { FactoryAgent } from '../js/agent.js';
 import { DataHub } from '../js/datahub.js';
-import { PacketCapture, MQTT } from '../js/pcap.js';
+import { PacketCapture, MQTT, publishProps } from '../js/pcap.js';
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => { ok ? pass++ : fail++; console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  — ' + info : ''}`); };
 globalThis.fetch = async () => { throw new Error('no server'); };   // 헤드리스: MQTT 서버 없이 패킷만 만든다
@@ -50,6 +50,7 @@ for (const f of pk) {
   if (fl && fl.next !== seq) seqOk = false;
   flows.set(key, { next: (seq + plen + (flags & 0x02 ? 1 : 0)) >>> 0, buf: [...(fl?.buf ?? []), ...(plen ? f.subarray(tcp + toff, tcp + toff + plen) : [])] });
 }
+let conn5 = 0, pubProps = 0;
 // 흐름(방향)마다 TCP 페이로드를 이어 MQTT 패킷으로 나눈다
 for (const [key, fl] of flows) {
   const b = fl.buf; let i = 0;
@@ -57,9 +58,9 @@ for (const [key, fl] of flows) {
     const type = b[i] >> 4; let mult = 1, len = 0, j = i + 1, c;
     do { c = b[j++]; len += (c & 127) * mult; mult *= 128; } while (c & 128);
     const body = b.slice(j, j + len);
-    if (type === 3) { mq.pub++; const tl = (body[0] << 8) | body[1], topic = Buffer.from(body.slice(2, 2 + tl)).toString(); topics.add(topic); const qos = (b[i] >> 1) & 3, id = (body[2 + tl] << 8) | body[3 + tl]; if (qos === 1) pubIds.add(`${key}#${id}#${mq.pub}`.replace(/#\d+$/, '') + `#${[...pubIds].filter((x) => x.startsWith(`${key}#${id}#`)).length}`); if (key.includes(':1883>') && topic.endsWith('/Commands')) cmdDown++; }
+    if (type === 3) { mq.pub++; { const t0 = (body[0] << 8) | body[1], a0 = 2 + t0 + 2, pl0 = body[a0]; if (pl0 > 0 && body[a0 + 1] === 0x01 && body.slice(a0 + 1, a0 + 1 + pl0).includes(0x03)) pubProps++; } const tl = (body[0] << 8) | body[1], topic = Buffer.from(body.slice(2, 2 + tl)).toString(); topics.add(topic); const qos = (b[i] >> 1) & 3, id = (body[2 + tl] << 8) | body[3 + tl]; if (qos === 1) pubIds.add(`${key}#${id}#${mq.pub}`.replace(/#\d+$/, '') + `#${[...pubIds].filter((x) => x.startsWith(`${key}#${id}#`)).length}`); if (key.includes(':1883>') && topic.endsWith('/Commands')) cmdDown++; }
     else if (type === 4) { mq.ack++; const id = (body[0] << 8) | body[1], [a, bb] = key.split('>'), k0 = `${bb}>${a}#${id}#`; ackIds.add(k0 + [...ackIds].filter((x) => x.startsWith(k0)).length); }
-    else if (type === 1) mq.conn++; else if (type === 2) mq.connack++; else if (type === 8) mq.sub++; else if (type === 9) mq.suback++; else if (type === 12) mq.ping++; else if (type === 13) mq.pong++;
+    else if (type === 1) { mq.conn++; if (body[6] === 5) conn5++; } else if (type === 2) mq.connack++; else if (type === 8) mq.sub++; else if (type === 9) mq.suback++; else if (type === 12) mq.ping++; else if (type === 13) mq.pong++;
     i = j + len;
   }
 }
@@ -67,7 +68,7 @@ console.log('== Ethernet · IPv4 · TCP');
 check('IPv4 헤더 체크섬 모두 정상', ipOk === pk.length);
 check('TCP 체크섬(의사 헤더 포함) 모두 정상', tcpOk === pk.length);
 check('TCP 순서번호가 흐름마다 끊김 없이 이어짐 (SYN·분할 세그먼트 포함)', seqOk, `흐름 ${flows.size}개`);
-console.log('== MQTT 3.1.1 (양방향)');
+console.log('== MQTT 5 (양방향)');
 check('접속: CONNECT ↔ CONNACK, SUBSCRIBE ↔ SUBACK 짝', mq.conn === mq.connack && mq.conn === P.clients.size && mq.sub === mq.suback && mq.sub > 0, `클라이언트 ${P.clients.size} · 구독 ${mq.sub}`);
 const unacked = [...pubIds].filter((x) => !ackIds.has(x)).length;
 check('QoS 1 PUBLISH마다 같은 패킷 ID의 PUBACK이 반대 방향으로 (양방향, 미확인 0)', mq.pub > 0 && unacked === 0 && mq.ack === mq.pub, `PUBLISH ${mq.pub} · PUBACK ${mq.ack}`);
@@ -77,7 +78,17 @@ check('상위 명령이 브로커 → 셀·로봇으로 다운링크', cmdDown >
 check('이동 로봇은 5G 단말 주소(10.45.x.x)로 발행', g5 > 0, `${g5}패킷 · 5G 단말 ${P.hosts()['5g']}대`);
 check('keep-alive: PINGREQ ↔ PINGRESP', mq.ping > 0 && mq.ping === mq.pong, `${mq.ping}회`);
 check('영상(JPEG 12KB, base64) PUBLISH가 MSS 1460B로 분할 전송', P.stats.video === 1 && P.stats.segs > P.stats.publishUp + P.stats.publishDown, `세그먼트 ${P.stats.segs}`);
-const conn = MQTT.connect('x'); check('CONNECT 인코딩 (MQTT · 레벨 4 · clean session)', conn[0] === 0x10 && Buffer.from(conn.slice(4, 8)).toString() === 'MQTT' && conn[8] === 4 && conn[9] === 2);
+const conn = MQTT.connect('x'); check('CONNECT 인코딩 (MQTT · 레벨 5 · clean start · 속성 길이 0)', conn[0] === 0x10 && Buffer.from(conn.slice(4, 8)).toString() === 'MQTT' && conn[8] === 5 && conn[9] === 2 && conn[12] === 0);
+const ca = MQTT.connack(); check('CONNACK: 사유 0x00 · 속성 Topic Alias Maximum(0x22) 10', ca[0] === 0x20 && ca[1] === ca.length - 2 && ca[3] === 0 && ca[4] === 3 && ca[5] === 0x22 && ((ca[6] << 8) | ca[7]) === 10);
+{ // PUBLISH 속성 영역: 토픽 · 패킷 ID 다음 = 속성 길이 + 속성들, 그 뒤 페이로드
+  const pk = MQTT.publish('a/Commands', '{"x":1}', 7, false, 1, publishProps('a/Commands', '{"x":1}')), tl = (pk[2] << 8) | pk[3], at = 4 + tl + 2, plen = pk[at], pr = pk.subarray(at + 1, at + 1 + plen);
+  const u32 = (a, o) => ((a[o] << 24) | (a[o + 1] << 16) | (a[o + 2] << 8) | a[o + 3]) >>> 0;
+  check('PUBLISH 속성: Payload Format 1 · 명령 Message Expiry 30초 · Content Type application/json', pr[0] === 0x01 && pr[1] === 1 && pr[2] === 0x02 && u32(pr, 3) === 30 && pr[7] === 0x03 && Buffer.from(pr.subarray(10, 10 + ((pr[8] << 8) | pr[9]))).toString() === 'application/json', [...pr.subarray(0, 10)].map((b) => b.toString(16)).join(' '));
+  check('PUBLISH 뒤 페이로드가 그대로 (속성 영역 길이만큼 건너뜀)', Buffer.from(pk.subarray(at + 1 + plen)).toString() === '{"x":1}');
+  const sb = MQTT.subscribe(3, ['a/#']), sa = MQTT.suback(3, 1), pa = MQTT.puback(9);
+  check('SUBSCRIBE 속성 길이 0 · 구독 옵션 QoS 1 / SUBACK 사유 0x01 / PUBACK 사유 0x00', sb[4] === 0 && sb[sb.length - 1] === 1 && sa[4] === 0 && sa[5] === 1 && pa[1] === 3 && pa[4] === 0);
+}
+check('캡처 안 모든 CONNECT가 MQTT 5 (프로토콜 레벨 5) · 모든 PUBLISH에 속성 영역(UTF-8 · Content Type)', conn5 > 0 && conn5 === mq.conn && pubProps === mq.pub, `CONNECT ${conn5}/${mq.conn} · PUBLISH ${pubProps}/${mq.pub}`);
 console.log('== 개별 캡처 (로봇·설비 정보 창)');
 for (const a of [amrA, cellA]) {
   const AP = hub.assetPcaps.get(a.id), f2 = AP.build(), d2 = new DataView(f2.buffer), ip = AP.clients.get(a.id).ip.join('.');

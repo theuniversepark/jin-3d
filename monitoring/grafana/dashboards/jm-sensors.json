@@ -1,0 +1,272 @@
+{
+ "uid": "jm-sensors",
+ "title": "Jin-3D · 환경 · 설비 센서",
+ "description": "환경(온습도·진동·PM2.5 등)·설비 센서 — 셀 엣지 묶음 metafactory/sensors/v1 (정밀조립Zone 셀 · 환경 노드 · 공용 설비·물류)",
+ "tags": [
+  "Jin-3D"
+ ],
+ "timezone": "browser",
+ "refresh": "10s",
+ "time": {
+  "from": "now-15m",
+  "to": "now"
+ },
+ "schemaVersion": 41,
+ "version": 1,
+ "editable": false,
+ "templating": {
+  "list": [
+   {
+    "name": "zone",
+    "label": "구역",
+    "type": "custom",
+    "query": "전체 : all,정밀조립 : main,공용·물류 : fac",
+    "current": {
+     "text": "전체",
+     "value": "all"
+    },
+    "options": [],
+    "includeAll": false,
+    "multi": false
+   },
+   {
+    "name": "metric",
+    "label": "지표",
+    "type": "query",
+    "datasource": {
+     "type": "influxdb",
+     "uid": "jm-influx"
+    },
+    "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"raw\", tag: \"m\", predicate: (r) => r._measurement == \"sensor\" and (r.zone == \"${zone}\" or \"${zone}\" == \"all\"), start: -1d)",
+    "refresh": 2,
+    "includeAll": true,
+    "multi": true,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    },
+    "allValue": ".*",
+    "sort": 1
+   }
+  ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "name": "Annotations & Alerts",
+    "type": "dashboard"
+   },
+   {
+    "datasource": {
+     "type": "influxdb",
+     "uid": "jm-influx"
+    },
+    "enable": true,
+    "iconColor": "red",
+    "name": "운영 이벤트 — 경보",
+    "target": {
+     "refId": "Anno",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"event\" and r.level == \"alert\") |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> map(fn: (r) => ({ _time: r._time, text: r.title + (if exists r.text then \" — \" + r.text else \"\"), tags: r.zone }))"
+    }
+   },
+   {
+    "datasource": {
+     "type": "influxdb",
+     "uid": "jm-influx"
+    },
+    "enable": true,
+    "iconColor": "orange",
+    "name": "운영 이벤트 — 주의",
+    "target": {
+     "refId": "Anno",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"event\" and r.level == \"warn\") |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> map(fn: (r) => ({ _time: r._time, text: r.title + (if exists r.text then \" — \" + r.text else \"\"), tags: r.zone }))"
+    }
+   },
+   {
+    "datasource": {
+     "type": "influxdb",
+     "uid": "jm-influx"
+    },
+    "enable": false,
+    "iconColor": "blue",
+    "name": "운영 이벤트 — 조치",
+    "target": {
+     "refId": "Anno",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"event\" and r.level == \"act\") |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> map(fn: (r) => ({ _time: r._time, text: r.title + (if exists r.text then \" — \" + r.text else \"\"), tags: r.zone }))"
+    }
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "센서 측정값 (지표별 · 센서별)",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "jm-influx"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 14
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "influxdb",
+      "uid": "jm-influx"
+     },
+     "refId": "A",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"sensor\" and r._field == \"v\" and (r.zone == \"${zone}\" or \"${zone}\" == \"all\") and r.m =~ /^${metric:regex}$/) |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false) |> map(fn: (r) => ({ _time: r._time, _value: r._value, _field: r.m + \" · \" + r.s + \" (\" + r.u + \")\" })) |> group(columns: [\"_field\"])"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 6,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "min",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 2,
+   "type": "table",
+   "title": "센서 최신값",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "jm-influx"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 14,
+    "w": 24,
+    "h": 12
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "influxdb",
+      "uid": "jm-influx"
+     },
+     "refId": "A",
+     "query": "from(bucket: \"raw\") |> range(start: -5m) |> filter(fn: (r) => r._measurement == \"sensor\" and r._field == \"v\" and (r.zone == \"${zone}\" or \"${zone}\" == \"all\") and r.m =~ /^${metric:regex}$/) |> last() |> group() |> keep(columns: [\"zone\", \"cell\", \"s\", \"m\", \"u\", \"_value\", \"_time\"]) |> sort(columns: [\"zone\", \"cell\", \"m\"])"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "_value"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "값"
+       },
+       {
+        "id": "decimals",
+        "value": 2
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "s"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "센서"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "m"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "지표"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "u"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "단위"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "_time"
+      },
+      "properties": [
+       {
+        "id": "displayName",
+        "value": "수신"
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   }
+  }
+ ],
+ "links": [
+  {
+   "title": "Jin-3D 대시보드",
+   "type": "dashboards",
+   "tags": [
+    "Jin-3D"
+   ],
+   "asDropdown": true,
+   "includeVars": false,
+   "keepTime": true
+  }
+ ]
+}

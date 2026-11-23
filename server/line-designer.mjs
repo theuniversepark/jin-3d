@@ -1,6 +1,7 @@
 // 공정 설계 에이전트 — 자연어 요청을 받아 현재 라인을 수정한 초안을 구조화 출력(JSON)으로 만든다.
 // 적용은 사용자가 미리보기에서 확인한 뒤 브라우저에서 한다.
 import { MODEL } from './llm-agent.mjs';
+import { useSubscription, runClaude } from './claude-sub.mjs';
 import { STATION_TYPES, ROBOT_KINDS, LAYOUTS, MAX_STATIONS, MAX_ROBOTS, PARALLEL_GAIN, normalizeLine, diffLines, lineMetrics, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from '../js/line.js';
 
 const PRICE = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 };
@@ -115,24 +116,36 @@ export async function designLine(client, { line, request, attachments = [] }) {
   const zoneNote = zone ? `\n\n## ${ZONE_NAME} 제약\n현재 라인은 메타팩토리 테스트베드 ${ZONE_NAME}의 혼류 라인(도어트림 ${ZONE_PRODUCTS.doortrim.customer} + e-axle ${ZONE_PRODUCTS.eaxle.customer})입니다. 흐름: 자재 투입 → 부품분류셀(공동)에서 부품 종류 판별·분기 → 도어트림 라인(조립셀→체결셀) / e-axle 라인(조립셀→체결셀) → 포장셀(공동)에서 합류·제품별 포장 → 구분 적재장의 제품별 구역. 6개 셀(${Object.values(ZONE_CELLS).map((c) => `${c.no}.${c.label}: ${c.use}`).join(', ')})이 바닥에 고정 배치되어 있어, stations의 id·순서·type은 그대로 두고 name·robot_kind·robot_count·cycle_s·task(셀 레시피)만 바꿀 수 있습니다. 이 셀들의 cycle_s는 자동화 단계 실제 작업 시간(초)이며 레거시·피지컬AI 단계는 같은 비율로 바뀝니다(로봇 배율·대수 병렬 이득을 쓰지 않음 · 체결·압입 셀은 로봇당 2~4점). 제품 전용 셀의 부하는 사이클×혼류 비중입니다(현재 혼류 ${ZONE_MIXES[current.mix]?.label ?? '1 : 1'}). layout은 "straight"로 두면 됩니다(서버가 셀 배치로 되돌립니다). 셀 추가·삭제·순서 변경 요청이면 feasible을 false로 하고 사용자 라인에서 하도록 summary에 안내하십시오.` : '';
   const user = `## 현재 라인 (레이아웃 ${current.layout}, 병목: ${m.bottleneck?.name}, 이론 UPH ${Math.round(m.uph)})\n\`\`\`json\n${JSON.stringify(toWire(current))}\n\`\`\`${zoneNote}${fileNote}\n\n## 운영자 요청\n${request}`;
 
-  const response = await client.beta.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
-    output_config: { effort: files.length ? 'high' : 'medium', format: { type: 'json_schema', schema: SCHEMA } },
-    system: SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: [...files, { type: 'text', text: user }] }],
-  });
-  const u = response.usage ?? {};
-  const costUSD = ((u.input_tokens ?? 0) * PRICE.input + (u.output_tokens ?? 0) * PRICE.output
-    + (u.cache_read_input_tokens ?? 0) * PRICE.cacheRead + (u.cache_creation_input_tokens ?? 0) * PRICE.cacheWrite) / 1e6;
+  const effort = files.length ? 'high' : 'medium';
+  const content = [...files, { type: 'text', text: user }];
+  let out, costUSD = 0, model = MODEL;
+  if (useSubscription()) {
+    // 구독(CLAUDE_AUTH=subscription): claude CLI 로 같은 구조화 출력을 받는다. 비용은 구독이라 0
+    const res = await runClaude({ system: SYSTEM_PROMPT, content, model: MODEL, effort, schema: SCHEMA });
+    if (res.stopReason === 'refusal') throw new Error('요청이 안전 정책으로 거절되었습니다.');
+    if (res.stopReason === 'max_tokens') throw new Error('응답이 너무 길어 중단되었습니다. 요청을 나눠 주세요.');
+    if (!res.structured) throw new Error('Claude 응답을 해석하지 못했습니다.');
+    out = res.structured; model = res.model;
+  } else {
+    const response = await client.beta.messages.create({
+      model: MODEL,
+      max_tokens: 16000,
+      betas: ['server-side-fallback-2026-07-01'],
+      fallbacks: 'default',
+      output_config: { effort, format: { type: 'json_schema', schema: SCHEMA } },
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content }],
+    });
+    const u = response.usage ?? {};
+    costUSD = ((u.input_tokens ?? 0) * PRICE.input + (u.output_tokens ?? 0) * PRICE.output
+      + (u.cache_read_input_tokens ?? 0) * PRICE.cacheRead + (u.cache_creation_input_tokens ?? 0) * PRICE.cacheWrite) / 1e6;
 
-  if (response.stop_reason === 'refusal') throw new Error('요청이 안전 정책으로 거절되었습니다.');
-  if (response.stop_reason === 'max_tokens') throw new Error('응답이 너무 길어 중단되었습니다. 요청을 나눠 주세요.');
-  const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
-  let out;
-  try { out = JSON.parse(text); } catch { throw new Error('Claude 응답을 해석하지 못했습니다.'); }
+    if (response.stop_reason === 'refusal') throw new Error('요청이 안전 정책으로 거절되었습니다.');
+    if (response.stop_reason === 'max_tokens') throw new Error('응답이 너무 길어 중단되었습니다. 요청을 나눠 주세요.');
+    const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+    try { out = JSON.parse(text); } catch { throw new Error('Claude 응답을 해석하지 못했습니다.'); }
+    model = response.model;
+  }
 
   // 정밀조립Zone은 레이아웃·시나리오를 서버에서 유지한다 (스키마의 layout enum에는 zone이 없다)
   const { line: draft, errors, warnings } = normalizeLine(zone ? { ...out.line, layout: 'zone', mix: current.mix } : out.line);
@@ -145,7 +158,7 @@ export async function designLine(client, { line, request, attachments = [] }) {
     errors,
     line: draft,
     diff: diffLines(current, draft),
-    model: response.model,
+    model,
     costUSD,
   };
 }

@@ -16,8 +16,9 @@ export function nativeChain(root, names, tip) {
   // 로봇 루트 로컬 좌표에서 푼다 — 셀이 좌우 반전(scale.z −1)되어 있으면 월드 좌표에서는 회전 방향이 뒤집혀 발산한다 (팔이 바닥 아래로)
   // down: 툴을 아래로 세워 집는다 (팔레타이징 진공 그리퍼) — true면 위에서, {x,y,z}(루트 로컬 단위 벡터)면 그 방향에서 대상물 면에 수직으로 다가간다:
   // 손목 중심(끝에서 둘째 관절)을 목표에서 그 방향으로 손목~TCP 거리만큼 떨어진 점에 먼저 맞추고(팔 관절) 손목 3축으로 TCP를 목표에 맞춘다 (6축 J5 · 7축 J6)
-  const ik = (x, y, z, down = false) => {
-    const key = [x, y, z].map((v) => v.toFixed(3)).join(',') + (down ? (down === true ? 'd' : [down.x, down.y, down.z].map((v) => v.toFixed(2)).join('/')) : ''); if (cache.has(key)) return cache.get(key).slice();
+  // seed: 시작 자세를 따로 줄 때 (투입 로봇 — 앞 자세에서 이어 풀어 같은 팔꿈치·손목 갈래로, js/loader.js)
+  const ik = (x, y, z, down = false, seed = null) => {
+    const key = [x, y, z].map((v) => v.toFixed(3)).join(',') + (down ? (down === true ? 'd' : [down.x, down.y, down.z].map((v) => v.toFixed(2)).join('/')) : '') + (seed ? '|' + seed.map((v) => v.toFixed(2)).join(',') : ''); if (cache.has(key)) return cache.get(key).slice();
     const prev = qs.slice(); root.updateWorldMatrix(true, true);
     const inv = root.matrixWorld.clone().invert(), M = new THREE.Matrix4();
     const at = (o) => o.getWorldPosition(new THREE.Vector3()).applyMatrix4(inv);
@@ -49,7 +50,7 @@ export function nativeChain(root, names, tip) {
       return { q: qs.slice(), e: at(tip).distanceTo(target) };
     };
     // CCD가 관절 한계에 걸려 못 닿으면(2cm 넘게) 시작 자세를 바꿔 다시 풀고 가장 가까운 해를 쓴다 (양팔 로봇의 한쪽 팔 등)
-    const home = chain.home ?? pivots.map(() => 0);
+    const home = seed ?? chain.home ?? pivots.map(() => 0);
     let best = solve(home);
     for (const [j, d] of [[1, .7], [1, -.7], [2, .9], [2, -.9], [3, .9], [3, -.9]]) { if (best.e < 0.02 || j >= pivots.length) break; const s = home.slice(); s[j] = (s[j] ?? 0) + d; const r = solve(s); if (r.e < best.e) best = r; }
     const result = best.q; pose(...prev); root.updateWorldMatrix(true, true);

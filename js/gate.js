@@ -34,6 +34,10 @@ export function evaluate(a, sim, agent) {
     add('parse', 'fail', `"${a?.clause ?? ''}" — 알아들을 수 있는 공정 지시가 아닙니다`);
     return reject('지시를 해석하지 못함', '예: 포장셀 속도 75% · 도어트림 2:1 · e-axle 조립셀 예방정비');
   }
+  if (a.type === 'unclear') {   // 하지 말라는 지시 · 대상 불분명 — 실행하지 않고 이유와 대안을 돌려준다
+    add('parse', 'fail', `"${a.clause}" — ${a.reason}`);
+    return { checks, verdict: 'reject', reason: a.reason, alt: a.alt, summary: `"${a.clause}"` };
+  }
   add('parse', 'pass', `"${a.clause}" → ${describe(a, sim)}`);
   if (a.type === 'status') {
     add('target', 'pass', a.target && a.target !== 'all' ? K.targetName(a.target) : '라인 전체');

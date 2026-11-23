@@ -1,4 +1,4 @@
-// 공장 오케스트레이터 — 설비 고장·자재 공급 차질·현장 이벤트 같은 인시던트를
+// 존 오케스트레이터 (인시던트) — 설비 고장·자재 공급 차질·현장 이벤트 같은 인시던트를
 // 현장 감지 → 셀 자체 조치 → 상위 보고 → 판단 → 명령 → 실행 자원 조치 → 완료 확인 흐름으로 처리하고 단계마다 기록한다.
 // 셀에서 해결되는 일(자율 재보정 등)은 셀 자체 조치 후 결과만 상위에 통보한다.
 // 렌더링과 분리되어 있어 헤드리스 시뮬레이션에서도 같은 흐름으로 동작한다.
@@ -6,7 +6,7 @@
 export const LANES = [
   { key: 'field', label: '현장 감지', sub: '로봇·센서·카메라' },
   { key: 'cell', label: '셀 컨트롤러', sub: '셀 자체 조치' },
-  { key: 'orch', label: '공장 오케스트레이터', sub: '상황 판단·명령' },
+  { key: 'orch', label: '존 오케스트레이터', sub: '상황 판단·명령' },
   { key: 'exec', label: '실행 자원', sub: '정비·AGV·휴머노이드·사족보행' },
 ];
 // 흐름 단계 (도표 상단 진행 표시)
@@ -22,6 +22,7 @@ export const INCIDENT_TYPES = {
   command: { label: '상위 명령', icon: '📡' },
   parts: { label: '부품 선반 결품', icon: '▦' },
   security: { label: '보안 위협', icon: '🛡' },   // 피지컬AI 다중 계층 보안(총괄4)이 차단한 위협
+  defect: { label: '품질 불량', icon: '✖' },   // 체결셀 전수 검사 NG · 출하 전 샘플 재검 NG → 8D CAPA (capa.js)
 };
 
 // 문제 해결 우선순위: 화재·사람·시설 안전을 먼저, 그다음 생산량·공정 운영·효율 (숫자가 작을수록 먼저)
@@ -32,15 +33,26 @@ export const PRIORITY = {
   4: { label: 'P4 생산 차질', short: 'P4', desc: '자재 공급 차질·부품 결품·운영 명령' },
   5: { label: 'P5 효율·품질', short: 'P5', desc: '예지정비·재보정·공정 편차 — 안전(P1) 대응 중에는 보류' },
 };
-const TYPE_PRIO = { field: 2, equipment: 3, supply: 4, parts: 4, command: 4, quality: 5, security: 2 };   // 보안 위협: 위조 제어 명령 등은 물리 안전과 직결 → P2
+const TYPE_PRIO = { field: 2, equipment: 3, supply: 4, parts: 4, command: 4, quality: 5, security: 2, defect: 5 };   // 보안 위협: 위조 제어 명령 등은 물리 안전과 직결 → P2
 export const prioOf = (inc) => inc?.prio ?? TYPE_PRIO[inc?.type] ?? 4;
+
+// 제어·이벤트 흐름 분류 — 흐름 기록·집계는 공정·운영 흐름 분석(제어 흐름 탭)에 쓴다.
+// 계층을 건너는 흐름은 방향으로 나눈다: 위로(현장 → 셀 → 오케스트레이터 → FAC) 올라가는 것은 이벤트(감지·보고·결과 통보),
+// 아래로 내려가는 것은 제어(명령). 같은 계층 안의 흐름은 단계 종류로 나눈다: 자체 조치·명령·조치는 제어, 판단·완료 확인은 판단
+export const FLOW_CLASS = { detect: 'event', report: 'event', notify: 'event', self: 'control', command: 'control', act: 'control', decide: 'decision', done: 'decision' };
+export const FLOW_CLASS_LABEL = { event: '이벤트', control: '제어', decision: '판단' };
+const LEVEL = { fac: 0, orch: 1, cell: 2, exec: 2, field: 3 };
+export const flowClass = (from, to, kind) => (from && LEVEL[from] !== LEVEL[to] ? (LEVEL[to] < LEVEL[from] ? 'event' : 'control') : FLOW_CLASS[kind] ?? 'control');
 
 export class Orchestrator {
   constructor(sim) {
     this.sim = sim; this.incidents = []; this.seq = 0; this.jobs = [];
+    // journal: 최근 흐름 기록 (레인 → 레인) · flows: 레인 사이 흐름 누적 (건수·지연) · stages: 인시던트 종류별 단계 도달 시간 누적
+    // 목록이 넘쳐 오래된 인시던트가 빠져도 누적 집계는 남는다
+    this.journal = []; this.flows = {}; this.stages = {};
   }
   // 오케스트레이터 이름·판단 지연 (단계별): 레거시는 작업반장이 직접 확인하고 판단한다
-  get name() { return { traditional: '작업반장 (수동 판단)', smart: '공장 오케스트레이터 (MES)', dark: `피지컬AI 오케스트레이터${this.sim.aios?.latest ? ` · AIOS ${this.sim.aios.version}` : ''}` }[this.sim.mode.key]; }
+  get name() { return { traditional: '작업반장 (수동 판단)', smart: '존 오케스트레이터 (MES)', dark: `피지컬AI 존 오케스트레이터${this.sim.aios?.latest ? ` · AIOS ${this.sim.aios.version}` : ''}` }[this.sim.mode.key]; }
   get latency() { return this.sim.mode.orchLatency ?? { traditional: 40, smart: 3, dark: 1.5 }[this.sim.mode.key]; }
 
   open(type, key, title, source, opts = {}) {
@@ -54,12 +66,27 @@ export class Orchestrator {
   // kind: detect · self · report · decide · command · act · notify · done
   step(inc, lane, kind, text) {
     if (!inc || inc.status !== 'open') return;
-    inc.steps.push({ t: this.sim.time, lane, kind, text });
+    const prev = inc.steps[inc.steps.length - 1], t = this.sim.time, from = prev?.lane ?? null, cls = flowClass(from, lane, kind);
+    inc.steps.push({ t, lane, kind, text });
+    this.sim.fos?.incidentStep(inc, lane, kind, text);   // FacOS A2A 기록 (js/factoryos.js)
+    // 흐름 집계: 이전 단계 레인 → 이번 단계 레인 (첫 단계는 발생원에서 시작)
+    const f = (this.flows[`${from ?? 'src'}>${lane}>${cls}`] ??= { from, to: lane, cls, n: 0, dt: 0, kinds: {} });
+    f.n++; f.dt += prev ? t - prev.t : 0; f.kinds[kind] = (f.kinds[kind] ?? 0) + 1;
+    if (this.sim.quiet) return;
+    this.journal.unshift({ t, inc: inc.id, type: inc.type, prio: prioOf(inc), from, to: lane, kind, cls, text });
+    if (this.journal.length > 300) this.journal.pop();
   }
   close(inc, text, lane = 'orch') {
     if (!inc || inc.status !== 'open') return;
     this.step(inc, lane, 'done', text);
     inc.status = 'resolved'; inc.tEnd = this.sim.time;
+    // 단계 지연 집계: 종류별로 각 단계(처음 도달)까지 걸린 시간
+    const S = (this.stages[inc.type] ??= { n: 0, cell: 0, at: {}, hit: {} });
+    S.n++; if (inc.cellResolved) S.cell++;
+    for (const st of STAGES) {
+      const s = inc.steps.find((x) => x.kind === st.key);
+      if (s) { S.at[st.key] = (S.at[st.key] ?? 0) + (s.t - inc.t0); S.hit[st.key] = (S.hit[st.key] ?? 0) + 1; }
+    }
   }
   later(delay, fn) { this.jobs.push({ at: this.sim.time + delay, fn }); }
   update() {

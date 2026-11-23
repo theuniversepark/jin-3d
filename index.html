@@ -4,12 +4,93 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>피지컬AI 실증 메타팩토리</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" type="image/png" href="build/icon.png" />
+  <link rel="apple-touch-icon" href="build/icon.png" />
+  <link rel="stylesheet" href="css/style.css?v=7230597fd5" />
   <script type="importmap">
-    { "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }
+    { "imports": {
+      "three": "./vendor/three/three.module.js",
+      "three/webgpu": "./vendor/three/three.webgpu.js",
+      "three/addons/": "./vendor/three/addons/",
+      "./js/aas.js": "./js/aas.js?v=c87fdf8b09",
+      "./js/aasx.js": "./js/aasx.js?v=c4f582af4b",
+      "./js/agent.js": "./js/agent.js?v=f9821ce0fd",
+      "./js/agentcore.js": "./js/agentcore.js?v=b665d330d2",
+      "./js/agentinfo.js": "./js/agentinfo.js?v=4ad2a83099",
+      "./js/aios.js": "./js/aios.js?v=8561336e91",
+      "./js/assets.js": "./js/assets.js?v=0402d4a1fc",
+      "./js/attachments.js": "./js/attachments.js?v=0c8d1872e6",
+      "./js/blender.js": "./js/blender.js?v=244fe7f4dc",
+      "./js/capa.js": "./js/capa.js?v=810ac583c5",
+      "./js/cctv.js": "./js/cctv.js?v=04181ea75d",
+      "./js/cctvrec.js": "./js/cctvrec.js?v=2b2fcb2e90",
+      "./js/cctvview.js": "./js/cctvview.js?v=8368245a43",
+      "./js/codes.js": "./js/codes.js?v=cabf73adfa",
+      "./js/commands.js": "./js/commands.js?v=cf3cd28785",
+      "./js/compare.js": "./js/compare.js?v=8c1053eb13",
+      "./js/compareworker.js": "./js/compareworker.js?v=06702298d9",
+      "./js/concept.js": "./js/concept.js?v=e1583f234f",
+      "./js/datahub.js": "./js/datahub.js?v=eeb45626e6",
+      "./js/designer.js": "./js/designer.js?v=3c9ce8f94a",
+      "./js/dialog.js": "./js/dialog.js?v=d6e3597ffb",
+      "./js/drone.js": "./js/drone.js?v=c2c67e1af3",
+      "./js/epcis.js": "./js/epcis.js?v=d69340a5b2",
+      "./js/fac.js": "./js/fac.js?v=8186cd3471",
+      "./js/factory.js": "./js/factory.js?v=004286998d",
+      "./js/factoryos.js": "./js/factoryos.js?v=09b89f4a81",
+      "./js/fieldpop.js": "./js/fieldpop.js?v=ecf13e6619",
+      "./js/fleet.js": "./js/fleet.js?v=2253ef4e55",
+      "./js/fosview.js": "./js/fosview.js?v=9e86bc0ca7",
+      "./js/gate.js": "./js/gate.js?v=e292483906",
+      "./js/gateview.js": "./js/gateview.js?v=80968cb5a9",
+      "./js/impact.js": "./js/impact.js?v=2aff73e91c",
+      "./js/impactview.js": "./js/impactview.js?v=ec8a3564ab",
+      "./js/line.js": "./js/line.js?v=69a1ef67c4",
+      "./js/llm.js": "./js/llm.js?v=1667961c88",
+      "./js/loader.js": "./js/loader.js?v=2dc6edb4f8",
+      "./js/main.js": "./js/main.js?v=3ce3ea15a3",
+      "./js/multiagent.js": "./js/multiagent.js?v=a22ec8e95e",
+      "./js/net5g.js": "./js/net5g.js?v=b054458dff",
+      "./js/orchestrator.js": "./js/orchestrator.js?v=1c99438ded",
+      "./js/orchview.js": "./js/orchview.js?v=b7411e261b",
+      "./js/pack.js": "./js/pack.js?v=23ebe944a0",
+      "./js/payload-robots.js": "./js/payload-robots.js?v=a26f745522",
+      "./js/pcap.js": "./js/pcap.js?v=cddfcb9eb7",
+      "./js/perf.js": "./js/perf.js?v=9f04e80027",
+      "./js/qcomm.js": "./js/qcomm.js?v=dd37497796",
+      "./js/rcacore.js": "./js/rcacore.js?v=22b41da920",
+      "./js/receiving.js": "./js/receiving.js?v=2f03e2a246",
+      "./js/robot-specs.js": "./js/robot-specs.js?v=68b40eacde",
+      "./js/robotcam.js": "./js/robotcam.js?v=855b7704ad",
+      "./js/robotrec.js": "./js/robotrec.js?v=f070b023f4",
+      "./js/security.js": "./js/security.js?v=53760188f2",
+      "./js/sensors.js": "./js/sensors.js?v=f7b62a0b93",
+      "./js/sensorview.js": "./js/sensorview.js?v=b39a66fcef",
+      "./js/serial.js": "./js/serial.js?v=6ef0474c13",
+      "./js/serialalloc.js": "./js/serialalloc.js?v=482231bb2d",
+      "./js/shipping.js": "./js/shipping.js?v=daec0ebb67",
+      "./js/sim.js": "./js/sim.js?v=e44f79cceb",
+      "./js/sps.js": "./js/sps.js?v=76b1551959",
+      "./js/spsview.js": "./js/spsview.js?v=bcb760527d",
+      "./js/stepflow.js": "./js/stepflow.js?v=7dea5f8f5b",
+      "./js/stepinterp.js": "./js/stepinterp.js?v=74000294c4",
+      "./js/telemetry.js": "./js/telemetry.js?v=49e77dd827",
+      "./js/tori-en.js": "./js/tori-en.js?v=55a8127f69",
+      "./js/tori.js": "./js/tori.js?v=545e1aa95c",
+      "./js/trace.js": "./js/trace.js?v=d9717cd19e",
+      "./js/traceview.js": "./js/traceview.js?v=189b50c4e8",
+      "./js/ui.js": "./js/ui.js?v=6fb977540c",
+      "./js/uns.js": "./js/uns.js?v=3a0ebd8565",
+      "./js/unsview.js": "./js/unsview.js?v=8c49f8382a",
+      "./js/viewcull.js": "./js/viewcull.js?v=68790e8681",
+      "./js/vla.js": "./js/vla.js?v=f1b49bafbe",
+      "./js/zonedash.js": "./js/zonedash.js?v=517a0d79bb",
+      "./js/zonedefs.js": "./js/zonedefs.js?v=ca124e9b19",
+      "./js/zonekpi.js": "./js/zonekpi.js?v=967326661b"
+    } }
   </script>
 </head>
-<body data-mode="smart">
+<body data-mode="dark">
   <div id="viewport"></div>
   <div id="cctvCard" hidden></div>
   <div id="net5gCard" hidden></div>
@@ -40,10 +121,12 @@
     <button id="btnVla" class="dark-only vla-top" title="로봇 데이터·카메라 영상 → AI-ready 에피소드 → 서버 저장 → VLA 학습 → 평가 → 로봇 배포, 로봇별 에피소드 파일 다운로드">🧠 VLA 학습</button>
     <button id="btnAios" class="dark-only vla-top aios-top" title="AIOS 공장 운영 AI — 현장 생산·운영 데이터 → AI-ready 운영 데이터셋 → 서버 저장 → 운영 정책 학습 → 디지털트윈 검증 → 오케스트레이터 배포, 운영 데이터셋 다운로드">🏭 AIOS 학습</button>
     <button id="btnImpact" class="vla-top imp-top" title="이벤트·문제가 UPH · OEE · WIP · POWER에 미친 영향 분석 · 개선 제안 리포트 · 디지털트윈 검증 · 적용 여부 의사결정">📊 KPI 영향·개선<b id="impBadge" hidden></b></button>
+    <button id="btnTrace" class="vla-top qt-top" title="제품 추적 관리(시리얼·계보) · 품질 불량 AI 원인 분석 데이터 내려받기 · Zone·총괄 오케스트레이터 8D CAPA · 운영 정책 반영">🔎 품질 추적<b id="qtBadge" hidden></b></button>
+    <button id="btnZoneDash" class="vla-top zd-top" title="정밀조립Zone 실시간 모니터링(설비 상태·생산 진행률·시계열) · 종합 설비 효율(OEE·6대 손실 파레토) · 공정–품질 상관·관리도">📈 Zone 대시보드</button>
     <div class="seg" id="modeSeg">
       <button data-mode="traditional">레거시</button><i class="seg-arrow">›</i>
-      <button data-mode="smart" class="on">자동화</button><i class="seg-arrow">›</i>
-      <button data-mode="dark">피지컬AI</button>
+      <button data-mode="smart">자동화</button><i class="seg-arrow">›</i>
+      <button data-mode="dark" class="on">피지컬AI</button>
     </div>
     <button id="btnEstop" class="estop" title="상위 긴급 명령 — 정밀조립Zone 전체 비상정지 (발령 중에는 리셋 명령)">🛑 비상정지</button>
     <div class="timectl">
@@ -55,12 +138,15 @@
         <button data-speed="30">30×</button>
       </div>
       <div class="clock" id="clock">08:00:00</div>
+      <button id="btnGuide" class="icon" hidden title="사용자 가이드 (PDF) 내려받기">📘</button>
+      <button id="btnApps" class="icon" hidden title="맥·윈도우 앱 내려받기 (웹 버전에서만)">⬇</button>
       <button id="btnSettings" class="icon app-only" title="Agent API 키 설정 (⌘,)">⚙</button>
     </div>
   </header>
 
   <button type="button" class="side-tgl" id="tglLeft" title="왼쪽 패널(정밀조립Zone) 숨기기 · 단축키 [">◀</button>
   <button type="button" class="side-tgl" id="tglRight" title="오른쪽 패널(자율운영 에이전트) 숨기기 · 단축키 ]">▶</button>
+  <button type="button" class="side-tgl" id="tglDock" title="공정 설계 숨기기 · 단축키 \">▶</button>
   <aside class="panel left" id="kpiPanel">
     <div class="zone-card" id="zoneCard"></div>
     <div class="mode-desc" id="modeDesc"></div>
@@ -76,16 +162,20 @@
   </aside>
 
   <aside class="panel right" id="agentPanel">
-    <div class="agent-h">
-      <div class="agent-avatar" id="agentAvatar">AI</div>
+    <div class="agent-h" id="facosHead" role="button" tabindex="0" aria-expanded="true" aria-controls="facosSum zoneAgentBox" title="누르면 공장 요약·존 에이전트 설정을 접고 펼칩니다">
+      <div class="agent-avatar facos">OS</div>
       <div>
-        <div class="agent-name" id="agentName">AI 운영 에이전트</div>
-        <div class="agent-sub"><span class="pill" id="agentPill">활성</span> 의사결정 <b id="agentCount">0</b>건</div>
+        <div class="agent-name">FACOS · 공장 운영 <i class="fold" aria-hidden="true">▾</i></div>
+        <div class="agent-sub" id="facosSub">공장 오케스트레이터 (FacOS)</div>
       </div>
     </div>
+    <div class="facos-sum" id="facosSum" title="정밀조립Zone · 공장 공용 상태 — 누르면 아래 공장 운영 로그를 그쪽으로 거릅니다"></div>
+    <details class="zone-agent" id="zoneAgentBox">
+      <summary class="za-h"><div class="agent-avatar small" id="agentAvatar">AI</div><div><small>정밀조립Zone 존 에이전트 <i class="za-more">설정·현재 판단 ▾</i></small><div class="agent-name" id="agentName">AI 운영 에이전트</div>
+        <div class="agent-sub"><span class="pill" id="agentPill">활성</span> 의사결정 <b id="agentCount">0</b>건</div></div></summary>
     <div class="engine">
       <div class="seg small" id="engineSeg">
-        <button data-engine="rule" class="on">추론 기반</button>
+        <button data-engine="rule" class="on">정책 기반</button>
         <button data-engine="llm">대화 기반</button>
       </div>
       <label class="chk" title="Agent 응답을 기다리는 동안 시뮬레이션을 멈춥니다"><input type="checkbox" id="pauseThink" checked /> 응답 대기 시 일시정지</label>
@@ -99,8 +189,11 @@
     </div>
     <div class="llm-status" id="llmStatus"></div>
     <div class="thought" id="thought"></div>
+    </details>
+    <div class="log-h"><b>공장 운영 로그</b></div>
+    <div class="seg small log-filter" id="logFilter"></div>
     <div class="loop"><span>관찰</span>→<span>판단</span>→<span>실행</span></div>
-    <div class="log" id="log"></div>
+    <div class="log" id="log" data-filter="all"></div>
     <form class="chatbox" id="chatForm" autocomplete="off">
       <input id="chatInput" placeholder="공정 지시 (예: 포장셀 속도 75%, 도어트림 2:1, e-axle 조립셀 예방정비)" disabled />
       <button type="submit" id="chatSend" disabled>전송</button>
@@ -108,8 +201,9 @@
   </aside>
 
   <div class="panel detail hidden" id="detail"></div>
+  <div class="fieldpops" id="fieldPops" hidden aria-label="현장 대응 로봇 창"></div>
   <div class="cmd-banner" id="cmdBanner" role="status" aria-live="assertive" hidden></div>
-  <section class="panel orch hidden" id="orchPanel" aria-label="오케스트레이터 인시던트 흐름"></section>
+  <section class="panel orch hidden" id="orchPanel" aria-label="오케스트레이터 인시던트 흐름 · 제어 흐름 · 명령 콘솔"></section>
 
   <section class="panel dock" id="lineDock">
     <button id="dockToggle" class="dock-title" type="button">
@@ -145,12 +239,13 @@
     <button id="btnFault" title="임의 설비에 돌발 고장을 주입합니다">⚡ 설비 고장 주입</button>
     <button id="btnSupply" title="자재 창고 출고를 10분간 중단합니다">⛔ 자재 공급 차질</button>
     <button id="btnEvent" class="dark-only" title="누유·이물질·무단 진입·연기 의심 중 하나를 로봇 카메라 앞에 발생시킵니다 — 로봇 영상 AI 추론으로 감지해 자율 대응합니다">⚠ 현장 이벤트</button>
-    <button id="btnLabels" class="on">🏷 라벨</button>
-    <button id="btnOrch" title="설비 고장·공급 차질·현장 이벤트의 처리 흐름과, 셀 현장으로 보내는 긴급·제어 명령 콘솔">🛰 오케스트레이터 <b class="badge" id="orchBadge" hidden></b></button>
+    <button id="btnLabels">🏷 라벨</button>
+    <button id="btnOrch" title="설비 고장·공급 차질·현장 이벤트의 처리 흐름, 공정·운영 제어·이벤트 흐름 분석, 셀 현장으로 보내는 긴급·제어 명령 콘솔">🛰 오케스트레이터 <b class="badge" id="orchBadge" hidden></b></button>
     <button id="btnNet5g" title="Private 5G 특화망 — 음영지역 없는 기지국(PCI) 배치, RSRP 커버리지 지도, 로봇 ↔ 서빙 셀 연결선·핸드오버">📶 5G</button>
     <button id="btnCctv" title="사각지대 없는 CCTV 배치 — 커버리지 지도(빨강 사각지대 · 연두 1대 · 초록 2대 이상)와 감시 반경">📹 CCTV</button>
+    <button id="btnSensors" title="환경·설비 상태 센서망 — 센서 → 셀 엣지 → 엣지 게이트웨이 → 존 서버 → 공장 중앙 → 센서 서버(별도) · 센서 DB(별도) · PTP 시간 동기">🌡 센서</button>
     <button id="btnData" title="AAS · OPC UA PubSub over MQTT 데이터 연동과 파일 저장">📡 데이터 연동</button>
-    <button id="btnOdoo" title="Fac ERP 연동 — 발주(구매오더·입고) · 재고(로케이션·이동) · 설비보전(정비요청)">🏢 Fac</button>
+    <button id="btnFac" title="FAC — FACOS 업무 기록: 발주(구매오더·입고) · 재고(로케이션·이동) · 설비보전(정비요청) · FAC API">🏢 FAC</button>
     <button id="btnFleet" title="AMR·AGV — 공통 설정·상태, 상황별 속도 변화, 전체 속도 조절·정지·시작, 설정 변경 효과 예측">🚚 AMR·AGV</button>
     <button id="btnConcept">🧭 진화 컨셉</button>
     <button id="btnCompare" class="primary">📊 3단계 8시간 비교</button>
@@ -184,10 +279,10 @@
       <div id="fleetBody"></div>
     </div>
   </div>
-  <div class="modal hidden" id="odooModal">
+  <div class="modal hidden" id="facModal">
     <div class="modal-card wide">
-      <div class="modal-h"><h2>🏢 Fac ERP 연동 <small>ISA-95 레벨 4 — 발주(Purchase) · 재고(Inventory) · 설비보전(Maintenance) · 공장 운영(FACOS)은 실시간 판단, ERP는 기록·계획</small></h2><button id="closeOdoo">✕</button></div>
-      <div id="odooBody"></div>
+      <div class="modal-h"><h2>🏢 FAC 업무 기록 <small>FACOS 계층 — 발주 · 재고 · 설비보전 · 오케스트레이터가 판단·실행한 결과를 FAC이 같은 자리에서 전표로 기록 · FAC API로 외부 조회</small></h2><button id="closeFac">✕</button></div>
+      <div id="facBody"></div>
     </div>
   </div>
 
@@ -201,6 +296,24 @@
     <div class="modal-card wide">
       <div class="modal-h"><h2>AIOS · 공장 운영 AI <small>FACOS 관점 · 현장 생산·운영 데이터 → AI-ready 운영 데이터셋 → 서버 저장 → 운영 정책 학습 → 디지털트윈 검증 → 오케스트레이터 배포</small></h2><button id="closeAios">✕</button></div>
       <div id="aiosBody"></div>
+    </div>
+  </div>
+  <div class="modal hidden" id="traceModal">
+    <div class="modal-card wide qt-card">
+      <div class="modal-h"><h2>품질 추적 · 불량 원인 분석 · 8D CAPA <small>정밀조립Zone 제품 시리얼·계보(EPCIS 2.0 · ISA-95) → 체결 전수 검사 NG → AI 원인 분석·데이터 내려받기 → Zone·총괄 오케스트레이터 8D → 운영 정책 반영</small></h2><button id="closeTrace">✕</button></div>
+      <div id="traceBody"></div>
+    </div>
+  </div>
+  <div class="modal hidden" id="sensorModal">
+    <div class="modal-card wide qt-card">
+      <div class="modal-h"><h2>센서망 · 환경·설비 상태 수집 <small>센서 → 셀 엣지 → 엣지 게이트웨이 → 존 서버 → 공장 중앙(MQTT UNS · PTP 기준 시계) → 센서 서버(별도 프로세스) → 센서 DB(별도)</small></h2><button id="closeSensor">✕</button></div>
+      <div id="sensorBody"></div>
+    </div>
+  </div>
+  <div class="modal hidden" id="zdModal">
+    <div class="modal-card wide qt-card zd-card">
+      <div class="modal-h"><h2>Zone 대시보드 <small>실시간 모니터링 · 종합 설비 효율(OEE · ISO 22400-2) · 6대 손실·NG 파레토 · 관리도(X̄-R / I-MR · Western Electric) · 공정–품질 상관</small></h2><button id="closeZd">✕</button></div>
+      <div id="zdBody"></div>
     </div>
   </div>
   <div class="modal hidden" id="impactModal">
@@ -228,6 +341,21 @@
       <div id="gateBody"></div>
     </div>
   </div>
+  <!-- 맥·윈도우 앱 내려받기: 웹 버전(GitHub Pages)에서만, 릴리스 주소(main.js APP_DOWNLOADS)가 있을 때만 보인다 — 맥·윈도우 앱과 npm start에는 없음 -->
+  <div class="modal hidden" id="appsModal">
+    <div class="modal-card small apps-card">
+      <div class="modal-h"><h2>⬇ 앱 내려받기 <small>전체 기능(서버 저장 · MQTT · 녹화 MP4 · 공정 설계 Agent 등)은 앱에서 씁니다. 최신 릴리스 파일을 GitHub에서 내려받습니다.</small></h2><button id="closeApps">✕</button></div>
+      <div class="apps-row">
+        <a class="apps-dl" id="appsMac" target="_blank" rel="noopener"><b>🍎 맥 앱</b><small>Apple Silicon(M 시리즈) Mac</small></a>
+        <a class="apps-dl" id="appsWin" target="_blank" rel="noopener"><b>🪟 윈도우 앱</b><small>64비트 윈도우 10·11</small></a>
+      </div>
+      <ul class="apps-note">
+        <li><b>맥</b>: 압축을 풀어 피지컬AI 실증 메타팩토리.app을 응용 프로그램 폴더로 옮김 → 처음 한 번 <b>우클릭 → 열기</b>. 열리지 않으면 시스템 설정 › 개인정보 보호 및 보안에서 「그래도 열기」.</li>
+        <li><b>윈도우</b>: 압축을 풀고 폴더째 원하는 곳에 둠 → 피지컬AI 실증 메타팩토리.exe 실행 → 「Windows의 PC 보호」 창이 뜨면 <b>추가 정보 → 실행</b>.</li>
+        <li>코드 서명 인증서가 없는 배포본이라 처음 실행할 때 위 확인이 필요함. 릴리스 노트·이전 버전: <a id="appsRel" target="_blank" rel="noopener">GitHub 릴리스</a></li>
+      </ul>
+    </div>
+  </div>
   <div class="modal hidden" id="settings">
     <div class="modal-card small">
       <div class="modal-h"><h2>Agent API 키 설정 <small>키는 macOS 키체인으로 암호화되어 이 Mac에만 저장되며, 화면(렌더러)으로는 전달되지 않습니다.</small></h2><button id="closeSettings">✕</button></div>
@@ -249,6 +377,6 @@
     // GitHub Pages 같은 정적 호스팅: 서버(Claude·MQTT)가 없으므로 호출하지 않는다. 파일 저장은 그대로 된다.
     if (/\.github\.io$/.test(location.hostname)) window.JIN3D_NO_SERVER = true;
   </script>
-  <script type="module" src="js/main.js"></script>
+  <script type="module" src="js/main.js?v=3ce3ea15a3"></script>
 </body>
 </html>

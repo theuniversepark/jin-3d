@@ -14,10 +14,10 @@ console.log('== CCTV AI 감지 (피지컬AI)');
 { const s = new Simulation('dark', 2, { line: zoneLine(), quiet: true }); for (let t = 0; t < 60; t += 0.1) s.step(0.1);
   let rng = 7; const rnd = () => ((rng = (rng * 16807) % 2147483647) / 2147483647);
   const evs = []; const P = s.cctv.regions.inside.pts;
-  for (let k = 0; k < 20; k++) { const p = P[Math.floor(rnd() * P.length)]; evs.push(s.injectFieldEvent(['leak', 'debris', 'smoke', 'intrusion'][k % 4], p.x, p.z)); for (let t = 0; t < 3; t += 0.1) s.step(0.1); }
+  for (let k = 0; k < 20; k++) { const p = P[Math.floor(rnd() * P.length)]; const e = s.injectFieldEvent(['leak', 'debris', 'smoke', 'intrusion'][k % 4], p.x, p.z); e.at0 = { x: p.x, z: p.z }; evs.push(e); for (let t = 0; t < 3; t += 0.1) s.step(0.1); }   // 사람 진입은 진입자가 걸어 나가므로 감지 당시 자리(at0)로 본다
   const ok = evs.filter((e) => e.detected && e.tDetect - e.t0 <= 2.6);
   check('바닥 아무 곳 현장 이벤트 20건 모두 2.6초 안 감지', ok.length === evs.length, `${ok.length}/${evs.length} · ${[...new Set(evs.map((e) => e.detectedBy))].slice(0, 4).join(', ')}`);
-  check('감지한 CCTV가 그 위치를 실제로 봄', evs.every((e) => !e.cctv || camerasSeeing(s.cctv, e.x, e.z).some((c) => c.id === e.cctv)));
+  check('감지한 CCTV가 그 위치를 실제로 봄', evs.every((e) => !e.cctv || camerasSeeing(s.cctv, e.at0.x, e.at0.z).some((c) => c.id === e.cctv)));
 }
 { const s = new Simulation('smart', 2, { line: zoneLine(), quiet: true }); const ev = s.injectFieldEvent('leak', 0, 9); for (let t = 0; t < 5; t += 0.1) s.step(0.1);
   check('자동화 단계는 녹화·관제만 (AI 자동 감지 없음)', !ev.detected); }

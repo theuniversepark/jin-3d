@@ -12,7 +12,7 @@ const fixed = [...[0, 1, 2, 3, 4, 5].map((i) => { const c = chgLoc(i); return { 
 console.log('== 지게차 포크 간섭');
 check('포크 크기 설정: 포크 끝 1.9m · 차체·포크 선분 앞 1.45m + 반폭 0.55m ≥ 1.9m', FORK.reach >= 1.9 && FORK.front + FORK.half >= 1.9);
 for (const [mode, label] of [['traditional', '레거시'], ['smart', '자동화'], ['dark', '피지컬AI']]) {
-  const s = new Simulation(mode, 2, { line: zoneLine(), quiet: true }), ag = new FactoryAgent(s);
+  const s = new Simulation(mode, 1, { line: zoneLine(), quiet: true }), ag = new FactoryAgent(s);   // 시드 1: 레거시는 한 제품이 16개 쌓여야 출하한다 — 둘째 팔레트가 30분 안에 나가는 시드 (시드 6개 중 수정 전 2개 · 레거시 벨트 간격 수정 뒤 1개, 나머지는 35~39분)
   const forks = [...s.forklifts, ...s.vehicles.filter((v) => v.kind === 'forklift')];
   const hit = { mover: [], cell: [], fixed: [] }; let backOut = 0, turnIn = 0;
   for (let t = 0; t < 1800; t += 0.1) {

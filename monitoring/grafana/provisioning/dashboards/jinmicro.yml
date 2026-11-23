@@ -1,0 +1,9 @@
+apiVersion: 1
+providers:
+  - name: Jin-3D
+    folder: Jin-3D
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

@@ -1,0 +1,411 @@
+{
+ "uid": "jm-health",
+ "title": "Jin-3D · 설비 건강도 · RUL",
+ "description": "셀별 건강도·RUL·고장확률·Cpk 추세 — 예지정비 근거",
+ "tags": [
+  "Jin-3D"
+ ],
+ "timezone": "browser",
+ "refresh": "10s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "schemaVersion": 41,
+ "version": 1,
+ "editable": false,
+ "templating": {
+  "list": [
+   {
+    "name": "asset",
+    "label": "설비",
+    "type": "query",
+    "datasource": {
+     "type": "influxdb",
+     "uid": "jm-influx"
+    },
+    "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: \"raw\", tag: \"name\", predicate: (r) => r._measurement == \"equipment\" and r.zone == \"main\", start: -1d)",
+    "refresh": 2,
+    "includeAll": true,
+    "multi": true,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    },
+    "allValue": ".*",
+    "sort": 1
+   }
+  ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "name": "Annotations & Alerts",
+    "type": "dashboard"
+   },
+   {
+    "datasource": {
+     "type": "influxdb",
+     "uid": "jm-influx"
+    },
+    "enable": true,
+    "iconColor": "red",
+    "name": "운영 이벤트 — 경보",
+    "target": {
+     "refId": "Anno",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"event\" and r.level == \"alert\") |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> map(fn: (r) => ({ _time: r._time, text: r.title + (if exists r.text then \" — \" + r.text else \"\"), tags: r.zone }))"
+    }
+   },
+   {
+    "datasource": {
+     "type": "influxdb",
+     "uid": "jm-influx"
+    },
+    "enable": true,
+    "iconColor": "orange",
+    "name": "운영 이벤트 — 주의",
+    "target": {
+     "refId": "Anno",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"event\" and r.level == \"warn\") |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> map(fn: (r) => ({ _time: r._time, text: r.title + (if exists r.text then \" — \" + r.text else \"\"), tags: r.zone }))"
+    }
+   },
+   {
+    "datasource": {
+     "type": "influxdb",
+     "uid": "jm-influx"
+    },
+    "enable": false,
+    "iconColor": "blue",
+    "name": "운영 이벤트 — 조치",
+    "target": {
+     "refId": "Anno",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"event\" and r.level == \"act\") |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\") |> map(fn: (r) => ({ _time: r._time, text: r.title + (if exists r.text then \" — \" + r.text else \"\"), tags: r.zone }))"
+    }
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "건강도 (%)",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "jm-influx"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 10
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "influxdb",
+      "uid": "jm-influx"
+     },
+     "refId": "A",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"equipment\" and r._field == \"health\" and r.zone == \"main\" and r.name =~ /^${asset:regex}$/) |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false) |> map(fn: (r) => ({ _time: r._time, _value: r._value, _field: r.name })) |> group(columns: [\"_field\"])"
+    }
+   ],
+   "description": "빨간 영역 = 예지정비 착수 검토 구간 (건강도 50% 미만)",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 6,
+      "showPoints": "never",
+      "spanNulls": true,
+      "thresholdsStyle": {
+       "mode": "line+area"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "transparent",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 0
+       },
+       {
+        "color": "transparent",
+        "value": 50
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "min",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "잔여수명 RUL (분)",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "jm-influx"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 10,
+    "w": 12,
+    "h": 9
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "influxdb",
+      "uid": "jm-influx"
+     },
+     "refId": "A",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"equipment\" and r._field == \"rul_min\" and r.zone == \"main\" and r.name =~ /^${asset:regex}$/) |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false) |> map(fn: (r) => ({ _time: r._time, _value: r._value, _field: r.name })) |> group(columns: [\"_field\"])"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "m",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 6,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "min",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "10분 고장확률",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "jm-influx"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 10,
+    "w": 12,
+    "h": 9
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "influxdb",
+      "uid": "jm-influx"
+     },
+     "refId": "A",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"equipment\" and r._field == \"risk10\" and r.zone == \"main\" and r.name =~ /^${asset:regex}$/) |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false) |> map(fn: (r) => ({ _time: r._time, _value: r._value, _field: r.name })) |> group(columns: [\"_field\"])"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 6,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "min",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "공정능력 Cpk",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "jm-influx"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 19,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "influxdb",
+      "uid": "jm-influx"
+     },
+     "refId": "A",
+     "query": "from(bucket: \"raw\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"equipment\" and r._field == \"cpk\" and r.zone == \"main\" and r.name =~ /^${asset:regex}$/) |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false) |> map(fn: (r) => ({ _time: r._time, _value: r._value, _field: r.name })) |> group(columns: [\"_field\"])"
+    }
+   ],
+   "description": "빨간 영역 = Cpk 1.33 미만 (재보정 검토)",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 6,
+      "showPoints": "never",
+      "spanNulls": true,
+      "thresholdsStyle": {
+       "mode": "line+area"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "transparent",
+        "value": 1.33
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "min",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "건강도 장기 추세 (1분 집계 · 90일 보관)",
+   "datasource": {
+    "type": "influxdb",
+    "uid": "jm-influx"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 19,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "influxdb",
+      "uid": "jm-influx"
+     },
+     "refId": "A",
+     "query": "from(bucket: \"agg_1m\") |> range(start: v.timeRangeStart, stop: v.timeRangeStop) |> filter(fn: (r) => r._measurement == \"equipment\" and r._field == \"health\" and r.zone == \"main\" and r.name =~ /^${asset:regex}$/) |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false) |> map(fn: (r) => ({ _time: r._time, _value: r._value, _field: r.name })) |> group(columns: [\"_field\"])"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "min": 0,
+     "max": 100,
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 6,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "min",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  }
+ ],
+ "links": [
+  {
+   "title": "Jin-3D 대시보드",
+   "type": "dashboards",
+   "tags": [
+    "Jin-3D"
+   ],
+   "asDropdown": true,
+   "includeVars": false,
+   "keepTime": true
+  }
+ ]
+}

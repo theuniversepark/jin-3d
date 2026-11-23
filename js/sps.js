@@ -60,11 +60,23 @@ export const SPS_PHASE_KO = { pick: '흐름 랙에서 피킹', verify: '검증 (
 //  · e-axle 쪽: 개봉대(x −1.65 · 컨베이어 줄) · 클린 부스(피킹 길·흐름 랙을 덮고 컨베이어 쪽은 트였다)
 export const SPS_GEO = {
   conv: { z: 3.05, x0: -0.4, x1: 2.35, y: 0.86, w: 0.5 }, buf: [0, 0.5, 1.0, 1.5], build: 2.0, pickZ: 2.4,
-  chute: { x: -0.62, y: 0.66, x0: -0.95, x1: -0.35, top: 0.8 }, ret: { y: 0.4 },   // 회수 슈트(서쪽이 높고 동쪽으로 내려가 컨베이어 아래 회수 레인으로) · 빈 트레이를 놓는 자리
+  chute: { x: -0.66, y: 0.66, x0: -0.95, x1: -0.35, top: 0.8 }, ret: { y: 0.4 },   // 회수 슈트(서쪽이 높고 동쪽으로 내려가 컨베이어 아래 회수 레인으로) · 빈 트레이를 놓는 자리(x −0.66: 트레이 동쪽 끝 −0.43이 컨베이어 서쪽 끝 −0.4에 걸리지 않게)
   armZ: 1.6,   // 부품분류셀 협동로봇·6축 자리 (셀 중심에서) — 컨베이어 맨 앞 트레이(1.45m)와 키트 포켓 먼 칸(1.69m)에 모두 닿는다 (UR20 리치 1.75m)
   lane: 4.1, laneX: [-2.15, 2.05], racks: [-1.75, -0.2, 1.3], rackZ: 5.4, rackW: 1.3, rackD: 0.9, depack: -1.65,
   booth: { x0: -2.85, x1: 2.6, z0: 3.62, z1: 6.15, h: 2.55 },   // 동쪽 끝은 피킹 로봇이 담기 자리(x 2.0)·셋째 랙 끝 칸(x 1.7)에 팔을 뻗어도 모서리 기둥에 닿지 않게
 };
+// 빈 트레이 회수 자세 (슈트에 놓은 뒤 e초 — 트레이 바닥 가운데 x · y, 기울기 tilt rad): 슈트 면을 따라 기울어 미끄러지고(0.8초), 앞 끝이 슈트 아래 끝을 지나면 앞 끝은 레인 · 뒤 끝은 슈트 위,
+//  그 뒤 회수 레인 롤러 위(ret.y + 0.035)로 동쪽 담기 자리까지(4초). 수평인 채 내려오면 슈트 판 · 레인 롤러 속으로 3~8cm 묻힌다 (화면 factory.js animSps)
+export const SPS_TRAY = { len: 0.46, wid: 0.32 };
+export function spsChute() { const H = SPS_GEO.chute, sl = Math.atan2(H.top - SPS_GEO.ret.y - 0.04, H.x1 - H.x0), cs = Math.cos(sl), yL = SPS_GEO.ret.y + 0.035;
+  return { sl, cs, sn: Math.sin(sl), yL, kx: H.x0 + (H.top + 0.017 / cs - yL) / Math.tan(sl), surf: (x) => H.top + 0.015 / cs - Math.tan(sl) * (x - H.x0) }; }   // kx: 슈트 면(+2mm)과 레인 면이 만나는 곳 · surf(x): 슈트 판 윗면 높이
+export function spsReturnPose(e) {
+  const G = SPS_GEO, H = G.chute, { sl, cs, sn, yL, kx } = spsChute(), TL = SPS_TRAY.len, Ls = Math.max(0, (kx - H.x) / cs - TL / 2), sm = (k) => { k = Math.min(1, Math.max(0, k)); return k * k * (3 - 2 * k); };
+  if (e < 0.8) { const u = sm(e / 0.8) * (Ls + TL);
+    if (u <= Ls) { const c = Ls - u + TL / 2; return { x: kx - cs * c, y: yL + sn * c, tilt: sl }; }
+    const d = u - Ls, a = -d * cs + Math.sqrt(Math.max(0, d * d * cs * cs - d * d + TL * TL)), ax = kx - cs * a, ay = yL + sn * a; return { x: (ax + kx + d) / 2, y: (ay + yL) / 2, tilt: Math.atan2(ay - yL, kx + d - ax) }; }
+  const k = Math.min(1, (e - 0.8) / 4), x0 = kx + TL / 2; return { x: x0 + (G.build - x0) * k, y: yL, tilt: 0 };
+}
 // AMR 키트 포켓 칸 (대상물 그룹 좌표 · 칸 바닥): 지그 상판 뒤끝(x −0.67) · 앞끝(x 0.62) 트레이 — 제품마다 자기 쪽 절반(도어트림 +z · e-axle −z)에 칸 4개
 // 부품분류셀의 그 제품 쪽 로봇이 자기 앞쪽 절반에 부품 j(SPS_KITS 순서)를 칸 j에 넣고, 조립셀 로봇은 자기 자리 쪽 칸에서 집는다
 export const kitSlot = (product, j) => [j < 2 ? -0.67 : 0.62, 0.02, (SPS_SIDE[product] ?? 1) * (j % 2 ? 0.3 : 0.1)];

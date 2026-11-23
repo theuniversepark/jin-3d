@@ -104,6 +104,7 @@ export class RobotTelemetry {
     if (m.kind === 'quadruped') {
       const st = m.scanning;
       put('InspectionTarget', '점검 대상', null, st?.id ?? '', 'string');
+      put('InspectionItem', '점검 항목', null, m.scanItem ?? '', 'string');   // 셀 가장자리 점검 자리마다 (열화상 · 진동·전류 · 소음·누설)
       put('ThermalMax', '열화상 최고온도', 'degC', st ? 34 + (100 - st.health) * 0.55 : null);
       put('VibrationRMS', '진동 RMS', 'mm/s', st ? 0.6 + (100 - st.health) * 0.045 : null);
       put('NoiseLevel', '소음', 'dB(A)', st ? 62 + (100 - st.health) * 0.18 : null);

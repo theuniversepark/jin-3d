@@ -1,3 +1,4 @@
+import { WH_RACK, MINILOAD } from './receiving.js';
 // CCTV — 사각지대 없는 배치. 바닥을 1m 간격 점으로 나누고, 카메라에서 각 점까지 시야가 큰 설비(셀·창고 랙·서버 랙)에
 // 가리지 않는지 따져 "보이는 점"을 구한 뒤, 아직 안 보이는 점을 가장 많이 덮는 후보 자리부터 차례로 골라(탐욕적 집합 덮개)
 // 모든 점이 최소 한 대에 보일 때까지 설치한다. 건물 안은 천장 돔 카메라(높이 7.5m, 반경 9m 어안),
@@ -21,7 +22,7 @@ function obstacles(sim) {
     const h = st.type === 'source' ? 3.2 : st.type === 'sink' ? 2.6 : 2.9;
     ob.push({ x0: st.x - 2.3, x1: st.x + 2.3, z0: st.z - 2.3, z1: st.z + (st.type === 'source' ? 3.1 : 2.3), h, name: st.name });
   }
-  ob.push({ x0: -46.3, x1: -44.1, z0: -6.8, z1: 3.6, h: 5.0, name: '물류 선반' });   // 지게차 통로와 로봇 통로 사이 남북 방향 통과형 선반
+  ob.push({ x0: WH_RACK.x - MINILOAD.half, x1: WH_RACK.x + MINILOAD.half, z0: WH_RACK.z - 5.1, z1: WH_RACK.z + 5.1, h: MINILOAD.top, name: '물류 선반 (미니로드 ①·②)' });   // 지게차 통로와 로봇 통로 사이 남북 방향 두 줄 4단 선반
   ob.push({ x0: -15.7, x1: -11.3, z0: -15.6, z1: -13.2, h: 2.3, name: '관제 서버 랙' });   // 중앙 관제 디스플레이 가운데 아래
   return ob;
 }
@@ -131,7 +132,7 @@ export class CCTVAgent {
   }
   update(dt) {
     if (!this.on) return;
-    this.t += dt; if (this.t < 0.5) return; this.t = 0;
+    this.t += dt; if (this.t < 0.5 - 1e-9) return; this.t = 0;
     const s = this.sim, plan = s.cctv;
     // 1) 현장 이벤트: 영상 AI로 감지 → 메인 오케스트레이터에 보고 (2초 확인 후)
     for (const ev of s.fieldEvents ?? []) {
@@ -139,9 +140,9 @@ export class CCTVAgent {
       const cams = camerasSeeing(plan, ev.x, ev.z); if (!cams.length) continue;
       const cam = cams.sort((a, b) => Math.hypot(a.x - ev.x, a.z - ev.z) - Math.hypot(b.x - ev.x, b.z - ev.z))[0], model = EVENT_MODEL[ev.type] ?? 'detect';
       const conf = Math.round((0.86 + ((ev.id * 7) % 10) / 100) * 100) / 100;
-      if (!ev.detected && s.time - ev.t0 >= 2) {
+      if (!ev.detected && !ev.quiet && s.time - (ev.tq ?? ev.t0) >= 2) {   // tq: 토리 예시가 감지를 풀어 준 시각
         ev.cctv = cam.id;
-        s.detectFieldEvent(ev, `CCTV 에이전트 (${cam.id})`, conf);
+        s.detectFieldEvent(ev, `CCTV 에이전트 (${cam.id})`, conf, { type: 'cctv', id: cam.id });
         ev.cctvLogged = true;
         this.add({ kind: 'report', cam: cam.id, cams: cams.map((c) => c.id), model, cls: ev.cls, label: ev.label, conf, x: ev.x, z: ev.z, inc: ev.inc, note: `${AI_MODELS[model].name} → 메인 오케스트레이터 보고` });
         s.orch.step(ev.inc, 'field', 'report', `CCTV 에이전트 보고: ${cam.id} 영상 · ${AI_MODELS[model].name} · ${ev.cls} ${conf.toFixed(2)} · 이력 등록`);

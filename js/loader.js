@@ -6,8 +6,9 @@
 //  정밀조립은 제품마다 그리퍼가 달라(하우징 클램프 ↔ 패널 진공) 셀 끝 툴 거치대에서 자동 툴 체인저로 바꿔 끼운다
 //  시간은 시뮬레이션 초(배속 반영) — 투입 주기와 따로 돌며, 자재를 미리 집어 AMR 위에서 기다린다 (내려놓기만 투입 순간에)
 import * as THREE from 'three';
+import { aimWristCam } from './payload-robots.js';
 
-export const LOADER = { railZ: 1.45, railX: [-1.95, 3.25], carY: 0.62, readyUp: 0.4, standX: 3.6 };   // carY: 대차 위 로봇 받침 높이 — 넓은 도어(1.1m)를 AMR에 내려놓을 때 팔꿈치가 도어 가장자리 위로
+export const LOADER = { railZ: 1.45, railX: [-1.95, 3.25], carY: 0.62, readyUp: 0.4, standX: 3.6, tuckY: 2.7, tuckR: 0.8 };   // carY: 대차 위 로봇 받침 높이 — 넓은 도어(1.1m)를 AMR에 내려놓을 때 팔꿈치가 도어 가장자리 위로
 // 보이는 메시만으로 잰 윗면 높이 (숨긴 부품 — e-axle 하우징의 속 부품·인버터 — 은 빼고)
 export function visibleTop(o) {
   o.updateMatrixWorld(true); const b = new THREE.Box3();
@@ -24,18 +25,18 @@ export function buildLoader(g, K, o) {
   // 주행 레일: 바닥 베이스 · 레일 2줄 · 랙기어 · 양 끝 스토퍼
   put(box(x1 - x0 + 0.5, 0.18, 0.9, MAT.dark), (x0 + x1) / 2, 0.09, zr, auto);
   for (const dz of [-0.3, 0.3]) put(box(x1 - x0 + 0.4, 0.05, 0.08, MAT.steel), (x0 + x1) / 2, 0.205, zr + dz, auto);
-  for (const x of [x0 - 0.2, x1 + 0.2]) put(box(0.12, 0.3, 0.9, MAT.yellow ?? MAT.accent), x, 0.15, zr, auto);
+  for (const x of [x0 - 0.2, x1 + 0.2]) put(box(0.12, 0.21, 0.9, MAT.yellow ?? MAT.accent), x, 0.105, zr, auto);   // 스토퍼 윗면 0.21m — 대차 판(밑면 0.22m · 주행 끝에서 스토퍼 위로 0.3m 걸친다) 아래 (0.3m 높이면 대차 판을 8cm 파고든다)
   const car = put(new THREE.Group(), 0, 0, zr, auto); car.name = 'LoaderCarriage';
   put(box(1.0, 0.1, 0.95, MAT.orange), 0, 0.27, 0, car); put(box(0.75, LOADER.carY - 0.32, 0.75, MAT.dark), 0, (LOADER.carY + 0.32) / 2, 0, car);   // 주행 대차 · 로봇 받침
   const toolMesh = (kind) => {
     const t = new THREE.Group(); t.name = `LoaderTool_${kind}`;
     put(box(0.16, 0.05, 0.16, MAT.steel), 0, 0.025, 0, t);   // 툴 체인저 판
     if (kind === 'vacuum') {   // 진공 그리퍼: 긴 프레임(판재 긴 쪽) 끝 흡착컵 6개
-      put(box(0.9, 0.04, 0.05, MAT.steel), 0, 0.1, 0, t); put(box(0.05, 0.04, 0.4, MAT.steel), 0, 0.1, 0, t);
-      for (const x of [-0.42, 0, 0.42]) for (const z of [-0.18, 0.18]) put(cyl(0.03, 0.04, 0.03, MAT.dark, 10), x, 0.135, z, t);
+      put(box(0.56, 0.04, 0.05, MAT.steel), 0, 0.1, 0, t); put(box(0.05, 0.04, 0.4, MAT.steel), 0, 0.1, 0, t);   // 프레임 0.56m — 고가반 로봇 배율(1.27배)이 곱해져 0.71m: 판재 폭(0.8m) 안 · 도어트림 용기 앞 기둥 사이(0.91m)로 들어간다 (0.9m였을 때는 1.14m라 앞 기둥을 관통)
+      for (const x of [-0.25, 0, 0.25]) for (const z of [-0.18, 0.18]) put(cyl(0.03, 0.04, 0.03, MAT.dark, 10), x, 0.135, z, t);
     } else {   // clamp(e-axle 하우징 V블록 클램프) · jaw(주물 평행 그리퍼): 몸체 + 손가락 2개
       put(box(0.3, 0.07, 0.12, MAT.dark), 0, 0.08, 0, t);
-      for (const x of kind === 'clamp' ? [-0.17, 0.17] : [-0.12, 0.12]) put(box(0.04, 0.07, 0.1, MAT.steel), x, 0.145, 0, t);   // 손가락 끝이 TCP 바로 아래 — 길면 맨 아래 칸에서 트레이 바닥을 친다
+      for (const x of kind === 'clamp' ? [-0.17, 0.17] : [-0.12, 0.12]) put(box(0.04, 0.04, 0.1, MAT.steel), x, 0.13, 0, t);   // 손가락(패드) 끝 = TCP(0.15) — 자재 윗면에 대고 든다 (TCP 아래로 나오면 하우징 속으로 파고든다)
     }
     return t;
   };
@@ -52,7 +53,7 @@ export function buildLoader(g, K, o) {
   return L;
 }
 // 로봇 (다시) 만들기 — Blender 실물 로봇 모델이 늦게 들어오면 그것으로 바꾼다 (셀 로봇 buildCrew와 같음) · 들고 있던 자재 표시는 호출 쪽이 다시 단다
-const PAD_UP = 0.04;   // 클램프·평행 그리퍼 손가락이 TCP 아래로 나온 길이 — 분리판·빈 트레이는 손가락 끝을 판 윗면에 대고 든다
+const PAD_UP = 0;   // 클램프·평행 그리퍼 손가락이 TCP 아래로 나온 길이 (지금은 손가락 끝 = TCP) — 분리판·빈 트레이는 손가락 끝을 판 윗면에 대고 든다
 export function loaderRobot(L) {
   const { K, car } = L; if (L.r) L.r.root.removeFromParent();
   let r = K.heavyRobot(K.MAT.orange);
@@ -60,7 +61,9 @@ export function loaderRobot(L) {
   K.put(r.root, 0, LOADER.carY, 0, car); r.root.rotation.y = r.simple ? 0 : L.side > 0 ? Math.PI / 2 : -Math.PI / 2;   // 자재 쪽을 본다
   const fl = r.arm.flange ?? r.tip.parent;
   for (const n of ['CustomFinger1', 'CustomFinger-1', 'CustomGripper']) { const x = fl.getObjectByName(n); if (x) x.visible = false; }
-  Object.assign(L, { r, held: {}, state: 'home', plan: null, holding: null, readyQ: null, homeQ: null, q: null, cur0: null, x: 0 });
+  // 손목 카메라를 플랜지 반대쪽(−z)으로: 세워 둔 판재에 툴을 수평으로 댈 때 손목(J5)이 −125°까지 접혀 +z 쪽 카메라가 팔뚝(J4)에 파묻힌다 — 접히는 쪽 반대편에 단다
+  const cam = r.arm.cameraAnchor; if (cam && !cam.userData.loaderSide) { cam.userData.loaderSide = true; cam.position.z *= -1; aimWristCam(cam, r.tip); }
+  Object.assign(L, { r, held: {}, state: 'home', plan: null, holding: null, readyQ: null, homeQ: null, tuck: null, q: null, cur0: null, x: 0 });
   mountTool(L, L.cur);
   return r;
 }
@@ -75,12 +78,12 @@ function mountTool(L, key) {
 }
 
 // 관절 자세 (셀 로컬 목표 · 대차 x 위치에서) — down: true(툴 아래) · V(방향)(목표 → 손목) · alignX: 플랜지 x축을 셀 x에 맞춤
-function solve(L, cx, T, dir) {
+function solve(L, cx, T, dir, seed = null) {
   const { r, car } = L, P = car.parent; car.position.x = cx; car.updateWorldMatrix(true, true);
   const loc = r.root.worldToLocal(P.localToWorld(T.clone()));
   if (r.simple) return L.K.armIK(r.simple, loc.x, loc.y, loc.z);   // 간이 팔: 툴 아래로만
   let d = true; if (dir !== true) { const a = r.root.worldToLocal(P.localToWorld(T.clone())), b = r.root.worldToLocal(P.localToWorld(T.clone().add(dir))); const v = b.sub(a).normalize(); d = { x: v.x, y: v.y, z: v.z }; }
-  const q = r.arm.ik(loc.x, loc.y, loc.z, d);
+  const q = r.arm.ik(loc.x, loc.y, loc.z, d, seed);
   return alignX(L, q, P);
 }
 // 위치 · 툴 방향 오차 (셀 로컬): 역기구학은 위치만 맞추고 손목이 덜 풀리면 툴 방향이 기운다 — 판재를 세워 든 채면 판이 기울어 랙·받침에 닿는다
@@ -92,12 +95,13 @@ function fitErr(L, cx, q, T, dir) {
   return tip.distanceTo(T) + (1 - ax.dot(wantW)) * 2;   // 1cm ≈ 0.6° 기울기
 }
 // 대차를 목표 x 둘레(0 · ±0.3 · ±0.6m)에 놓고 풀어 위치·방향 오차가 가장 작은 자세 — { cx, q }
+//  툴을 수평으로 대는 자세는 시작 자세도 바꿔 본다: 기본 자세에서 풀면 팔꿈치(J3)가 한계(+75°)에 걸려 손목 중심이 15cm 낮게 서고, 손목(J5)이 한계(−125°)까지 접혀 툴이 24° 들리며 손목 카메라가 팔뚝에 파묻힌다
+const PANEL_SEEDS = [null, [0, 0, 1.15, 0, -1.2, 0], [0, -0.35, 0.8, 0, -1.0, 0], [0, 0.3, 1.25, 0, -1.45, 0]];
 function solveBest(L, x, T, dir) {
   let best = null;
   for (const dx of [0, 0.3, -0.3, 0.6, -0.6]) {
     const cx = Math.max(L.railX[0], Math.min(L.railX[1], x + dx)); if (best && best.cx === cx) continue;
-    const q = solve(L, cx, T, dir), e = fitErr(L, cx, q, T, dir);
-    if (!best || e < best.e) best = { cx, q, e };
+    for (const seed of dir === true || L.r.simple ? [null] : PANEL_SEEDS) { const q = solve(L, cx, T, dir, seed), e = fitErr(L, cx, q, T, dir); if (!best || e < best.e) best = { cx, q, e }; if (best.e < 0.01) break; }
     if (best.e < 0.01) break;
   }
   return best;
@@ -117,10 +121,14 @@ function alignX(L, q, P) { if (L.r.simple) return q;   // J6로 플랜지 x축(�
   return out;
 }
 
+// 이동 자세: 툴을 아래로 · 손끝을 받침 앞 0.8m · 높이 2.7m로 접어 올린 자세 (J1만 바꿔 어느 쪽이든 본다) — 든 하우징 아랫면(2.13m)과 팔 링크가 GLT 맨 위 층 하우징(2.08m) · 도어트림 용기 기둥(1.87m) · 툴 거치대보다 위
+//  대차 주행과 선회(J1)는 이 자세로만 한다 — 집는 자세와 AMR 위 자세를 곧장 관절 보간하면 선회 도중 팔뚝(J4)이 옆 용기의 하우징 · 기둥을 쓸고 지나간다
+const tuckQ = (L, j1) => { L.tuck ??= solve(L, 0, V(0, LOADER.tuckY, L.side * (LOADER.railZ + LOADER.tuckR)), true); const q = L.tuck.slice(); q[0] = j1; return q; };
 // 한 번 투입 계획 (키프레임 [시간, 대차 x, 관절]) — pick: { x, y(잡는 면 높이 · panel은 가운데), z, kind, rise(빗살·적층 위로 빼는 높이) } · placeY: AMR 지그 위 자재 윗면
 function planFetch(L, key, pick, placeY) {
   const s = L.side, out = [], P = L.car.parent; let t = 0;
   const add = (dt, cx, q) => { t += dt; out.push([t, cx, q]); };
+  const hop = (dt, cx, q) => { const [, px, pq] = out[out.length - 1]; if (L.r.simple) return; add(0.8, px, tuckQ(L, pq[0])); add(dt, cx, tuckQ(L, q[0])); };   // 지금 자리에서 이동 자세로 접고 → 주행 · 선회 → (호출 쪽이 이어서 q로 편다)
   // AMR 위 대기 높이: 지그 위 0.4m 또는 들고 있는 자재 아랫면이 1.65m(아래로 지나가는 AMR 위 대상물 — e-axle 윗면 약 1.5m — 보다 위) 중 높은 쪽
   L.readyY = Math.max(placeY + LOADER.readyUp, 1.65 + (L.heldTop?.[key] ?? 0.3));
   L.readyQ = solve(L, 0, V(0, L.readyY, 0), true);
@@ -129,41 +137,38 @@ function planFetch(L, key, pick, placeY) {
   let swap = null;
   if (L.tools[key] && L.cur !== key && L.stand) {   // 툴 교체: 거치대 위로 → 내려 놓고 → 새 툴 물고 → 위로
     const ex = L.railX[1], above = solve(L, ex, V(L.standX, 1.6, s * LOADER.railZ), true), at = solve(L, ex, V(L.standX, 1.23, s * LOADER.railZ), true);
-    add(2.4, ex, above); add(0.8, ex, at); swap = t; add(1.0, ex, at); add(0.8, ex, above);
+    hop(1.6, ex, above); add(0.8, ex, above); add(0.8, ex, at); swap = t; add(1.0, ex, at); add(0.8, ex, above);
   }
   const clampX = (x) => Math.max(L.railX[0], Math.min(L.railX[1], x));
   let padOn = null, padOff = null;
   if (pick.pad) {   // 층이 비면 그 층 분리판(e-axle GLT) · 빈 트레이(적응가공)를 먼저 옆 거치대·스택으로 옮긴다 — 툴 아래로, 판 가운데를 집어 수평 그대로
     const F = pick.pad.from.clone().add(V(0, PAD_UP, 0)), D = pick.pad.to.clone().add(V(0, PAD_UP, 0)), fx = clampX(F.x), dx = clampX(D.x);   // 손가락 끝이 판 윗면에 닿는 높이 (TCP를 판 윗면에 두면 손가락이 판 속으로 들어간다)
     const up = Math.max(0.75, F.y + 0.75 - D.y);   // 옆 용기 위로 넘어가는 높이
-    add(2.0, fx, solve(L, fx, F.clone().add(V(0, 0.4, 0)), true)); add(0.8, fx, solve(L, fx, F, true)); padOn = t; add(0.4, fx, solve(L, fx, F, true));
+    const f4 = solve(L, fx, F.clone().add(V(0, 0.4, 0)), true); hop(1.4, fx, f4); add(L.r.simple ? 2.0 : 0.8, fx, f4); add(0.8, fx, solve(L, fx, F, true)); padOn = t; add(0.4, fx, solve(L, fx, F, true));
     add(0.8, fx, solve(L, fx, F.clone().add(V(0, 0.75, 0)), true)); add(2.0, dx, solve(L, dx, D.clone().add(V(0, up, 0)), true)); add(0.8, dx, solve(L, dx, D, true)); padOff = t;
     add(0.5, dx, solve(L, dx, D.clone().add(V(0, 0.4, 0)), true));
   }
   const cx = clampX(pick.x), T = V(pick.x, pick.y, pick.z);
-  let pre, grip, lift, back;
+  let pre, grip, lift, top = null;
   let pcx = cx;
-  if (pick.kind === 'panel') {   // 툴 수평 (로봇 쪽에서 판재 면으로) → 흡착 → 랙 위로 뽑음 → 통로 쪽으로 물러남 · 판이 기울지 않게 대차 자리를 골라 네 자세를 같은 자리에서
+  if (pick.kind === 'panel') {   // 툴 수평 (로봇 쪽에서 판재 면으로) → 흡착 → 용기 위로 곧게 뽑음 · 판이 기울지 않게 대차 자리를 골라 모든 자세를 같은 자리에서
     const d = V(0, 0, -s);   // 목표 → 손목 (로봇 쪽)
     const gb = solveBest(L, cx, T, d); pcx = gb.cx; grip = gb.q;
-    pre = solve(L, pcx, T.clone().add(V(0, 0, -s * 0.3)), d);
-    // 뽑기(위로) · 물러나기(통로 쪽)는 짧은 직선 5토막 — 관절 보간 한 번이면 중간에 툴이 기울어 세운 판이 옆 칸·받침에 닿는다
-    const seg = (A, B) => Array.from({ length: 5 }, (_, i) => solve(L, pcx, A.clone().lerp(B, (i + 1) / 5), d));
-    const T1 = T.clone().add(V(0, pick.rise, 0)), T2 = T1.clone().add(V(0, 0, -s * 0.45));
-    lift = seg(T, T1); back = seg(T1, T2);
+    const near = (A, q0) => (L.r.simple ? solve(L, pcx, A, d) : solve(L, pcx, A, d, q0));   // 앞 자세에서 이어 푼다 — 같은 팔꿈치·손목 갈래 (토막 사이에서 손목이 뒤집히지 않게)
+    // 접근: 판 앞 2cm · 판 위 0.5m에서 툴을 수평으로 눕혀 곧게 내려온 뒤 다가가 흡착 — 로봇 쪽으로 0.3m 물러난 자리는 맨 앞 칸에서 어깨(J2)에 너무 가까워 풀리지 않고(팔꿈치 한계) 툴이 24° 들렸다
+    const P0 = T.clone().add(V(0, 0, -s * 0.02)); pre = near(P0, grip); top = near(P0.clone().add(V(0, 0.5, 0)), pre);
+    // 뽑기: 곧게 위로 짧은 직선 6토막(관절 보간 한 번이면 중간에 툴이 기울어 세운 판이 옆 칸에 닿는다) — 판 아래 끝이 용기 위 가로대를 넘을 때까지 올린 뒤에 이동 자세로 눕힌다 (로봇 쪽으로 빼는 자리도 풀리지 않는다)
+    let last = grip; lift = Array.from({ length: 6 }, (_, i) => (last = near(T.clone().add(V(0, pick.rise * (i + 1) / 6, 0)), last)));
   } else {
     pre = solve(L, cx, T.clone().add(V(0, 0.35, 0)), true); grip = solve(L, cx, T, true);
-    lift = solve(L, cx, T.clone().add(V(0, pick.rise, 0)), true); back = lift;
+    lift = [solve(L, cx, T.clone().add(V(0, pick.rise, 0)), true)];
   }
-  // 랙 앞 경유점: 툴을 아래로 둔 채 랙 앞(레일 쪽 0.45m) 높이 1.75m 위로 와서 손목을 돌린다 — 곧장 관절 보간하면 툴이 랙 받침 높이까지 처진다
-  //  경유점도 툴을 수평(판재 쪽)으로 — 손목은 AMR 위에서 높이 돌리고, 랙 앞에서는 곧게 내려가 다가간다 (랙 앞에서 손목을 돌리면 툴이 받침 높이까지 처진다)
-  const dH = V(0, 0, -s), via = pick.kind === 'panel' ? solve(L, pcx, V(pick.x, Math.max(1.75, pick.y + 0.55), s * (LOADER.railZ + 0.45)), dH) : null;
-  if (via) add(1.6, pcx, via);
-  add(via ? 1.0 : 2.2, pcx, pre); add(0.8, pcx, grip); const gripT = t; add(0.6, pcx, grip);
-  const list = (x) => (Array.isArray(x[0]) ? x : [x]);   // 직선 토막 목록 (판재) · 자세 하나 (누운 자재)
-  for (const q of list(lift)) add(1.0 / list(lift).length, pcx, q); for (const q of list(back)) add(0.7 / list(back).length, pcx, q);
-  if (via) add(1.0, pcx, solve(L, pcx, V(pick.x, Math.max(1.75, pick.y + pick.rise), s * (LOADER.railZ + 0.45)), dH));   // 들어 올린 채 랙 앞에서 물러남 — 손목은 AMR로 가며 돌려 눕힌다
-  add(2.6, 0, L.readyQ);   // AMR 위 대기
+  hop(1.4, pcx, top ?? pre);
+  if (top) { add(L.r.simple ? 1.6 : 0.9, pcx, top); add(L.r.simple ? 1.0 : 0.7, pcx, pre); add(L.r.simple ? 0.8 : 0.3, pcx, grip); }
+  else { add(L.r.simple ? 2.2 : 0.8, pcx, pre); add(0.8, pcx, grip); }
+  const gripT = t; add(0.6, pcx, grip);
+  for (const q of lift) add((top ? 1.5 : 1.0) / lift.length, pcx, q);
+  hop(1.6, 0, L.readyQ); add(L.r.simple ? 2.6 : 0.8, 0, L.readyQ);   // 이동 자세로 접어 AMR 쪽으로 돌고 → AMR 위 대기
   // 이어지는 자세끼리 J6(손목 마지막 축)가 반 바퀴 가까이 차이 나면 반 바퀴 돌린 같은 정렬로 — 판재·하우징은 앞뒤 대칭이라 자세마다 0° · 180°를 따로 고르면 그 사이에서 손목이 돌아 그리퍼가 세로로 선다
   for (let i = 1; i < out.length && !L.r.simple; i++) { const q = out[i][2] = out[i][2].slice(), p5 = out[i - 1][2][5]; while (q[5] - p5 > Math.PI / 2) q[5] -= Math.PI; while (q[5] - p5 < -Math.PI / 2) q[5] += Math.PI; }
   L.readyQ = out[out.length - 1][2];

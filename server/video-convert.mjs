@@ -1,7 +1,7 @@
 // 영상 MP4 변환 (ffmpeg) — 로봇 카메라·CCTV 자동 녹화 구간(WebM)을 받으면 차례로
 //   ① 전체 분할 영상 MP4 (H.264 · yuv420p · faststart) → data/<kind>/<구간>.mp4
 //   ② 칸 색인(JSON)대로 잘라 카메라별 MP4 → data/<kind>/<구간>/<로봇·카메라>.mp4
-// 를 만든다. 개별 녹화(CCTV 정보 창)도 MP4로 바꿔 돌려준다. ffmpeg는 FFMPEG_PATH → Homebrew → ~/.local/bin → PATH 순으로 찾는다.
+// 를 만든다. 개별 녹화(CCTV 정보 창)도 MP4로 바꿔 돌려준다. ffmpeg는 FFMPEG_PATH → Homebrew → ~/.local/bin → (윈도우: winget · C:\ffmpeg · Program Files) → PATH 순으로 찾는다.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,7 +10,11 @@ import { spawn, spawnSync } from 'node:child_process';
 let ffmpegPath;
 export function findFfmpeg() {
   if (ffmpegPath !== undefined) return ffmpegPath;
-  const cands = [process.env.FFMPEG_PATH, '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', path.join(os.homedir(), '.local/bin/ffmpeg'), 'ffmpeg'].filter(Boolean);
+  // 윈도우는 winget·수동 설치 위치를 PATH보다 먼저 본다 (맥 후보 순서는 그대로)
+  const win = process.platform === 'win32'
+    ? [process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links', 'ffmpeg.exe'), 'C:\\ffmpeg\\bin\\ffmpeg.exe', process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'ffmpeg', 'bin', 'ffmpeg.exe')]
+    : [];
+  const cands = [process.env.FFMPEG_PATH, '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', path.join(os.homedir(), '.local/bin/ffmpeg'), ...win, 'ffmpeg'].filter(Boolean);
   ffmpegPath = null;
   for (const c of cands) {
     try { const r = spawnSync(c, ['-hide_banner', '-version'], { timeout: 5000 }); if (r.status === 0) { ffmpegPath = c; break; } } catch { /* 다음 후보 */ }
@@ -37,7 +41,8 @@ function run(args, timeoutMs = 10 * 60 * 1000) {
 // MediaRecorder WebM은 길이·타임스탬프가 비어 있을 수 있어 타임스탬프를 다시 만들고 고정 fps로 맞춘다
 // 화질·크기: 녹화 구간은 비트레이트 상한(전체 400kbps · 카메라 칸 40kbps, 2fps)으로 WebM과 비슷한 크기, 개별 녹화는 화질 우선(CRF 23)
 const H264 = (fps, maxrate = null, crf = 28) => ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(crf), ...(maxrate ? ['-maxrate', maxrate, '-bufsize', `${parseInt(maxrate, 10) * 2}k`] : []), '-pix_fmt', 'yuv420p', '-r', String(fps), '-movflags', '+faststart'];
-const even = (v) => Math.max(2, Math.floor(v / 2) * 2);
+const even = (v) => Math.max(2, Math.floor(v / 2) * 2);   // 크기 (최소 2)
+const evenPos = (v) => Math.max(0, Math.floor(v / 2) * 2);   // 좌표 (0 그대로 — 크기용 보정을 쓰면 첫 칸 x=0이 2로 밀렸다)
 export const camFile = (t) => `${String(t.robot ?? t.id ?? 'cam').replace(/[^A-Za-z0-9_-]/g, '_')}_${String(t.camera ?? 'view').replace(/[^A-Za-z0-9_-]/g, '_')}.mp4`;
 
 // 구간 하나 변환 (전체 + 카메라별). 결과는 <구간>.mp4.json에 남긴다
@@ -54,7 +59,7 @@ export async function convertSegment(dir, id) {
     const sub = path.join(dir, id); fs.mkdirSync(sub, { recursive: true });
     for (let k = 0; k < cams.length; k += 24) {   // 출력이 많으면 24개씩 나눠 (명령 길이·메모리)
       const part = cams.slice(k, k + 24);
-      const fc = `[0:v]split=${part.length}${part.map((_, i) => `[s${i}]`).join('')};` + part.map((c, i) => { const [x, y, w, h] = c.rect; return `[s${i}]crop=${even(w)}:${even(h)}:${even(x)}:${even(y)}[c${i}]`; }).join(';');
+      const fc = `[0:v]split=${part.length}${part.map((_, i) => `[s${i}]`).join('')};` + part.map((c, i) => { const [x, y, w, h] = c.rect; return `[s${i}]crop=${even(w)}:${even(h)}:${evenPos(x)}:${evenPos(y)}[c${i}]`; }).join(';');
       const outs = part.flatMap((c, i) => ['-map', `[c${i}]`, ...H264(fps, '40k'), path.join(sub, camFile(c))]);
       await run(['-fflags', '+genpts', '-i', webm, '-filter_complex', fc, ...outs]);
       files.push(...part.map((c) => ({ robot: c.robot ?? c.id, camera: c.camera ?? 'view', label: c.label ?? c.place ?? '', file: `${id}/${camFile(c)}` })));
@@ -71,9 +76,9 @@ export function queueConvert(dir, id) {
   const key = `${dir}|${id}`;
   if (jobs.has(key)) return jobs.get(key);
   const done = path.join(dir, `${id}.mp4.json`);
-  if (fs.existsSync(done)) { const p = Promise.resolve(JSON.parse(fs.readFileSync(done, 'utf8'))); jobs.set(key, p); return p; }
+  if (fs.existsSync(done)) return Promise.resolve(JSON.parse(fs.readFileSync(done, 'utf8')));   // 끝난 결과는 파일로만 확인 (보관 정리로 지워졌으면 다시 변환)
   const p = (chain = chain.then(() => convertSegment(dir, id), () => convertSegment(dir, id)));
-  p.catch(() => jobs.delete(key));   // 실패하면 다음에 다시 시도
+  p.then(() => jobs.delete(key), () => jobs.delete(key));   // 진행 중인 것만 기억 — 끝나면 지워 지운 MP4를 「변환 완료」로 돌려주지 않게, 실패하면 다음에 다시 시도
   jobs.set(key, p);
   return p;
 }

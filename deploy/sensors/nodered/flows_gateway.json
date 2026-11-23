@@ -1,0 +1,65 @@
+[
+  {
+    "id": "tab1",
+    "type": "tab",
+    "label": "엣지 게이트웨이 (센서 → MQTT UNS)"
+  },
+  {
+    "id": "inj",
+    "type": "inject",
+    "z": "tab1",
+    "name": "1초 묶음",
+    "repeat": "1",
+    "once": true,
+    "onceDelay": "1",
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 120,
+    "y": 80,
+    "wires": [
+      [
+        "fn"
+      ]
+    ]
+  },
+  {
+    "id": "fn",
+    "type": "function",
+    "z": "tab1",
+    "name": "묶음 만들기 (sensor-batch/1.0)",
+    "func": "// 엣지 게이트웨이: 필드버스 값(여기서는 msg.payload 또는 예시 값) → 메타팩토리 센서 묶음(metafactory/sensor-batch/1.0)\n// 실제 장비: 앞단을 node-red-contrib-modbus 'Modbus-Read' · IO-Link 마스터(IoT 포트 MQTT/REST) 노드로 바꾼다\nconst now = Date.now() * 1000;   // 호스트 시계 = PTP(phc2sys)로 맞춘 시계 (µs)\nconst cell = env.get('CELL') || 'DT_ASSY', zone = env.get('ZONE') || 'main';\nconst src = Array.isArray(msg.payload) ? msg.payload : [ { s: `SN-${cell.replace('_','')}-VIB`, m: 'vrms', v: 1.2 + Math.random() * 0.2, u: 'mm/s' }, { s: `SN-${cell.replace('_','')}-CURRENT`, m: 'irms', v: 8 + Math.random(), u: 'A' } ];\nconst seq = (context.get('seq') || 0) + 1; context.set('seq', seq);\nmsg.topic = `metafactory/sensors/v1/${zone}/${cell}`;\nmsg.payload = { spec: 'metafactory/sensor-batch/1.0', zone, cell, edge: `EDGE-${zone.toUpperCase()}-${cell}`, gateway: env.get('GATEWAY') || 'GW-MAIN-A', seq,\n  clock: { reference: 'PTP IEEE 1588-2019' }, hops: { edge: now, gateway: now },\n  readings: src.map((r) => ({ ...r, ts: r.ts || now })) };\nreturn msg;",
+    "outputs": 1,
+    "x": 360,
+    "y": 80,
+    "wires": [
+      [
+        "out"
+      ]
+    ]
+  },
+  {
+    "id": "out",
+    "type": "mqtt out",
+    "z": "tab1",
+    "name": "공장 UNS",
+    "topic": "",
+    "qos": "0",
+    "retain": "false",
+    "broker": "brk",
+    "x": 600,
+    "y": 80,
+    "wires": []
+  },
+  {
+    "id": "brk",
+    "type": "mqtt-broker",
+    "name": "Mosquitto (공장 중앙)",
+    "broker": "mosquitto",
+    "port": "1883",
+    "clientid": "nodered-gateway",
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true
+  }
+]

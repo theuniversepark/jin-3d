@@ -1,0 +1,16 @@
+# DoWhy (MIT) · PyRCA (BSD-3) 불량 원인 분석 노트북
+# PyRCA는 의존성 javabridge(Java 빌드 필요)를 빼고 설치한다 — 노트북이 쓰는 모듈(PC · HT · RandomWalk · ε-Diagnosis)에는 필요 없음
+#   pip install -r requirements.txt
+#   pip install --no-deps sfr-pyrca==1.0.1
+dowhy>=0.14
+pandas
+numpy
+matplotlib
+networkx
+scikit-learn
+causal-learn
+pyyaml
+dill
+schema
+setuptools<81
+jupyter

@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: metafactory-sensors
+    folder: 메타팩토리
+    type: file
+    options: { path: /var/lib/grafana/dashboards }

@@ -5,6 +5,7 @@
 //  ② 데이터·IP 보안: 동형암호 연합학습 · ZKML 무결성 검증 · eVDI 격리 워크스페이스 · 반출 통제(DLP)
 //  ③ AI 모델 보안: 메타모픽(MR) · 차등 테스팅 → Safety Score · DRS
 //  ④ OT 보안: OTAC 단방향 다이나믹 인증 · 구간 암호화 · DPI 명령 선별 제어 · AI 이상 탐지
+import { mulberry32 } from './sim.js';
 
 export const SEC_LAYERS = {
   agent: { icon: '🪪', label: '피지컬AI 에이전트 보안', sub: 'DID/VC 신원 · 최소 권한', by: '라온시큐어 (ONE Access · TrustCore)' },
@@ -111,6 +112,7 @@ const HE_MS_PER_10K = 410;
 export class SecurityLayer {
   constructor(sim) {
     this.sim = sim; this.on = sim.mode.key === 'dark';
+    this.rng = mulberry32(((sim.seed ?? 1) * 40503 + 13) >>> 0);   // 보안 사건 대상 셀 — 생산 흐름 난수(sim.rand)와 따로
     this.ids = new Map();   // 주체 이름/ID → { did, name, kind, scopes }
     this.log = []; this.seq = 0;
     this.stats = { cmdVerified: 0, cmdBlocked: 0, otac: 0, dpiWrite: 0, encMsgs: 0, heRounds: 0, zkml: 0, zkmlFail: 0, mrTests: 0, exports: 0, exportBlocked: 0, threats: 0, blocked: 0 };
@@ -186,7 +188,7 @@ export class SecurityLayer {
     if (!this.on) return null;
     this.register();
     const s = this.sim, o = s.orch, T = SEC_THREATS[type]; if (!T) return null;
-    const cells = s.processing.filter((st) => !st.standby), st = cells[Math.floor(s.rand() * cells.length)];
+    const cells = s.processing.filter((st) => !st.standby), st = cells[Math.floor(this.rng() * cells.length)];
     const robot = [...this.ids.values()].find((x) => x.kind === 'robot');
     const script = SEC_FLOW[type]({ st, robot });
     this.stats.threats++;

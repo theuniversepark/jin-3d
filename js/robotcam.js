@@ -2,6 +2,7 @@
 // 영상: 각 로봇 카메라 시점으로 장면을 렌더 타깃의 한 칸에 그린다(프레임마다 한 칸씩 돌아가며 갱신).
 // 오버레이: 카메라로 투영한 객체 인식 박스·신뢰도, 추론 지연, 작업 상태, 현장 이벤트·알람 배너와 하단 알람 띠.
 import * as THREE from 'three';
+import { renderAux } from './viewcull.js';
 import { FIELD_EVENTS, ST_LABEL, moverRadius } from './sim.js';
 import { makeAlarmFx, blinkAlarmFx, ALARM_COLOR, ROBOT_CAMS } from './factory.js';
 
@@ -12,13 +13,22 @@ const FONT = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif
 const CLS_COLOR = { 설비: '#37a0ff', 협동로봇: '#2bd4c6', AMR: '#3ddc84', AGV: '#3ddc84', 휴머노이드: '#b89bff', 사족보행: '#f5d36b', 사람: '#ff5a5a', 누유: '#ff7a3d', 이물질: '#f5b82e', 연기: '#ff5a5a' };
 const hash = (s) => { let h = 2166136261; for (const c of String(s)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0) / 4294967295; };
 
-// 손목 카메라 시점: 카메라 몸체(앵커 +z = 렌즈) 그대로 — aimWristCam(payload-robots.js)으로 그리퍼 접근 축 앞을 보게 맞춰 둠
+
+// 손목 카메라 시점: 카메라 몸체(앵커 +z = 렌즈)를 그대로 — aimWristCam으로 그리퍼 접근 축 앞을 보게 맞춰 둠. 광각(손가락과 대상물이 함께) · 가까운 그리퍼가 잘리지 않게 near 2cm
+const WRIST_FOV = 78, FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 function wristPose(a) {
   a.updateWorldMatrix(true, false);
-  const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(a.getWorldQuaternion(new THREE.Quaternion()));
-  return { pos: a.getWorldPosition(new THREE.Vector3()).addScaledVector(dir, 0.03), dir, ahead: 0.3 };
+  const quat = a.getWorldQuaternion(new THREE.Quaternion()), dir = new THREE.Vector3(0, 0, 1).applyQuaternion(quat);
+  return { pos: a.getWorldPosition(new THREE.Vector3()).addScaledVector(dir, 0.03), dir, ahead: 0.3, quat: quat.multiply(FLIP), fov: WRIST_FOV, near: 0.02 };
 }
-
+// 그리퍼 접근 축: TCP 부모(툴 몸체) → TCP (aimWristCam과 같은 기준)
+function gripOf(r, tcp) {
+  return () => {
+    const t = tcp.getWorldPosition(new THREE.Vector3()), ax = new THREE.Vector3();
+    for (let b = tcp.parent; b && ax.subVectors(t, b.getWorldPosition(new THREE.Vector3())).length() < 0.01; b = b.parent);
+    return { tcp: t, ax: ax.normalize(), root: r.root ?? r.arm?.root };
+  };
+}
 export class RobotCamWall {
   constructor(scene, renderer) {
     this.scene = scene; this.renderer = renderer;
@@ -91,6 +101,7 @@ export class RobotCamWall {
       pin(byId(ev.responder), `${L} 대응`);
       for (const m of sim.techs) if (m.tool === 'smoke') pin(m, `${L} 소화 대기`);
       pin(byId(ev.detectedBy), `${L} 감지`);
+      if (!ev.detected && (ev.quiet || ev.tq != null)) pin(byId(ev.seenBy), '');   // 토리 예시: 멈춰 둔 동안 영상이 돌아가 버리지 않게 (표지는 없음 — 아직 아무도 모름)
     }
     for (const q of sim.quads) if (q.scanning) pin(q, '열화상 정밀 점검');
     for (const d of sim.drones ?? []) if (d.mission) pin(d, d.arrived ? '사고 현장 중계' : '현장 출동');
@@ -184,9 +195,9 @@ export class RobotCamWall {
     if (ref.type === 'cell') {
       const cr = view?.cellRobot(ref.stationId, ref.idx), r = cr?.robot, st = cr?.st;   // 셀 로봇 · 서열 키팅 피킹 로봇
       if (!r) return null;
-      if (r.vla && r.wristCameraAnchor) return { label: `${r.spec ? `${r.spec.model} ` : ''}손목 카메라 · VLA`, pose: () => wristPose(r.wristCameraAnchor) };
+      if (r.vla && r.wristCameraAnchor) return { label: `${r.spec ? `${r.spec.model} ` : ''}손목 카메라 · VLA`, pose: () => wristPose(r.wristCameraAnchor), grip: gripOf(r, r.tip) };
       if (r.vla) { const up = new THREE.Vector3(); return { label: '손목 카메라 · VLA', pose: () => { const p = r.tip.getWorldPosition(new THREE.Vector3()); up.set(0, 1, 0).transformDirection(r.tip.parent.matrixWorld); return { pos: p.addScaledVector(up, -0.06), dir: up.clone(), ahead: 1.2 }; } }; }
-      if ((r.kind === 'ammr' || r.kind === 'humanoid') && r.cams) return this.anchorCam(r.cams, ref.cam, r.kind === 'ammr' ? 'AMMR' : '휴머노이드');
+      if ((r.kind === 'ammr' || r.kind === 'humanoid') && r.cams) return this.anchorCam(r.cams, ref.cam, r.kind === 'ammr' ? 'AMMR' : '휴머노이드', r);
       return { label: '셀 상부 카메라', pose: () => { const p = r.root.getWorldPosition(new THREE.Vector3()); const c = new THREE.Vector3(st.x, 1.2, st.z); return { pos: p.add(new THREE.Vector3(0, 2.6, 0)), dir: c.sub(p).normalize(), ahead: 3 }; } };
     }
     const m = [...sim.movers, ...(sim.drones ?? [])].find((x) => x.id === ref.id);
@@ -222,8 +233,9 @@ export class RobotCamWall {
     return out;
   }
   // 카메라 앵커(+z = 보는 방향) → 시점. cam: head · handL · handR · back (없으면 머리)
-  anchorCam(cams, cam, who) {
+  anchorCam(cams, cam, who, r) {
     const key = cams[cam] ? cam : 'head', a = cams[key], label = ROBOT_CAMS.find(([k]) => k === key)[1];
+    if (a.userData.wristTcp) return { label, cam: key, who, pose: () => wristPose(a), grip: r && gripOf(r, a.userData.wristTcp) };   // AMMR 양손: 그리퍼 접근 축에 맞춘 손목 카메라
     const ahead = key === 'head' ? 3 : key === 'back' ? 4 : 1.2;
     return { label, cam: key, who, pose: () => { a.updateWorldMatrix(true, false); const pos = a.getWorldPosition(new THREE.Vector3()); const dir = new THREE.Vector3(0, 0, 1).transformDirection(a.matrixWorld); return { pos: pos.addScaledVector(dir, 0.03), dir, ahead }; } };
   }
@@ -240,10 +252,11 @@ export class RobotCamWall {
     if (this.lost) return null;   // GPU 컨텍스트 복구 중
     const f = this.cameraFor(ref); if (!f) return null;
     const w = canvas.width, h = canvas.height, r = this.renderer;
-    if (!this.panelRT || this.panelRT.width !== w || this.panelRT.height !== h) {
-      this.panelRT?.dispose(); this.panelRT = new THREE.WebGLRenderTarget(w, h); this.panelRT.texture.colorSpace = THREE.SRGBColorSpace;
-      this.panelBuf = new Uint8Array(w * h * 4); this.panelImg = new ImageData(w, h);
-    }
+    // 크기별 렌더 타깃 (로봇 정보 창 480×270 · 현장 대응 팝업 320×180을 함께 띄워도 매번 다시 만들지 않음) — 렌더러가 바뀌면(panelRT = null) 모두 새로
+    if (!this.panelRT) { for (const P of this.panelRTs?.values() ?? []) P.rt.dispose(); this.panelRTs = new Map(); }
+    let P = this.panelRTs.get(`${w}x${h}`);
+    if (!P) { P = { rt: new THREE.WebGLRenderTarget(w, h), buf: new Uint8Array(w * h * 4), img: new ImageData(w, h) }; P.rt.texture.colorSpace = THREE.SRGBColorSpace; this.panelRTs.set(`${w}x${h}`, P); }
+    this.panelRT = P.rt; this.panelBuf = P.buf; this.panelImg = P.img;
     this.panelCam ??= new THREE.PerspectiveCamera(70, w / h, 0.12, 60);
     this.panelCam.aspect = w / h; this.setCam(this.panelCam, f);
     const vis = [this.group.visible, this.view.selRing?.visible];
@@ -251,7 +264,7 @@ export class RobotCamWall {
     const beams = (this.view.droneViews ?? []).map((dv) => { const b = dv.g.userData.beam, v = b.visible; b.visible = false; return [b, v]; });
     const auto = r.shadowMap.autoUpdate; r.shadowMap.autoUpdate = false;
     const prev = r.getRenderTarget();
-    r.setRenderTarget(this.panelRT); r.clear(); r.render(this.scene, this.panelCam);
+    r.setRenderTarget(this.panelRT); r.clear(); renderAux(r, this.scene, this.panelCam, h, { groups: true });   // 화면 표시 전용 — 그룹째 숨기기
     r.readRenderTargetPixels(this.panelRT, 0, 0, w, h, this.panelBuf);
     r.setRenderTarget(prev); r.shadowMap.autoUpdate = auto;
     this.group.visible = vis[0]; if (this.view.selRing) this.view.selRing.visible = vis[1];
@@ -269,6 +282,8 @@ export class RobotCamWall {
     const cx = w / 2, cy = h / 2 + 12;
     g.beginPath(); g.moveTo(cx - 14, cy); g.lineTo(cx - 5, cy); g.moveTo(cx + 5, cy); g.lineTo(cx + 14, cy); g.moveTo(cx, cy - 14); g.lineTo(cx, cy - 5); g.moveTo(cx, cy + 5); g.lineTo(cx, cy + 14); g.stroke();
     for (const [x0, y0, dx, dy] of [[8, 32, 1, 1], [w - 8, 32, -1, 1], [8, h - 8, 1, -1], [w - 8, h - 8, -1, -1]]) { g.beginPath(); g.moveTo(x0, y0 + dy * 16); g.lineTo(x0, y0); g.lineTo(x0 + dx * 16, y0); g.stroke(); }
+    this.drawGrip(g, this.panelCam, f, 0, 0, w, h);
+    this.drawDetections(g, this.panelCam, ref, w, h);   // 관제 화면과 같은 AI 인식 상자 (로봇 정보 창 · 현장 팝업 감지 로봇 영상)
     return f.label;
   }
 
@@ -287,21 +302,114 @@ export class RobotCamWall {
     this.group.visible = false; if (this.view.selRing) this.view.selRing.visible = false;
     const auto = r.shadowMap.autoUpdate; r.shadowMap.autoUpdate = false;
     const prev = r.getRenderTarget();
-    r.setRenderTarget(this.capRT); r.clear(); r.render(this.scene, this.capCam);
-    r.readRenderTargetPixels(this.capRT, 0, 0, w, h, this.capBuf);
+    r.setRenderTarget(this.capRT); r.clear(); renderAux(r, this.scene, this.capCam, h, { data: true });   // 학습 영상 — 작은 부품 · 결함을 빼지 않는다
+    // 비동기 읽기: 지금 그린 내용을 GPU 쪽 버퍼로 복사만 걸어 두고(다음 렌더와 섞이지 않음) 끝나면 받는다 — 동기 읽기는 GPU 작업이 다 끝날 때까지 화면을 멈췄다
+    const buf = new Uint8Array(w * h * 4), read = r.readRenderTargetPixelsAsync(this.capRT, 0, 0, w, h, buf);
     r.setRenderTarget(prev); r.shadowMap.autoUpdate = auto;
     this.group.visible = vis[0]; if (this.view.selRing) this.view.selRing.visible = vis[1];
-    const img = new ImageData(w, h), row = w * 4;
-    for (let y = 0; y < h; y++) img.data.set(this.capBuf.subarray((h - 1 - y) * row, (h - y) * row), y * row);
-    this.capCanvas.getContext('2d').putImageData(img, 0, 0);
-    return new Promise((res) => this.capCanvas.toBlob((b) => (b ? b.arrayBuffer().then((ab) => res(new Uint8Array(ab))) : res(null)), 'image/jpeg', 0.78));
+    return read.then(() => {
+      const img = new ImageData(w, h), row = w * 4, cv = this.capCanvas;
+      for (let y = 0; y < h; y++) img.data.set(buf.subarray((h - 1 - y) * row, (h - y) * row), y * row);
+      if (cv.width !== w || cv.height !== h) return null;
+      cv.getContext('2d').putImageData(img, 0, 0);
+      return new Promise((res) => cv.toBlob((b) => (b ? b.arrayBuffer().then((ab) => res(new Uint8Array(ab))) : res(null)), 'image/jpeg', 0.78));
+    }, () => null);
+  }
+
+  // 한 카메라 시점의 AI 인식 상자 — 관제 화면 칸과 같은 규칙(가까운 순 7개 · 22m 안 · 현장 이벤트는 굵은 깜빡임), 감지 처리는 하지 않는다(관제 화면만)
+  drawDetections(g, cam, ref, w, h) {
+    const sim = this.sim; if (!sim) return;
+    const selfId = ref?.type === 'mover' ? ref.id : null, selfSt = ref?.type === 'cell' ? ref.stationId : null, who = ref?.id ?? ref?.stationId ?? '';
+    const seen = this.targets().filter((t) => !(selfId && t.m?.id === selfId) && !(selfSt && t.st?.id === selfSt))
+      .map((t) => ({ t, d: Math.hypot(t.c[0] - cam.position.x, t.c[2] - cam.position.z) })).filter((o) => o.d < 22).sort((a, b) => a.d - b.d);
+    const labels = []; let n = 0;
+    g.save(); g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+    for (const { t, d } of seen) {
+      if (n >= 7) break;
+      const b = this.project(cam, t, 0, 0, w, h); if (!b) continue;
+      n++;
+      const conf = Math.min(0.99, 0.86 + hash(t.key + who) * 0.1 + Math.sin(this.t * 3 + d) * 0.015 - d * 0.002);
+      const color = t.ev ? (t.ev.severity === 'alarm' ? '#ff4d4d' : '#f5b82e') : CLS_COLOR[t.cls] ?? '#37e8ff';
+      g.strokeStyle = color; g.lineWidth = t.ev ? 3 : 2; if (t.ev && Math.sin(this.t * 8) > 0) g.lineWidth = 5;
+      g.strokeRect(b.x, b.y, b.w, b.h);
+      const lab = `${t.cls}${t.cls === '설비' ? ' ' + t.name : ''} ${conf.toFixed(2)}`;
+      g.font = `600 12px ${FONT}`; const tw = g.measureText(lab).width + 8, ly = Math.max(26, b.y - 16), lr = { x: b.x, y: ly, w: tw, h: 16 };
+      if (t.ev || !labels.some((o) => lr.x < o.x + o.w && o.x < lr.x + lr.w && lr.y < o.y + o.h && o.y < lr.y + lr.h)) {
+        labels.push(lr); g.fillStyle = color; g.fillRect(lr.x, lr.y, tw, 16); g.fillStyle = '#05080c'; g.fillText(lab, b.x + 4, ly + 12);
+      }
+    }
+    g.restore();
   }
 
   setCam(cam, f) {
-    const { pos, dir, ahead } = f.pose();
+    const { pos, dir, ahead, quat, fov = 70, near = cam.userData.near0 ??= cam.near } = f.pose();
     cam.position.copy(pos);
-    cam.lookAt(pos.x + dir.x * ahead, pos.y + dir.y * ahead, pos.z + dir.z * ahead);
+    if (quat) cam.quaternion.copy(quat);   // 손목 카메라: 렌즈 방향·화면 위쪽까지 카메라 몸체 그대로 (그리퍼가 화면 아래)
+    else cam.lookAt(pos.x + dir.x * ahead, pos.y + dir.y * ahead, pos.z + dir.z * ahead);
+    cam.fov = fov; cam.near = near;
     cam.updateMatrixWorld(); cam.updateProjectionMatrix();
+  }
+
+  // 손목 카메라 작업 표시: 그리퍼 접근 축(손끝 → 앞) · 접근 축 앞 작업 대상물 상자와 거리 — VLA가 무엇을 보고 손을 어디로 움직이는지
+  drawGrip(g, cam, f, x0, y0, w, h) {
+    const G = f.grip?.(); if (!G) return;
+    const scr = (v) => { const q = v.clone().project(cam); return q.z > 1 || q.z < -1 ? null : [x0 + (q.x + 1) / 2 * w, y0 + (1 - q.y) / 2 * h]; };
+    const t = scr(G.tcp), e = scr(G.tcp.clone().addScaledVector(G.ax, 0.3));
+    g.save(); g.font = `700 11px ${FONT}`; g.textBaseline = 'middle';
+    if (t && e) {
+      g.strokeStyle = 'rgba(61,220,132,0.9)'; g.lineWidth = 2; g.setLineDash([6, 4]);
+      g.beginPath(); g.moveTo(...t); g.lineTo(...e); g.stroke(); g.setLineDash([]);
+      const a = Math.atan2(e[1] - t[1], e[0] - t[0]);
+      g.fillStyle = '#3ddc84'; g.beginPath(); g.moveTo(...e); g.lineTo(e[0] - 9 * Math.cos(a - 0.4), e[1] - 9 * Math.sin(a - 0.4)); g.lineTo(e[0] - 9 * Math.cos(a + 0.4), e[1] - 9 * Math.sin(a + 0.4)); g.fill();
+      g.beginPath(); g.arc(...t, 4, 0, Math.PI * 2); g.stroke();
+      g.fillText('그리퍼', t[0] + 7, Math.min(y0 + h - 8, t[1] + 9));
+    }
+    const hit = this.gripTarget(G, cam);
+    if (hit) {
+      const b = hit.box, v = new THREE.Vector3(); let X0 = Infinity, Y0 = Infinity, X1 = -Infinity, Y1 = -Infinity, n = 0;
+      for (const sx of [0, 1]) for (const sy of [0, 1]) for (const sz of [0, 1]) {
+        const p = scr(v.set(sx ? b.max.x : b.min.x, sy ? b.max.y : b.min.y, sz ? b.max.z : b.min.z)); if (!p) continue;
+        n++; X0 = Math.min(X0, p[0]); X1 = Math.max(X1, p[0]); Y0 = Math.min(Y0, p[1]); Y1 = Math.max(Y1, p[1]);
+      }
+      const near = hit.d < 0.03, col = near ? '#3ddc84' : '#f5b82e', txt = near ? '대상물 · 접촉' : `대상물 · ${Math.round(hit.d * 100)}cm`;
+      if (n >= 4) {
+        X0 = Math.max(x0 + 2, X0); Y0 = Math.max(y0 + 26, Y0); X1 = Math.min(x0 + w - 2, X1); Y1 = Math.min(y0 + h - 2, Y1);
+        if (X1 - X0 > 8 && Y1 - Y0 > 8) {
+          const k = Math.min(14, (X1 - X0) / 3, (Y1 - Y0) / 3); g.strokeStyle = col; g.lineWidth = 2; g.beginPath();
+          for (const [cx, cy, dx, dy] of [[X0, Y0, 1, 1], [X1, Y0, -1, 1], [X0, Y1, 1, -1], [X1, Y1, -1, -1]]) { g.moveTo(cx, cy + dy * k); g.lineTo(cx, cy); g.lineTo(cx + dx * k, cy); }
+          g.stroke();
+          const tw = g.measureText(txt).width + 8, ly = Y0 > y0 + 44 ? Y0 - 9 : Y1 + 9;
+          g.fillStyle = 'rgba(5,8,12,0.7)'; g.fillRect(X0, ly - 8, tw, 16); g.fillStyle = col; g.fillText(txt, X0 + 4, ly);
+        }
+      }
+      const hp = scr(hit.p); if (hp) { g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath(); g.arc(...hp, 5, 0, Math.PI * 2); g.moveTo(hp[0] - 9, hp[1]); g.lineTo(hp[0] + 9, hp[1]); g.moveTo(hp[0], hp[1] - 9); g.lineTo(hp[0], hp[1] + 9); g.stroke(); }
+    }
+    g.restore();
+  }
+  // 로봇 주변 3m 안 메시 (2초마다 갱신) — 공장 전체 레이 검사는 한 번에 약 4ms라 관제 화면 8칸을 그리면 끊겼다
+  nearMeshes(G) {
+    const C = this.gripNear ??= new Map(), now = performance.now() / 1000; let e = C.get(G.root);
+    if (!e || now - e.t > 2) {
+      const base = G.root.getWorldPosition(new THREE.Vector3()), sp = new THREE.Sphere(), list = [];
+      this.scene.traverseVisible((o) => {
+        if (!o.isMesh || o.isSprite) return;
+        if (o.isInstancedMesh) { o.boundingSphere ?? o.computeBoundingSphere(); sp.copy(o.boundingSphere); } else { o.geometry.boundingSphere ?? o.geometry.computeBoundingSphere(); sp.copy(o.geometry.boundingSphere); }
+        sp.applyMatrix4(o.matrixWorld); if (sp.center.distanceTo(base) - sp.radius < 3) list.push(o);
+      });
+      C.set(G.root, e = { t: now, list });
+    }
+    return e.list;
+  }
+  // 그리퍼 접근 축 앞 0.6m 안에서 처음 닿는 물체 (로봇 자신·화면 연출 제외) → { 닿은 점 · 거리 · 물체 상자 }
+  gripTarget(G, cam) {
+    const R = this.gripRay ??= new THREE.Raycaster(); R.set(G.tcp, G.ax); R.near = 0; R.far = 0.6; R.camera = cam;   // 스프라이트(이름표)도 레이 검사에 카메라가 필요
+    const vis = (o) => { for (let p = o; p; p = p.parent) if (!p.visible || p === G.root || p.userData.camWall) return false; return true; };
+    const hit = R.intersectObjects(this.nearMeshes(G), false).find((h) => vis(h.object)); if (!hit) return null;
+    // 대상물: 닿은 메시에서 위로 올라가며 1.2m보다 작은 가장 큰 묶음 (부품·제품 단위)
+    const bb = new THREE.Box3(); let o = hit.object, box = bb.setFromObject(o).clone();
+    for (let k = 0; k < 4 && o.parent && o.parent !== this.scene; k++) { bb.setFromObject(o.parent); if (bb.getSize(new THREE.Vector3()).length() > 1.2) break; o = o.parent; box = bb.clone(); }
+    if (box.getSize(new THREE.Vector3()).length() > 1.2) box = new THREE.Box3().setFromCenterAndSize(hit.point, new THREE.Vector3(0.12, 0.12, 0.12));
+    return { p: hit.point, d: hit.distance, box };
   }
 
   update(rdt) {
@@ -310,8 +418,11 @@ export class RobotCamWall {
     this.list = this.feeds();
     this.syncEvents(rdt);
     // 1) 영상: 프레임마다 한 칸 렌더 (6칸이 약 10fps로 돌아가며 갱신)
-    const i = this.tile % this.list.length, f = this.list[i];
-    this.tile++;
+    // 메인 카메라 시야 밖이면(main.js가 seen=false) 4프레임마다 한 칸 — 화면 표시용 전광판이라 수집 데이터와 무관하고, CCTV 화면에 비칠 수 있어 멈추지는 않는다
+    this.frameN = (this.frameN ?? 0) + 1;
+    const draw = this.frameN % (this.seen === false ? 4 : 1) === 0;
+    const i = this.tile % Math.max(1, this.list.length), f = draw ? this.list[i] : null;
+    if (draw) this.tile++;
     if (f) {
       const cam = this.cams[i], r = this.renderer;
       this.setCam(cam, f);
@@ -324,7 +435,7 @@ export class RobotCamWall {
       const beams = (this.view.droneViews ?? []).map((dv) => { const b = dv.g.userData.beam, v = b.visible; b.visible = false; return [b, v]; });
       const auto = r.shadowMap.autoUpdate; r.shadowMap.autoUpdate = false;
       const prev = r.getRenderTarget();
-      r.setRenderTarget(this.rt); r.render(this.scene, cam); r.setRenderTarget(prev);
+      r.setRenderTarget(this.rt); renderAux(r, this.scene, cam, this.rt.viewport.w, { groups: true }); r.setRenderTarget(prev);   // 화면 표시 전용 — 그룹째 숨기기
       r.shadowMap.autoUpdate = auto;
       this.group.visible = vis[0]; if (this.view.selRing) this.view.selRing.visible = vis[1];
       for (const [b, v] of beams) b.visible = v;
@@ -353,7 +464,7 @@ export class RobotCamWall {
   }
 
   // 상자 8개 꼭짓점을 칸 좌표로 투영해 화면 안 사각형을 얻는다
-  project(cam, t, col, row) {
+  project(cam, t, col, row, tw = TW, th = TH) {   // tw · th: 칸 크기 (관제 화면 칸 TW×TH · 로봇 정보 창 · 현장 팝업 캔버스는 그 크기)
     const v = new THREE.Vector3();
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, front = 0;
     for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
@@ -363,9 +474,9 @@ export class RobotCamWall {
       x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x); y0 = Math.min(y0, v.y); y1 = Math.max(y1, v.y);
     }
     if (front < 4 || x1 < -1 || x0 > 1 || y1 < -1 || y0 > 1) return null;
-    const cx = (a) => col * TW + ((Math.max(-1, Math.min(1, a)) + 1) / 2) * TW, cy = (a) => row * TH + ((1 - Math.max(-1, Math.min(1, a))) / 2) * TH;
+    const cx = (a) => col * tw + ((Math.max(-1, Math.min(1, a)) + 1) / 2) * tw, cy = (a) => row * th + ((1 - Math.max(-1, Math.min(1, a))) / 2) * th;
     const box = { x: cx(x0), y: cy(y1), w: cx(x1) - cx(x0), h: cy(y0) - cy(y1) };
-    return box.w > 18 && box.h > 12 && box.w < TW * 0.98 ? box : null;
+    return box.w > 18 && box.h > 12 && box.w < tw * 0.98 ? box : null;
   }
 
   // ── 현장 알람 (영상 배너·하단 알람 띠 공용) ─────────────────
@@ -417,7 +528,7 @@ export class RobotCamWall {
           g.fillStyle = '#05080c'; g.fillText(lab, b.x + 4, ly + 13);
         }
         // 현장 이벤트를 처음 본 카메라가 감지 처리한다
-        if (t.ev && !t.ev.detected && d < 14) sim.detectFieldEvent(t.ev, f.robot, conf);
+        if (t.ev && !t.ev.detected && d < 14) sim.detectFieldEvent(t.ev, f.robot, conf, f.ref);
       }
       // 칸 머리: 녹화 표시·로봇·카메라·추론 정보
       g.fillStyle = 'rgba(5,8,12,0.72)'; g.fillRect(x0, y0, TW, 22);
@@ -439,6 +550,7 @@ export class RobotCamWall {
         const tag = f.pin ? '📌 해결 시까지 유지' : this.rot?.n ? `🔄 ${Math.max(0, Math.ceil(5 - (this.t - this.rot.t)))}s · 순환 ${this.rot.n}대` : '';
         if (tag) { g.fillStyle = f.pin ? '#ffb35a' : '#7ff3ff'; g.font = `11px ${FONT}`; g.fillText(tag, x0 + TW - g.measureText(tag).width - 8, fy + 14); }
       }
+      if (f.ref?.type === 'cell') this.drawGrip(g, cam, { grip: this.cameraFor(f.ref)?.grip }, x0, y0, TW, TH);   // 손목 카메라: 그리퍼 접근 축 · 작업 대상물
       // 이 로봇과 관련된 알람 배너
       const mine = alarms.filter((a) => (a.m && a.m === f.mover) || (a.at && (a.at === f.station || (f.mover?.lineInfo?.station === a.at.id))) || (a.ev && (a.ev.detectedBy === f.robot || a.ev.responder === f.mover?.id)));
       mine.slice(0, 2).forEach((a, k) => {
@@ -482,6 +594,12 @@ export class RobotCamWall {
         const fx = new THREE.Group(); fx.position.copy(m.position); fx.add(m.userData.alarm, m.userData.fx);
         this.evGroup.add(fx); m.userData.fxRoot = fx;
       }
+      if (ev.walk) {   // 사람 진입: 진입자가 통로를 따라 걸어 나간다 (sim.updateIntruder) — 경보 표시도 함께 따라간다
+        m.position.set(ev.x, 0, ev.z); m.userData.fxRoot.position.set(ev.x, 0, ev.z);
+        const walking = ev.walk.phase === 'walk' && !ev.walk.done, sw = walking ? Math.sin(this.t * 7.5) * 0.45 : 0;
+        m.rotation.y = (ev.heading ?? 0) + (walking ? 0 : Math.sin(this.t * 0.6) * 0.8);   // 걸을 때는 가는 쪽, 서 있을 때는 두리번
+        m.userData.legs?.forEach((l, k) => { l.rotation.x = k ? -sw : sw; });
+      }
       m.userData.tick?.(rdt, this.t);
       blinkAlarmFx(m.userData.alarm, true, m.userData.color, this.t);
       m.userData.fx.userData.tick(this.t);
@@ -500,7 +618,9 @@ export class RobotCamWall {
       const x = pos.x + fx.x * d - fx.z * lat, z = pos.z + fx.z * d + fx.x * lat;
       const inside = this.sim.stations.some((st) => Math.abs(x - st.x) < 3.2 && Math.abs(z - st.z) < 3.2);
       if (inside || Math.abs(x) > 34 || Math.abs(z) > 17) continue;
-      return this.sim.injectFieldEvent(type, x, z);
+      const ev = this.sim.injectFieldEvent(type, x, z);
+      if (ev) ev.seenBy = f.robot;   // 이 카메라 앞에 만들었다 (토리 예시: 감지를 풀 때까지 이 영상을 벽에 고정)
+      return ev;
     }
     return null;
   }
@@ -548,7 +668,8 @@ function makeEventMesh(type) {
     });
   } else if (type === 'intrusion') {
     const vest = new THREE.MeshStandardMaterial({ color: 0xff3b30, emissive: 0x330000 }), pants = new THREE.MeshStandardMaterial({ color: 0x2b2f36 }), skin = new THREE.MeshStandardMaterial({ color: 0xe0b48c });
-    for (const x of [-0.11, 0.11]) { const l = new THREE.Mesh(new THREE.CapsuleGeometry(0.12, 0.7, 4, 8), pants); l.position.set(x, 0.45, 0); g.add(l); }
+    const legs = [-0.11, 0.11].map((x) => { const hip = new THREE.Group(); hip.position.set(x, 0.85, 0); const l = new THREE.Mesh(new THREE.CapsuleGeometry(0.12, 0.7, 4, 8), pants); l.position.y = -0.4; hip.add(l); g.add(hip); return hip; });   // 엉덩이를 축으로 다리를 흔든다 (걷기)
+    g.userData.legs = legs;
     const b = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.55, 4, 10), vest); b.position.y = 1.25; g.add(b);
     const h = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 10), skin); h.position.y = 1.78; g.add(h);
     g.traverse((o) => { if (o.isMesh) o.castShadow = true; });

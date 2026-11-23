@@ -86,12 +86,12 @@ export class TruckYard {
     t.reserved = Math.max(0, (t.reserved ?? 0) - n);
     t.load += n; if (product) t.by[product] = (t.by[product] ?? 0) + n;
     (t.pallets ??= []).push(product ?? 'fg');   // 3D 적재함에 놓이는 팔레트 순서
-    s.stats.shipped += n; s.erp?.ship(t, n, product);
+    s.stats.shipped += n; s.fac?.ship(t, n, product);
     if (t.load >= YARD.cap) {
       const bx = t.bay;
       t.go([{ x: bx, z: YARD.roadZ + 3 }, { x: bx + 4, z: YARD.roadZ }, { x: 90, z: YARD.roadZ }], 'depart');
       t.bay = null; t.bayLeft = bx;
-      s.stats.trucks = (s.stats.trucks ?? 0) + 1; s.erp?.shipDone(t);   // Odoo: 출고 확정
+      s.stats.trucks = (s.stats.trucks ?? 0) + 1; s.fac?.shipDone(t);   // FAC: 출고 확정
       const mix = Object.entries(t.by).map(([k, v]) => `${k === 'doortrim' ? '도어트림' : k === 'eaxle' ? 'e-axle' : k} ${v}`).join(' · ');
       s.log('ok', `${t.id} 만재 출발`, { obs: `적재 ${t.load}/${YARD.cap}개${mix ? ` (${mix})` : ''}`, act: `도크 ${this.bayNo(bx)} 비움 → 대기 트럭 접안` });
     }
@@ -104,9 +104,11 @@ export function planForklift(sim, f) {
   const trigger = m.key === 'traditional' ? 16 : YARD.pallet;   // 레거시는 많이 쌓인 뒤에야 움직인다 (작업자 판단)
   let product = null, avail;
   if (sim.zone) {
-    const p = ['doortrim', 'eaxle'].filter((k) => sim.fgBy[k] >= trigger).sort((a, b) => sim.fgBy[b] - sim.fgBy[a])[0];
+    // 출하 가능 = 시리얼 서비스(js/serial.js)가 출하 보류(샘플 로트 · 봉쇄 · 재작업)하지 않은 것만
+    const H = sim.serials, ready = (k) => (H ? Math.min(sim.fgBy[k], H.shippable(k)) : sim.fgBy[k]);
+    const p = ['doortrim', 'eaxle'].filter((k) => ready(k) >= trigger).sort((a, b) => sim.fgBy[b] - sim.fgBy[a])[0];
     if (!p) return false;
-    product = p; avail = sim.fgBy[p];
+    product = p; avail = ready(p);
   } else {
     if (sim.fgStock < trigger) return false;
     avail = sim.fgStock;
@@ -123,16 +125,18 @@ export function planForklift(sim, f) {
   f.setTask(`${pName} 출하 → ${t.id}`, [
     { go: pick },
     { wait: m.key === 'traditional' ? 8 : 5, done: () => {
-      const k = Math.min(n, product ? sim.fgBy[product] : sim.fgStock);
+      const H = sim.serials, okN = H && product ? H.shippable(product) : Infinity;   // 집는 순간 다시 확인 (그 사이 보류된 것은 두고 간다)
+      const k = Math.min(n, product ? sim.fgBy[product] : sim.fgStock, okN);
+      if (k < n) t.reserved = Math.max(0, (t.reserved ?? 0) - (n - k));   // 예약보다 적게 실으면 남는 예약을 바로 푼다 (트럭이 예약에 묶여 서지 않게)
       if (product) sim.fgBy[product] -= k;
-      sim.fgStock -= k; f.load = { type: 'fg', n: k, product };
+      sim.fgStock -= k; f.load = { type: 'fg', n: k, product, lot: H && product ? H.take(product, k, f.id) : null };   // 팔레트 SSCC ↔ 시리얼 묶음
     } },
     { go: dock },
     { go: inside, via: [] },
     { wait: m.key === 'traditional' ? 6 : 4, done: () => {
-      const k = f.load?.n ?? 0; f.load = null;
-      if (t.state === 'dock') yard.unload(t, k, product);
-      else { sim.fgStock += k; if (product) sim.fgBy[product] += k; t.reserved = 0; }   // 그 사이 트럭이 떠났으면 되돌린다
+      const k = f.load?.n ?? 0, lot = f.load?.lot; f.load = null;
+      if (t.state === 'dock') { sim.serials?.ship(lot, t); yard.unload(t, k, product); }   // 팔레트 출하 기록을 먼저 — 마지막 팔레트로 트럭이 차면 unload가 FAC 출고 확정(실린 시리얼 포함)을 낸다
+      else { sim.fgStock += k; if (product) sim.fgBy[product] += k; t.reserved = 0; sim.serials?.unload(lot); }   // 그 사이 트럭이 떠났으면 되돌린다
     } },
     { go: dock, via: [], rev: true },
     // 복귀: 도크 앞 줄을 따라 곧장 옆의 대기 자리(두 출하 도크 사이)로 — 통로까지 내려갔다 올라오지 않고 지나쳤다 되돌아오지도 않는다 (서면 벽 쪽을 보고 주차)

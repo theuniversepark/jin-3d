@@ -12,12 +12,19 @@ export const INBOUND = {
   // 입고 지게차 운행 구간(확장동 왼쪽 벽을 따라 남북으로 난 진한 회색 통로): 도크 ↔ 물류 선반 서쪽 면(입고 칸) ↔ 대기 주차 칸.
   // 물류 선반은 이 통로와 자재 투입존 왼쪽 로봇 통로(x −35.5) 사이에 남북으로 서 있는 통과형 선반 —
   // 지게차는 서쪽 면에 넣고, AGV·휴머노이드는 동쪽 면에서 꺼낸다. 다른 이동체 경로는 이 통로를 지나지 않는다
-  zone: { x0: -50.8, z0: -18.6, x1: -46.4, z1: 4.3 },
+  zone: { x0: -50.8, z0: -18.6, x1: -46.9, z1: 4.3 },   // 동쪽 끝 = 미니로드 서쪽 면(x −46.75) 바로 앞
   park: { x: -48.6, z: -17.6, heading: Math.PI },   // 입고 지게차 대기 주차 (통로 북쪽 끝 뒷벽 쪽, 북쪽을 향해 반듯이)
 };
-// 물류 선반 위치: 입고 지게차 통로(x −50.8 ~ −46.4)와 로봇 통로(x −35.5) 사이, 남북으로 (길이 10.2m · 깊이 2.1m)
-// 서쪽 면(x −46.25) = 지게차 입고, 동쪽 면(x −44.15) = AGV·휴머노이드 출고
-export const WH_RACK = { x: -45.2, z: -1.6 };
+// 물류 선반 위치: 입고 지게차 통로(x −50.8 ~ −46.9)와 로봇 통로(x −35.5) 사이, 남북으로 (길이 10.2m · 깊이 2.6m)
+// 미니로드 AS/RS(SSI Miniload형): 서쪽 A열 · 동쪽 B열 두 줄 선반(깊이 0.8m, 4단) 사이 1.0m 통로를 스태커 크레인이 오가며 토트를 옮긴다
+// 서쪽 면(x −46.75) 바닥 = 입고 팔레트 받침(지게차가 내려놓음), 동쪽 면(x −44.15 — 이전 통과형 선반과 같은 자리) 바닥 = 출고 이재 컨베이어(AGV에 자동 적재 · 휴머노이드 피킹)
+// 구간 2개 · 크레인 2대: 북쪽 절반 = 미니로드 ①(부품) · 남쪽 절반 = 미니로드 ②(원자재) — 구간마다 6베이 × 2줄 × 4단 = 토트 48칸
+export const WH_RACK = { x: -45.45, z: -1.6 };
+// 미니로드 치수 (선반 중심 기준 로컬 x: A열 −0.9 · 통로 0 · B열 +0.9) — lv = 저장 4단 높이, 그 아래(0 ~ 0.95m)는 입출고 컨베이어 층
+// xfer = 출고 컨베이어 → AGV 롤러 이재 시간(초): 크레인이 토트를 미리 출고 자리에 대 두므로 AGV는 서자마자 받아 간다 (지게차·사람 상차 4초)
+export const MINILOAD = { row: 0.8, aisle: 1.0, half: 1.3, lv: [1.0, 2.15, 3.3, 4.45], top: 5.7, conv: 0.5, xfer: 2 };
+// 물류 선반 품목 재고 (화면 칸 채움 · 크레인 출고 판단)
+export const stockOf = (s, key) => (key === 'raw' ? s.whRaw : key === 'parts' ? s.whParts : 0);
 // 물류 선반(자재창고 랙): 왼쪽 2열 × 3단 = 원자재 6칸, 오른쪽 2열 × 3단 = 부품 6칸. 한 칸 = 입고 팔레트 1개
 // 선반이 거의 비면(재주문점) 트럭을 발주하고, 트럭이 도착해 다시 채운다 — 채움 → 배달로 줄어듦 → 소진 직전 재입고의 순환
 export const WH = {
@@ -57,7 +64,7 @@ export class InboundYard {
       if (raw + parts === 0) raw = 1;
       const pallets = [...Array(raw).fill('raw'), ...Array(parts).fill('parts')];
       this.orders.push({ t: s.time, due: s.time + WH.lead, pallets });
-      s.erp?.purchase(this.orders.at(-1));   // Odoo: 구매오더 확정 + 입고 예정
+      s.fac?.purchase(this.orders.at(-1));   // FAC: 구매오더 확정 + 입고 예정
       s.log('plan', 'WMS 자재 발주', { obs: `창고 원자재 ${s.whRaw}개${s.partsTracked ? ` · 부품 ${s.whParts}개` : ''} (발주 포함 재주문점 미달)`, act: `공급사 트럭 1대 — 원자재 ${raw}팔레트${parts ? ` · 부품 ${parts}팔레트` : ''}` });
     }
     // 납기 도래 발주 → 트럭 출발 (공급 차질 중에는 납품 지연)
@@ -67,7 +74,7 @@ export class InboundYard {
       const t = new Truck(`입고트럭-${++this.seq}`, -111, INBOUND.roadZ - 1.5, Math.PI / 2);
       t.pallets = [...o.pallets]; t.load = t.pallets.length; t.inbound = true;
       t.go([{ x: NB - 4, z: INBOUND.roadZ - 1.5 }, { x: NB, z: INBOUND.roadZ + 3 }, { x: NB, z: INBOUND.waitZ }], 'arrive');
-      this.trucks.push(t); s.erp?.dispatched(o, t);
+      this.trucks.push(t); s.fac?.dispatched(o, t);
     }
     this.orders = this.orders.filter((o) => !o.sent);
     for (const t of this.trucks) {
@@ -88,7 +95,7 @@ export class InboundYard {
     // 다 내린 트럭은 출차 (남행 차로 → 진입로 → 서쪽)
     const d = this.docked;
     if (d && !d.pallets.length && !(d.reserved > 0)) {
-      s.erp?.receiptDone(d);   // Odoo: 입고 확정 (검수 완료)
+      s.fac?.receiptDone(d);   // FAC: 입고 확정 (검수 완료)
       d.go([{ x: SB + 3, z: INBOUND.dockZ }, { x: SB, z: INBOUND.dockZ - 5 }, { x: SB, z: INBOUND.roadZ + 1.5 }, { x: SB - 5, z: INBOUND.roadZ + 1.5 }, { x: -113, z: INBOUND.roadZ + 1.5 }], 'depart');
       this.stats.trucks++;
       s.log('ok', `${d.id} 하차 완료 · 출차`, { obs: `창고 원자재 ${s.whRaw}개${s.partsTracked ? ` · 부품 ${s.whParts}개` : ''}`, act: '입고 도크 비움' });
@@ -117,7 +124,7 @@ export function planReceiver(sim, f) {
     { wait: legacy ? 6 : 4, done: () => {
       if (type === 'raw') { sim.whRaw += WH.rawPallet; sim.inbound.stats.raw += WH.rawPallet; }
       else { sim.whParts += WH.partsPallet; sim.inbound.stats.parts += WH.partsPallet; }
-      sim.erp?.received(t, type, type === 'raw' ? WH.rawPallet : WH.partsPallet);
+      sim.fac?.received(t, type, type === 'raw' ? WH.rawPallet : WH.partsPallet);
       f.load = null;
     } },
     // 대기 주차: 통로 북쪽 끝 주차 칸 — 칸 남쪽 앞(칸 중심선)으로 갔다가 북쪽으로 곧게 들어가 반듯이 선다

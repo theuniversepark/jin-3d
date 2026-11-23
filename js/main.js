@@ -5,23 +5,29 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { Simulation, MODES, ST_LABEL } from './sim.js';
+import { Simulation, MODES, ST_LABEL, SIM_DT } from './sim.js';
+import { StepInterp } from './stepinterp.js';
 import { FactoryAgent } from './agent.js';
 import { HybridAgent, compareArchitecturesAsync } from './multiagent.js';
 import { agentStructureHTML } from './agentinfo.js';
 import { FactoryView } from './factory.js';
 import { UI } from './ui.js';
-import { LLMController } from './llm.js';
+import { LLMController, serverless, browserKeyKept } from './llm.js';
 import { LineDesigner } from './designer.js';
 import { renderConcept } from './concept.js';
-import { DataHub, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
+import { DataHub, unsTelemetry, unsEvents, unsZoneKpi, PUBLISHER_ID, WRITER_GROUP } from './datahub.js';
 import { PacketCapture } from './pcap.js';
 import { RENDER, loadBlenderAssets, applyRenderEnv, resetRenderEnv, primKey, blenderize } from './blender.js';
-import { ODOO_PRODUCTS, ODOO_LOCS } from './odoo.js';
+import { FAC_PRODUCTS, FAC_LOCS } from './fac.js';
 import { RobotCamWall, COLS as CAM_COLS } from './robotcam.js';
 import { GateView } from './gateview.js';
 import { EpisodeRecorder, buildEpisodesZip, EP_HZ, SAMPLE } from './vla.js';
 import { impactHTML, impactClick } from './impactview.js';
+import { traceHTML, traceClick, traceState } from './traceview.js';
+import { zoneDashHTML, zoneDashClick, zdState } from './zonedash.js';
+import { sensorHTML, sensorClick, sensorState } from './sensorview.js';
+import { caseFiles, allFiles } from './trace.js';
+import { EpcisStore, epcisEvent, epcisDocument } from './epcis.js';
 import { CCTVRecorder, CameraClip, saveSnapshot, REC as CCTV_REC } from './cctvrec.js';
 import { RobotVideoRecorder, downloadVideos } from './robotrec.js';
 import { buildAiosZip, HEADS as AIOS_HEADS, FEATURES as AIOS_FEATURES, SAMPLE_S as AIOS_SAMPLE_S, CHUNK as AIOS_CHUNK, TRAIN_MIN as AIOS_TRAIN_MIN } from './aios.js';
@@ -32,8 +38,14 @@ import { AI_MODELS } from './cctv.js';
 import { NR, STACK, LAT, UE_LOAD, maxRobots } from './net5g.js';
 import { setAasVersion, AAS_VERSIONS } from './aas.js';
 import { OrchView } from './orchview.js';
+import { UnsNamespace, unsPostVia } from './uns.js';
+import { FieldPops } from './fieldpop.js';
 import { FLEET_RANGE, FLEET_NAMES, SHARED_SPACE_LIMIT, fleetAdvice, predictFleet, predictFleetCounts } from './fleet.js';
 import { SEC_LAYERS, SEC_KPI, SEC_THREATS, SEC_LANES, SEC_STAGES, SEC_ACTORS } from './security.js';
+import { PerfMeter } from './perf.js';
+import { Tori } from './tori.js';
+import { unsFocus } from './unsview.js';
+import { withCull } from './viewcull.js';
 import { DEFAULT_LINE, normalizeLine, cloneLine, zoneLine, isZone, ZONE_CELLS, ZONE_PRODUCTS, ZONE_MIXES, ZONE_NAME } from './line.js';
 
 // ── 렌더러 ─────────────────────────────
@@ -49,6 +61,8 @@ const makeRenderer = () => {
   return r;
 };
 let renderer = makeRenderer();
+const perf = new PerfMeter(() => renderer);   // 구간별 성능 표시 — P 키 (js/perf.js)
+const mainCull = { on: true };   // 메인 화면 작은 물체 빼기 (끄면 비교 확인용 · window.__twin.mainCull)
 host.prepend(renderer.domElement);
 
 const labelRenderer = new CSS2DRenderer();
@@ -98,6 +112,48 @@ makeComposer();
 // ── 시뮬레이션 ─────────────────────────────
 const view = new FactoryView(scene);
 const hub = new DataHub();
+// ── EPCIS 저장소 (GS1 EPCIS 2.0) ─────────────────
+// 시리얼 서비스(js/serial.js) 이벤트 → 표준 이벤트(js/epcis.js) → 5초마다 앱 내장 저장소(서버 /api/epcis/v1 — 파일에 계속 보관 · 외부 저장소 전송 선택)
+// 서버가 없는 화면(웹 버전 · 공유 페이지)은 브라우저 메모리 저장소 (새로고침 시 초기화). 조회는 품질 추적 「🏷 시리얼·출하」
+// 시리얼 번호는 단계를 바꿔 시뮬레이션을 새로 만들어도 이어진다 · 웹 버전은 이 화면의 카운터(SERIAL_SEQ 공유) · 앱은 서버가 예약해 준 번호 범위 안에서만 발행한다 (epcisAttach — 재사용 금지)
+const SERIAL_SEQ = {}, WIP_SEQ = {}, SHIP_CTR = { pal: 0, ship: 0 }, epcisLocal = new EpcisStore({ max: 60000 });
+const epcisSt = { retry: [], sent: 0, failed: 0, lastError: null, server: null, busy: false, dropped: 0 };
+function epcisCollect() {
+  const H = sim?.serials; if (!H) return;
+  const evs = H.drain().map((e) => epcisEvent(H, e, (t) => hub.iso(t))).filter(Boolean);   // 지금 실행의 기준 시계로 (단계 전환 전에 먼저 거둔다)
+  if (!evs.length) return;
+  if (hub.noServer) { epcisLocal.capture(evs); epcisSt.sent += evs.length; return; }
+  epcisSt.retry.push(...evs); if (epcisSt.retry.length > 50000) { const n = epcisSt.retry.length - 50000; epcisSt.dropped += n; epcisSt.retry.splice(0, n); }   // 서버가 오래 안 되면 오래된 것부터 버린다 — 건수는 화면에 보인다
+}
+async function epcisPump() {
+  epcisCollect();
+  if (hub.noServer || epcisSt.busy || !epcisSt.retry.length) return;
+  epcisSt.busy = true; const batch = epcisSt.retry.slice(0, 2000);
+  try {
+    const r = await fetch('/api/epcis/v1/capture', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(epcisDocument(batch, hub.iso())) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    epcisSt.retry.splice(0, batch.length); epcisSt.sent += batch.length; epcisSt.lastError = null;
+  } catch (e) { epcisSt.failed++; epcisSt.lastError = e.message; }   // 서버가 잠시 안 되면 다음 주기에 다시 (eventID로 중복 없이)
+  finally { epcisSt.busy = false; }
+}
+setInterval(() => { epcisPump(); }, 5000);
+function epcisAttach() {
+  const H = sim?.serials; if (!H) return;
+  H.wipSeq = WIP_SEQ; H.feedOn = true;
+  if (hub.noServer) { H.serSeq = SERIAL_SEQ; H.ctr = SHIP_CTR; return; }   // 웹 버전: 브라우저 메모리 저장소 기준 — 이 화면의 카운터를 이어 쓴다 (팔레트 SSCC · 출하 ID도)
+  // 앱: 시리얼 · 팔레트 SSCC · 출하 ID 번호는 서버가 예약해 준 범위에서만 (js/serialalloc.js · /api/epcis/v1/serial-reserve) — 빈 카운터를 먼저 붙이면 「오늘 마지막 번호」 응답 전에 1번부터 다시 발행한다.
+  //   범위를 받기 전 · 요청 실패 중에는 발행을 보류했다가 받으면 이어서 발행 · 화면이 여럿(탭 · 앱 두 개)이어도 범위가 겹치지 않는다. 배정기는 hub에 두어 단계 전환 · 리셋해도 이어 쓴다
+  H.useAllocator(hub.serialAlloc ??= H.serverAllocator((...a) => fetch(...a)));
+}
+// 조회: 앱 = 내장 저장소 · 웹 = 브라우저 메모리
+async function epcisQuery(kind, key) {
+  if (hub.noServer) return kind === 'trace' ? { events: epcisLocal.trace(key) } : epcisLocal.shipmentOf(key);
+  epcisCollect(); await epcisPump();   // 방금 생긴 이벤트까지 보낸 뒤 조회
+  const r = await fetch(kind === 'trace' ? `/api/epcis/v1/trace?epc=${encodeURIComponent(key)}` : `/api/epcis/v1/shipment?id=${encodeURIComponent(key)}`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+async function epcisServerStatus() { if (hub.noServer) return; try { epcisSt.server = await (await fetch('/api/epcis/v1/status')).json(); } catch { epcisSt.server = null; } }
 const camWall = new RobotCamWall(scene, renderer);   // 로봇 비전 관제 디스플레이 (피지컬AI 단계)
 const cctvView = new CCTVView(scene, () => camWall.renderer, scene);   // CCTV 전광판 · CCTV 영상 창
 const cctvRec = new CCTVRecorder(cctvView, () => camWall.renderer), cctvClip = new CameraClip();
@@ -122,7 +178,7 @@ document.getElementById('log').addEventListener('click', (e) => {
 llm.onMix = (key) => { currentLine = lines.zone = { ...currentLine, mix: key }; saveLines(); renderZoneCard(); designer?.sync(); };
 let sim, agent, agentArch = 'single';   // 에이전트 구조: single · hybrid (혼합형 다중 에이전트)
 const archPref = {};   // 단계별 운영자 선택 (없으면 MODES[단계].agentArch — 피지컬AI 기본 혼합형)
-let modeKey = 'smart', speed = 3, running = true, labelsOn = true;
+let modeKey = 'dark', speed = 3, running = true, labelsOn = false;   // 라벨은 꺼진 채 시작 (첫 화면을 깔끔하게 · 하단 「🏷 라벨」로 켬)
 const SEED = 20261001;
 const fleetCfg = { amr: { scale: 1, paused: false, count: null }, agv: { scale: 1, paused: false, count: null } };   // count: 운행 대수 (null = 설치 대수 전부)   // AMR·AGV 관제 설정 (단계·라인을 바꿔도 유지)
 
@@ -185,17 +241,56 @@ function applyLook() {
   document.body.dataset.mode = modeKey;
 }
 
+// ── 작은 부품은 그림자를 드리우지 않음 ─────────────────
+// 반지름 5cm 미만(볼트·LED·라벨 등)은 그림자 지도 해상도보다 작아 화면에 거의 안 남는데 프레임마다 그림자 지도를 그릴 때 그만큼 그리기 호출이 든다.
+// 전환·Blender 교체 뒤, 그리고 운영 중 새로 생긴 모델은 1.5초마다 함께 정리
+const SHADOW_MIN_R = 0.05;
+function trimShadows(root) {
+  root.updateMatrixWorld();
+  root.traverse((o) => {
+    if (!o.isMesh || !o.castShadow || !o.geometry) return;
+    const g = o.geometry; if (!g.boundingSphere) g.computeBoundingSphere();
+    const e = o.matrixWorld.elements, k = Math.max(Math.hypot(e[0], e[1], e[2]), Math.hypot(e[4], e[5], e[6]), Math.hypot(e[8], e[9], e[10]));
+    if ((g.boundingSphere?.radius ?? 1) * k < SHADOW_MIN_R) o.castShadow = false;
+  });
+}
+
+// ── 모드·라인·렌더 전환 때 GPU 자원 정리 ─────────────────
+// 씬을 다시 만들면 예전 객체는 씬에서 빠지지만 형상·재질·텍스처의 GPU 메모리는 남는다(three.js는 dispose 해야 해제) — 전환마다 수천 개씩 쌓여 오래 쓰면 앱이 죽을 수 있다
+// 전환 전 씬이 쓰던 자원 중 새 씬에서 안 쓰는 것만 해제한다. 공유 자원(Blender 원본·도형 라이브러리)은 새 씬이 쓰므로 그대로이고,
+// 해제한 자원이 나중에 다시 쓰이면 three.js가 자동으로 다시 올린다. 렌더 타깃 텍스처(카메라 화면·환경맵)는 렌더 타깃 소유라 건드리지 않는다
+function gpuRefs(root) {
+  const g = new Set(), m = new Set(), t = new Set();
+  root.traverse((o) => {
+    if (o.geometry) g.add(o.geometry);
+    for (const mat of [o.material].flat()) if (mat) { m.add(mat); for (const v of Object.values(mat)) if (v?.isTexture) t.add(v); for (const u of Object.values(mat.uniforms ?? {})) if (u?.value?.isTexture) t.add(u.value); }
+  });
+  return { g, m, t };
+}
+function releaseOrphans(prev) {
+  if (!prev) return 0;
+  const live = gpuRefs(scene); let n = 0;
+  for (const x of prev.g) if (!live.g.has(x)) { x.dispose(); n++; }
+  for (const x of prev.m) if (!live.m.has(x)) { x.dispose(); n++; }
+  for (const x of prev.t) if (!live.t.has(x) && !x.isRenderTargetTexture && !x.userData?.keep) { x.dispose(); n++; }
+  return n;
+}
+
 // ── 렌더: Blender 모델(기본) ─────────────────
 // Blender에서 모델링한 glTF 모델로 그린다. setRender('3d')는 개발 확인용(window.__twin) — 화면만 다시 만들고 시뮬레이션은 그대로 이어감
 function setRender(style) {
   RENDER.style = style; document.body.dataset.render = style;
   if (!sim) return;
+  const prev = gpuRefs(scene);
   view.setup(sim, labelsOn, changedIds); view.selected = null; view.selectRobot(null);
   camWall.setup(sim, view); cctvView.setup(sim, view);
-  applyLook(); RENDER.swapped = 0; blenderize(scene);
+  applyLook(); RENDER.swapped = 0; blenderize(scene); trimShadows(scene); releaseOrphans(prev);
 }
 
+let toriRun = null;   // 공장이 새로 시작됐다고 토리에 알림 (토리는 아래에서 만든다 — 그 전의 첫 start()에서는 없음)
 function start(key) {
+  const prev = sim ? gpuRefs(scene) : null;   // 전환 전 GPU 자원 (아래 releaseOrphans)
+  epcisCollect();   // 이전 실행의 EPCIS 이벤트를 그 실행 기준 시계로 먼저 거둔다
   modeKey = key;
   sim = new Simulation(key, SEED, { line: currentLine });
   applyFleetCfg();   // AMR·AGV 관제 설정은 단계·라인을 바꿔도 유지
@@ -205,6 +300,10 @@ function start(key) {
   view.setup(sim, labelsOn, changedIds);
   view.selected = null;
   hub.reset(sim, view);
+  epcisAttach();   // 시리얼 번호 이어 받기 · EPCIS 이벤트 대기열 켜기
+  if (sim.qcomm) { sim.qcomm.setEpoch(hub.epochMs); sim.qcomm.mirror = () => hub.pcap; sim.qcomm.live = !hub.noServer; sim.qcomm.runId = hub.runId; }   // 품질 통신: 기준 시계 · 전체 캡처에 함께 기록 · 실제 RCA 서버(앱 서버)에도 전송
+  if (sim.sensors) { sim.sensors.setEpoch(hub.epochMs); sim.sensors.run = hub.runId; sim.sensors.publish = !hub.noServer; }   // 센서망: 같은 기준 시계 · 서버가 있으면 공장 중앙 MQTT로 발행 → 센서 서버
+  buildSensor3d();
   camWall.setup(sim, view);
   cctvView.setup(sim, view);
   epRec.attach(sim);
@@ -214,7 +313,7 @@ function start(key) {
   window.__cctvRefresh?.();
   window.__netRefresh?.();   // 라인·단계가 바뀌면 CCTV 배치 요약도 다시
   if (typeof designer !== 'undefined' && designer) designer.render();   // AMMR 선택 가능 여부가 단계마다 다르다
-  applyLook(); blenderize(scene);
+  applyLook(); blenderize(scene); trimShadows(scene); releaseOrphans(prev);
   llm.attach(sim, agent);
   ui.reset(sim, agent);
   ui.hideDetail();
@@ -222,6 +321,7 @@ function start(key) {
     obs: key === 'traditional' ? '작업자 중심 수동 운영, 고정 컨베이어·지게차, 사후보전 체계' : key === 'smart' ? `양쪽 협동로봇 셀·AMR 운반, IoT·MES 연결, 현장 인원 ${sim.peopleOnSite()}명 (출하 지게차 운전 포함)` : '무인 운영 — 휴머노이드 4대(정비 2·부품 보충 2), 사족보행 순찰 2대, AMR·AGV, 고효율 LED 조명',
   });
   renderZoneCard();
+  toriRun?.();   // 안내 중이면 옛 공장의 이벤트 · 제안 · 망 상태를 버리고 멈추거나 새 공장에서 다시 구성 (js/tori.js simChanged)
 }
 
 // ── 정밀조립Zone 카드 (왼쪽 패널 위) ─────────────────
@@ -404,12 +504,20 @@ function renderArch() {
 document.getElementById('engineSeg').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
   llm.setEnabled(b.dataset.engine === 'llm');
-  sim.log('info', llm.enabled ? '대화 기반으로 전환' : '추론 기반으로 전환', {
-    obs: llm.enabled ? '추론 기반 에이전트가 계속 운영하고, 입력창 지시를 해석해 공정에 반영' : '추론 기반 에이전트가 모든 판단을 수행',
+  sim.log('info', llm.enabled ? '대화 기반으로 전환' : '정책 기반으로 전환', {
+    obs: llm.enabled ? '정책 기반 에이전트가 계속 운영하고, 입력창 지시를 해석해 공정에 반영' : '정책 기반 에이전트가 모든 판단을 수행',
     act: llm.enabled ? `해석: 내장 해석기${llm.available ? ' + Agent 보조' : ''}` : '',
   });
 });
 document.getElementById('pauseThink').addEventListener('change', (e) => { llm.pauseWhileThinking = e.target.checked; });
+// 오른쪽 FACOS · 공장 운영 머리를 누르면 공장 요약 칩 · 존 에이전트 설정을 접고 펼친다 (이 브라우저에 기억 — 로그·입력창은 그대로)
+{
+  const head = document.getElementById('facosHead'), panel = document.getElementById('agentPanel'), KEY = 'jin3d.facosFolded';
+  const set = (f) => { panel.classList.toggle('facos-folded', f); head.setAttribute('aria-expanded', String(!f)); try { localStorage.setItem(KEY, f ? '1' : '0'); } catch { /* 저장소 없음 */ } };
+  try { set(localStorage.getItem(KEY) === '1'); } catch { /* 저장소 없음 */ }
+  head.addEventListener('click', () => set(!panel.classList.contains('facos-folded')));
+  head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); set(!panel.classList.contains('facos-folded')); } });
+}
 document.getElementById('chatForm').addEventListener('submit', (e) => {
   e.preventDefault();
   const input = document.getElementById('chatInput');
@@ -435,74 +543,110 @@ const FORMATS = [
   ['csv', 'CSV', '시계열·이벤트 긴 형식 (타임스탬프·자산·항목·값·단위)'],
   ['aml', 'AutomationML', 'CAEX 3.0 공장 계층 + AAS id + 최신 값, CSV 시계열 참조'],
 ];
-// ── Fac ERP 연동 창: 발주 · 재고 · 설비보전 + 실시간 Fac 연결 ─────────────────
-const odooModal = document.getElementById('odooModal'), odooBody = document.getElementById('odooBody');
-let odooTab = 'po', odooTimer = null, odooSrv = null, odooNote = '', odooSyncT = 0, odooBusy = false;
+// ── FAC 창 (FACOS 업무 기록): 발주 · 재고 · 설비보전 + FAC API ─────────────────
+const facModal = document.getElementById('facModal'), facBody = document.getElementById('facBody');
+let facTab = 'po', facTimer = null, facSrv = null, facNote = '', facPushT = 0, facBusy = false;
 const won = (v) => `${Math.round(v).toLocaleString('ko-KR')}원`;
 const fclk = (tt) => tt == null ? '-' : [3600, 60, 1].map((d, i) => String(Math.floor((Math.floor(tt) + 8 * 3600) / d) % (i ? 60 : 24)).padStart(2, '0')).join(':');
-const pcode = (k) => ODOO_PRODUCTS[k]?.code ?? k, lname = (k) => ODOO_LOCS[k]?.name ?? k;
-async function odooStatus() { if (hub.noServer) { odooSrv = null; return; } try { odooSrv = await (await fetch('/api/odoo/status')).json(); } catch { odooSrv = null; } }
-function renderOdoo() {
-  const E = sim.erp;
-  if (!E?.on) { setHTML(odooBody, '<div class="dh-note">레거시 공장은 ERP 연동이 없습니다 (수기 발주·장부). 자동화·피지컬AI 단계에서 Fac과 연동합니다.</div>'); return; }
+const pcode = (k) => FAC_PRODUCTS[k]?.code ?? k, lname = (k) => FAC_LOCS[k]?.name ?? k;
+async function facStatus() { if (hub.noServer) { facSrv = null; return; } try { facSrv = await (await fetch('/api/fac/status')).json(); } catch { facSrv = null; } try { erpSrv = await (await fetch('/api/erpnext/v1/status')).json(); } catch { erpSrv = null; } }
+// ── ERPNext 연동 탭 (server/erpnext-bridge.mjs) — 앱 전용 · 선택 ─────────────────
+let erpSrv = null, erpNote = '';
+const erpSlug = (dt) => dt.toLowerCase().replace(/ /g, '-');
+function erpHtml() {
+  if (hub.noServer) return '<div class="dh-note">ERPNext 연동은 맥 앱 · 윈도우 앱 · npm start에서만 씁니다 (웹 버전·공유 페이지는 서버가 없어 외부 ERP로 보내지 않습니다). 앱에서는 FAC 기록(구매오더·입고·재고 이동·생산 입고·출하·정비요청)과 공장 오더(작업지시)를 오픈소스 ERP인 ERPNext에 실제 전표로 남길 수 있습니다.</div>';
+  const v = erpSrv, n = (x) => Math.round(x ?? 0).toLocaleString('ko-KR'), P = v?.prepare, link = (d) => (v?.url ? `<a href="${escH(v.url)}/app/${erpSlug(d.doctype)}/${encodeURIComponent(d.name)}" target="_blank" rel="noopener">${escH(d.name)}</a>` : escH(d.name));
+  const DT_KO = { 'Purchase Order': '구매오더', 'Purchase Receipt': '입고', 'Stock Entry': '재고 전표', 'Delivery Note': '출하', 'Work Order': '작업지시', Asset: '설비 자산', 'Asset Repair': '긴급 수리', 'Asset Maintenance Log': '예방정비 기록', 'Quality Inspection': '품질검사', 'Non Conformance': '부적합', 'Quality Action': '품질 조치' };
+  return `<div class="erp-form">
+      <label>ERPNext 주소<input id="erpUrl" class="ep-in" placeholder="예: http://127.0.0.1:8010 — 사내·클라우드 ERPNext 주소" value="${escH(v?.url ?? '')}" /></label>
+      <label>API 키<input id="erpKey" class="ep-in" type="password" autocomplete="off" placeholder="${v?.apiKey ? '저장됨 — 바꿀 때만 입력' : 'ERPNext 사용자 설정 → API Access → Generate Keys'}" /></label>
+      <label>비밀 키<input id="erpSecret" class="ep-in" type="password" autocomplete="off" placeholder="${v?.apiSecret ? '저장됨 — 바꿀 때만 입력' : 'API Secret (발급 때 한 번만 보임)'}" /></label>
+      <label>회사 (선택)<input id="erpCo" class="ep-in" placeholder="비우면 첫 회사 · 초기 설정 전이면 Jin-3D Testbed" value="${escH(v?.company ?? '')}" /></label>
+      <div class="erp-btns"><button class="ep-btn" data-erp="test">연결 시험</button><button class="ep-btn" data-erp="prepare">ERPNext 준비</button>
+        <label class="chk"><input type="checkbox" id="erpOn" ${v?.enabled ? 'checked' : ''}/> 연동 켜기</label><label class="chk" title="출하 전표에 트럭 · 팔레트 SSCC · 시리얼 목록(EPCIS 저장소)을 함께 적습니다"><input type="checkbox" id="erpSer" ${v?.serials ? 'checked' : ''}/> 출하 전표에 시리얼</label>
+        <button class="ep-btn" data-erp="save">저장</button></div></div>
+    <div class="od-live"><div><b>상태</b> · ${!v ? '확인 중…' : `${v.prepared ? `<b class="ok">준비 완료</b> ${escH(v.prepared.company)} (${escH(v.prepared.at.slice(0, 16).replace('T', ' '))} UTC)` : '<b class="bad">준비 전</b> — 「연결 시험」 → 「ERPNext 준비」'} · 연동 ${v.enabled ? '<b class="ok">켜짐</b>' : '꺼짐'} · 보냄 ${n(v.sent)} · 대기 ${n(v.queued)} · 건너뜀 ${n(v.skipped)}${v.lastError ? ` · <b class="bad">${escH(v.lastError)}</b>${v.retryMs ? ` (${Math.ceil(v.retryMs / 1000)}초 뒤 다시)` : ''}` : ''}`}</div>
+      ${P ? `<div class="row">ERPNext 준비: ${P.running ? `진행 중 — ${escH(P.step)} (${P.done}/10)` : P.ok ? '완료 — 회사 · 품목 · 창고 · 거래처 · BOM · 작업장 · 설비 자산 분류 · 정비팀 · 품질 절차·검사 항목 · mf_ref 필드' : `<b class="bad">실패 — ${escH(P.error ?? '')}</b>`}</div>` : ''}
+      ${erpNote ? `<div class="row">${escH(erpNote)}</div>` : ''}</div>
+    ${v?.workOrders?.length ? `<table class="od-tbl" style="margin-top:8px"><tr><th>공장 오더</th><th>제품</th><th>작업지시</th><th>계획</th><th>생산</th><th>상태</th></tr>${v.workOrders.slice().reverse().map((w) => `<tr><td>${escH(w.order)}</td><td>${pcode(w.product)}</td><td>${link({ doctype: 'Work Order', name: w.name })}</td><td>${n(w.qty)}</td><td>${n(w.produced)}</td><td>${w.stopped ? (w.produced >= w.qty ? '완료' : '중지 (오더 종료)') : w.produced >= w.qty ? '완료' : '진행'}</td></tr>`).join('')}</table>` : ''}
+    <table class="od-tbl" style="margin-top:8px"><tr><th>시각 (UTC)</th><th>ERPNext 문서</th><th>번호</th><th>FAC 근거</th><th>내용</th></tr>${(v?.docs ?? []).map((d) => `<tr><td>${escH(d.t.slice(11, 19))}</td><td>${DT_KO[d.doctype] ?? escH(d.doctype)}</td><td>${link(d)}</td><td><small>${escH(String(d.ref ?? '').split(':').slice(1).join(':') || d.ref)}</small></td><td>${escH(d.what)}</td></tr>`).join('') || '<tr><td colspan="5">아직 보낸 전표가 없습니다</td></tr>'}</table>
+    ${v?.failures?.length ? `<table class="od-tbl" style="margin-top:8px"><tr><th>건너뛴 전표</th><th>사유</th></tr>${v.failures.map((f) => `<tr><td>${escH(f.type)} ${escH(f.key ?? '')}</td><td>${escH(f.error)}</td></tr>`).join('')}</table>` : ''}
+    <div class="cmp-note">• 대응: 구매오더 → Purchase Order · 입고 → Purchase Receipt · 내부 이동 → Stock Entry(이동) · 생산 입고 → Stock Entry(Manufacture, BOM 소비 + 완제품, 정밀조립은 작업지시에 배분) · 출고 → Delivery Note · 공장 오더 → Work Order(제품별) · 정비요청 → Asset Repair(긴급) / Asset Maintenance Log(예방)<br>
+    • 품질: 출하 전 샘플 재검(검사·포장셀) → Quality Inspection(OK · NG) · 샘플 NG → Non Conformance + 처분 판정(MRB) Quality Action · 폐기 → Stock Entry(Material Issue) · 체결 전수 검사 NG → Non Conformance · 8D → Quality Action(D0~D8)<br>
+    • 문서마다 mf_ref(운전 ID:FAC 번호)로 중복 없이 · ERPNext가 꺼져 있으면 대기했다가 다시 · 검증 오류 전표는 건너뛰고 사유 기록 · 시연용 설정: 음수 재고 허용(시뮬레이션 전표 단위 차이 흡수) · 키는 이 PC 데이터 폴더에만 (화면·응답에 나오지 않음)</div>`;
+}
+function renderFac() {
+  const E = sim.fac;
+  if (!E?.on) { setHTML(facBody, '<div class="dh-note">레거시 공장은 FAC 기록이 없습니다 (수기 발주·장부). 자동화·피지컬AI 단계에서 FAC이 발주·재고·설비보전을 기록합니다.</div>'); return; }
   const S = E.stats(), Q = E.quant, n = (v) => Math.round(v).toLocaleString('ko-KR');
   const st = (x) => `<span class="od-st ${x === 'done' || x === 'purchase' ? 'done' : x === 'new' ? 'new' : 'wait'}">${{ done: '완료', assigned: '준비됨', purchase: '구매오더', progress: '진행 중', new: '신규' }[x] ?? x}</span>`;
-  const tabs = { po: `🧾 발주 (구매오더 ${S.po})`, stock: `📦 재고 (전표 ${E.db.picking.length})`, mr: `🔧 설비보전 (정비요청 ${S.mr})`, live: '🔗 실시간 Fac 연결', log: '📜 연동 로그' };
+  const tabs = { po: `🧾 발주 (구매오더 ${S.po})`, stock: `📦 재고 (전표 ${E.db.picking.length})`, mr: `🔧 설비보전 (정비요청 ${S.mr})`, api: '🔌 FAC API', erp: '🏭 ERPNext 연동', log: '📜 기록 로그' };
   let body = '';
-  if (odooTab === 'po') body = `<table class="od-tbl"><tr><th>구매오더</th><th>공급사</th><th>주문 시각</th><th>품목 (주문 / 입고)</th><th>금액</th><th>입고 전표</th><th>트럭</th><th>상태</th></tr>
+  if (facTab === 'po') body = `<table class="od-tbl"><tr><th>구매오더</th><th>공급사</th><th>주문 시각</th><th>품목 (주문 / 입고)</th><th>금액</th><th>입고 전표</th><th>트럭</th><th>상태</th></tr>
     ${E.db.po.slice(0, 40).map((p) => `<tr><td>${p.name}</td><td>${escH(p.partner)}</td><td>${fclk(p.date_order)}</td><td>${p.lines.map((l) => `${pcode(l.product)} ${n(l.qty)} / ${n(l.received)}`).join('<br>')}</td><td>${won(p.amount)}</td><td>${p.receipt}</td><td>${p.truck ?? '발주됨'}</td><td>${p.received ? st('done') : st('purchase')}</td></tr>`).join('') || '<tr><td colspan="8">아직 구매오더가 없습니다 — 물류 선반 재고가 재주문점 아래로 내려가면 WMS가 발주합니다</td></tr>'}</table>
-    <div class="cmp-note">재주문 규칙(stock.warehouse.orderpoint): ${E.orderpoints.map((o) => `${pcode(o.product)} @ ${lname(o.location)} 최소 ${n(o.min)} · 최대 ${n(o.max)}`).join(' / ')} — 재고 + 발주분이 최소 아래면 최대까지 발주 (트럭 4팔레트 한도)</div>`;
-  else if (odooTab === 'stock') body = `<table class="od-tbl"><tr><th>로케이션</th>${Object.keys(ODOO_PRODUCTS).map((k) => `<th>${pcode(k)}</th>`).join('')}</tr>
-    ${['rackRaw', 'rackParts', 'feeder', 'cells', 'output', 'customer'].map((k) => `<tr><td>${lname(k)}</td>${Object.keys(ODOO_PRODUCTS).map((p) => `<td>${Q[k][p] ? n(Q[k][p]) : '·'}</td>`).join('')}</tr>`).join('')}</table>
+    <div class="cmp-note">재주문 규칙(fac.orderpoint): ${E.orderpoints.map((o) => `${pcode(o.product)} @ ${lname(o.location)} 최소 ${n(o.min)} · 최대 ${n(o.max)}`).join(' / ')} — 재고 + 발주분이 최소 아래면 최대까지 발주 (트럭 4팔레트 한도)</div>`;
+  else if (facTab === 'stock') body = `<table class="od-tbl"><tr><th>로케이션</th>${Object.keys(FAC_PRODUCTS).map((k) => `<th>${pcode(k)}</th>`).join('')}</tr>
+    ${['rackRaw', 'rackParts', 'feeder', 'cells', 'output', 'customer'].map((k) => `<tr><td>${lname(k)}</td>${Object.keys(FAC_PRODUCTS).map((p) => `<td>${Q[k][p] ? n(Q[k][p]) : '·'}</td>`).join('')}</tr>`).join('')}</table>
     <table class="od-tbl" style="margin-top:8px"><tr><th>전표</th><th>유형</th><th>근거</th><th>품목</th><th>출발 → 도착</th><th>시각</th><th>상태</th></tr>
     ${E.db.picking.slice(0, 40).map((p) => `<tr><td>${p.name}</td><td>${{ incoming: '입고', internal: '내부 이동', production: '생산 입고', outgoing: '출고' }[p.type]}</td><td>${escH(p.origin ?? '')}</td><td>${p.lines.map((l) => `${pcode(l.product)} ${n(l.done)}${l.qty !== l.done ? ` / ${n(l.qty)}` : ''}${l.trips ? ` (${l.trips}회)` : ''}`).join('<br>')}</td><td>${lname(p.lines[0]?.from ?? p.from)} → ${lname(p.lines[0]?.to ?? p.to)}</td><td>${fclk(p.done ?? p.created)}</td><td>${st(p.state)}</td></tr>`).join('')}</table>`;
-  else if (odooTab === 'mr') body = `<table class="od-tbl"><tr><th>정비요청</th><th>설비 (일련번호)</th><th>유형</th><th>요청</th><th>담당</th><th>소요</th><th>단계</th><th>내용</th></tr>
+  else if (facTab === 'mr') body = `<table class="od-tbl"><tr><th>정비요청</th><th>설비 (일련번호)</th><th>유형</th><th>요청</th><th>담당</th><th>소요</th><th>단계</th><th>내용</th></tr>
     ${E.db.mr.slice(0, 40).map((m) => `<tr><td>${m.ref}</td><td>${escH(m.equipmentName)} (${m.equipment})</td><td>${m.type === 'corrective' ? '긴급 (고장)' : '예방'}</td><td>${fclk(m.request_date)}</td><td>${m.tech ?? '-'}</td><td>${m.stage === 'done' ? `${Math.round(m.duration * 60)}분` : '-'}</td><td>${st(m.stage)}</td><td>${escH(m.description)}</td></tr>`).join('') || '<tr><td colspan="8">정비요청이 없습니다</td></tr>'}</table>
     <div class="cmp-note">설비 ${S.equipment}대 등록 (셀·셀 로봇·운반 AMR·AGV·지게차·휴머노이드·사족보행·드론, 일련번호 = 설비 고유 ID). 정비요청이 많은 설비: ${E.db.equipment.filter((e) => e.requests).sort((a, b) => b.requests - a.requests).slice(0, 4).map((e) => `${e.name} ${e.requests}건 (${Math.round(e.downtime * 60)}분)`).join(' · ') || '-'}</div>`;
-  else if (odooTab === 'live') {
-    const v = odooSrv;
-    body = hub.noServer ? '<div class="dh-note">웹·공유 페이지에서는 서버가 없어 실시간 Fac 연동을 쓸 수 없습니다 — 시뮬레이션 Fac(내장)으로 기록합니다. 맥 앱이나 npm start로 실행하세요.</div>'
-      : `<div class="od-live"><div><b>서버 게이트웨이</b> (server/odoo-gateway.mjs → Fac 서버 외부 API · Odoo 호환 JSON-RPC <code>/jsonrpc</code>) · ${v ? (v.configured ? `설정됨 — ${escH(v.url)} · DB ${escH(v.db)} · ${escH(v.user)}${v.connected ? ` · <b class="ok">연결됨</b> (서버 버전 ${escH(v.version ?? '')}, uid ${v.uid})` : ' · 미연결'}` : '<b class="bad">설정 없음</b>') : '확인 중…'}</div>
-        <div class="row"><input id="odUrl" placeholder="https://mycompany.odoo.com" value="${escH(v?.url ?? '')}"/><input id="odDb" placeholder="데이터베이스" value="${escH(v?.db ?? '')}"/><input id="odUser" placeholder="로그인 (이메일)" value="${escH(v?.user ?? '')}"/><input id="odKey" type="password" placeholder="${v?.hasKey ? 'API 키 (저장됨 — 바꿀 때만 입력)' : 'API 키'}"/><button data-od="config">설정</button></div>
-        <div class="row"><label class="chk"><input type="checkbox" id="odLive" ${E.live ? 'checked' : ''}/> 실시간 Fac으로 보내기 (2초마다 묶음 전송)</label> · 보낸 이벤트 ${n(E.sent)} · 대기 ${n(E.outbox.length)}${v ? ` · Fac 적용 ${n(v.sent)} · 실패 ${n(v.failed)}` : ''}</div>
-        ${v?.lastError ? `<div class="bad">최근 오류: ${escH(v.lastError)}</div>` : ''}${odooNote ? `<div>${escH(odooNote)}</div>` : ''}
-        ${v?.created && Object.keys(v.created).length ? `<div>Fac에 생성: ${Object.entries(v.created).map(([k, c]) => `${k} ${n(c)}`).join(' · ')}</div>` : ''}</div>
-      <div class="cmp-note">• Fac 서버에 필요한 모듈: 구매 · 재고 · 설비보전 (Odoo 16~18 호환 데이터 모델·API). API 키: Fac 사용자 설정 → 계정 보안 → API 키. 키는 서버 메모리(또는 .env의 ODOO_API_KEY)에만 두고 화면으로 돌려보내지 않습니다.<br>
-      • 처음 보낼 때 마스터 데이터(제품 4종 · 로케이션 · 공급사/고객사 · 재주문 규칙 · 설비 ${S.equipment}대 · 기초 재고)를 만들고, 이후 구매오더 확정 → 입고 검증, 내부 이동·생산 입고·출고 검증, 정비요청 생성·단계 변경을 순서대로 적용합니다. 체크하는 순간까지 쌓인 이벤트부터 보냅니다.</div>`;
-  } else body = `<table class="od-tbl"><tr><th>시각</th><th>내용</th></tr>${E.log.map((l) => `<tr><td>${fclk(l.t)}</td><td>${escH(l.text)}</td></tr>`).join('')}</table>`;
-  setHTML(odooBody, `<div class="od-grid">
+  else if (facTab === 'api') {
+    const v = facSrv, base = escH(location.origin);
+    body = hub.noServer ? '<div class="dh-note">웹·공유 페이지에서는 서버가 없어 FAC API를 열 수 없습니다 — 화면 안에서만 기록합니다. 맥 앱이나 npm start로 실행하세요.</div>'
+      : `<div class="od-live"><div><b>FAC API</b> (server/fac-api.mjs, 읽기 전용) · ${v ? (v.active && v.run === E.run ? `<b class="ok">게시 중</b> — 운전 ${escH(v.run)} · 이벤트 ${n(v.events)}건 (seq ${n(v.seq)}) · 마지막 업로드 ${escH((v.lastPush ?? '').slice(11, 19))}` : '대기 — 첫 업로드 전') : '확인 중…'}</div>
+        <div class="row">화면 → 서버 업로드: 2초마다 · 올린 이벤트 ${n(E.sent)} · 대기 ${n(E.outbox.length)}${facNote ? ` · ${escH(facNote)}` : ''}</div></div>
+      <table class="od-tbl" style="margin-top:8px"><tr><th>구분</th><th>엔드포인트</th><th>내용</th></tr>
+        <tr><td style="white-space:nowrap">① 조회</td><td><code>GET /api/fac/status</code></td><td>운전 ID · 공장 시계 · 이벤트 수 · 요약 지표(구매오더·전표·정비요청)</td></tr>
+        <tr><td style="white-space:nowrap">① 조회</td><td><code>GET /api/fac/po</code></td><td>구매오더(fac.po) — 품목별 주문/입고 수량 · 금액 · 입고 전표 · 트럭 · 상태 (최근 500건)</td></tr>
+        <tr><td style="white-space:nowrap">① 조회</td><td><code>GET /api/fac/moves</code></td><td>재고 전표(fac.move) — 입고 · 내부 이동 · 생산 입고 · 출고 (최근 500건)</td></tr>
+        <tr><td style="white-space:nowrap">① 조회</td><td><code>GET /api/fac/stock</code></td><td>로케이션별 현재고(fac.stock) · 제품 · 로케이션</td></tr>
+        <tr><td style="white-space:nowrap">① 조회</td><td><code>GET /api/fac/mr</code> · <code>/equipment</code> · <code>/orderpoints</code></td><td>정비요청(fac.mr) · 설비 대장 ${S.equipment}대 · 재주문 규칙</td></tr>
+        <tr><td style="white-space:nowrap">② 이벤트</td><td><code>GET /api/fac/events?since=0&amp;limit=500&amp;type=po.create,mr.stage</code></td><td>이벤트 이력 — 응답의 <code>next</code>를 다음 <code>since</code>로 넘기면 이어 받기 (master · po.create · receipt.done · internal.done · production.done · delivery.done · mr.create · mr.update · mr.stage)</td></tr></table>
+      <div class="cmp-note">• 예: <code>curl ${base}/api/fac/events?since=0</code> — 서버는 이 Mac(127.0.0.1)에서만 열립니다. 단계·라인을 바꾸면 새 운전 ID로 기록을 다시 시작합니다.<br>
+      • 외부에서 발주·정비요청을 넣는 쓰기 API는 아직 없습니다 (지시 게이트·보안 계층 검증과 함께 2차로 추가 예정).</div>`;
+  } else if (facTab === 'erp') body = erpHtml();
+  else body = `<table class="od-tbl"><tr><th>시각</th><th>내용</th></tr>${E.log.map((l) => `<tr><td>${fclk(l.t)}</td><td>${escH(l.text)}</td></tr>`).join('')}</table>`;
+  setHTML(facBody, `<div class="od-grid">
       <div class="od-kpi"><span>구매오더</span><b>${n(S.po)}건</b><small>진행 중 ${S.poOpen} · ${won(S.amount)}</small></div>
       <div class="od-kpi"><span>재고 전표</span><b>${n(S.receipts + S.internals + S.productions + S.deliveries)}건</b><small>입고 ${S.receipts} · 내부 ${S.internals} · 생산 ${S.productions} · 출고 ${S.deliveries}</small></div>
       <div class="od-kpi"><span>물류 선반 재고</span><b>${n(Q.rackRaw.raw)} · ${n(Q.rackParts.parts)}</b><small>RM-BOX · PT-KIT (확정 기준)</small></div>
       <div class="od-kpi"><span>정비요청</span><b>${n(S.mr)}건</b><small>긴급 ${S.corrective} · 예방 ${S.preventive} · 진행 ${S.mrOpen}</small></div></div>
-    <div class="od-tabs">${Object.entries(tabs).map(([k, v]) => `<button data-odtab="${k}" class="${odooTab === k ? 'on' : ''}">${v}</button>`).join('')}</div>${body}
-    <div class="cmp-note">${E.live ? '🔗 실시간 Fac에도 보내는 중' : '시뮬레이션 Fac (내장) — 같은 모델(purchase.order · stock.picking · stock.quant · maintenance.request)·전표 번호로 기록'} · 내부 이동·생산 입고는 10분(공장 시계)마다 한 전표</div>`);
+    <div class="od-tabs">${Object.entries(tabs).map(([k, v]) => `<button data-factab="${k}" class="${facTab === k ? 'on' : ''}">${v}</button>`).join('')}</div>${body}
+    <div class="cmp-note">FACOS 업무 기록 — 구매오더(fac.po) · 재고 전표(fac.move) · 현재고(fac.stock) · 정비요청(fac.mr)${hub.noServer ? '' : ' · FAC API 게시'} · 내부 이동·생산 입고는 10분(공장 시계)마다 한 전표</div>`);
 }
-document.getElementById('btnOdoo').addEventListener('click', () => {
-  odooModal.classList.remove('hidden'); odooStatus().then(renderOdoo); renderOdoo();
-  clearInterval(odooTimer); odooTimer = setInterval(() => { if (!odooModal.classList.contains('hidden') && !odooBody.contains(document.activeElement)) odooStatus().then(renderOdoo); }, 1500);
+document.getElementById('btnFac').addEventListener('click', () => {
+  facModal.classList.remove('hidden'); facStatus().then(renderFac); renderFac();
+  clearInterval(facTimer); facTimer = setInterval(() => { if (!facModal.classList.contains('hidden') && !facBody.contains(document.activeElement)) facStatus().then(renderFac); }, 1500);
 });
-document.getElementById('closeOdoo').addEventListener('click', () => { odooModal.classList.add('hidden'); clearInterval(odooTimer); });
-odooBody.addEventListener('click', async (e) => {
-  const t = e.target.closest('[data-odtab]'); if (t) { odooTab = t.dataset.odtab; return renderOdoo(); }
-  if (e.target.closest('[data-od="config"]')) {
-    const body = { url: document.getElementById('odUrl').value, db: document.getElementById('odDb').value, user: document.getElementById('odUser').value, key: document.getElementById('odKey').value };
-    try { odooSrv = await (await fetch('/api/odoo/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json(); odooNote = '설정을 서버에 저장했습니다 (API 키는 서버 메모리에만)'; } catch (err) { odooNote = `설정 실패: ${err.message}`; }
-    renderOdoo();
-  }
+document.getElementById('closeFac').addEventListener('click', () => { facModal.classList.add('hidden'); clearInterval(facTimer); });
+facBody.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-factab]'); if (t) { facTab = t.dataset.factab; renderFac(); return; }
+  const b = e.target.closest('button[data-erp]'); if (!b) return;
+  const a = b.dataset.erp, val = (id) => document.getElementById(id)?.value.trim() ?? '';
+  const post = (p, body) => fetch(`/api/erpnext/v1/${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) }).then((r) => r.json());
+  const cfg = { url: val('erpUrl'), company: val('erpCo'), enabled: !!document.getElementById('erpOn')?.checked, serials: !!document.getElementById('erpSer')?.checked, ...(val('erpKey') ? { apiKey: val('erpKey') } : {}), ...(val('erpSecret') ? { apiSecret: val('erpSecret') } : {}) };
+  erpNote = { test: '연결 시험 중…', prepare: 'ERPNext 준비 시작…', save: '저장 중…' }[a]; renderFac();
+  // 연결 시험 · 준비도 지금 입력한 주소·키로 (먼저 저장 — 켜기 체크는 「저장」 때만 반영)
+  post('config', a === 'save' ? cfg : { ...cfg, enabled: undefined }).then((c) => {
+    if (c.error) throw new Error(c.error);
+    if (a === 'test') return post('test').then((r) => { erpNote = r.ok ? `연결 성공 — 로그인 ${r.user} · 초기 설정 ${r.setupComplete ? '완료' : '전 (「ERPNext 준비」가 처리)'} · 회사 ${r.companies.join(', ') || '없음'}` : `연결 실패 — ${r.error}`; });
+    if (a === 'prepare') return post('prepare').then((r) => { erpNote = r.error ? `준비 실패 — ${r.error}` : 'ERPNext 준비 진행 중 — 끝나면 「연동 켜기」를 체크하고 「저장」'; });
+    erpNote = `저장했습니다 — 연동 ${c.enabled ? '켜짐' : '꺼짐'}${c.prepared ? '' : ' (먼저 「ERPNext 준비」)'}`;
+  }).catch((err) => { erpNote = `실패 — ${err.message}`; }).finally(() => facStatus().then(renderFac));
 });
-odooBody.addEventListener('change', (e) => { if (e.target.id === 'odLive') { sim.erp.live = e.target.checked; odooNote = e.target.checked ? '실시간 전송 시작' : '실시간 전송 중지 (이벤트는 쌓아 둠)'; e.target.blur(); renderOdoo(); } });
-// 실시간 전송: 2초마다 쌓인 이벤트를 서버 게이트웨이로 (실패하면 그대로 두고 다음에 다시)
-async function odooSyncTick(rdt) {
-  const E = sim.erp; if (!E?.live || hub.noServer || odooBusy) return;
-  odooSyncT += rdt; if (odooSyncT < 2 || (E.masterSent && !E.outbox.length)) return; odooSyncT = 0; odooBusy = true;
-  const withMaster = !E.masterSent, batch = [...(withMaster ? [E.master] : []), ...E.outbox.slice(0, 300)];
+// FAC API 업로드: 2초마다 쌓인 이벤트 + 현황을 서버로 (실패하면 그대로 두고 다음에 다시)
+async function facPushTick(rdt) {
+  const E = sim.fac; if (!E?.on || hub.noServer || facBusy) return;
+  facPushT += rdt; if (facPushT < 2) return; facPushT = 0; facBusy = true;
+  const withMaster = !E.masterSent, batch = [...(withMaster ? [E.master] : []), ...E.outbox.slice(0, 500)];
   try {
-    const r = await fetch('/api/odoo/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: batch }) });
-    const out = await r.json(); odooSrv = out.status ?? odooSrv;
-    if (r.ok) { E.outbox.splice(0, batch.length - (withMaster ? 1 : 0)); E.masterSent = true; E.sent += batch.length; odooNote = `${out.applied}건 적용`; } else odooNote = `전송 실패: ${out.error}`;
-  } catch (err) { odooNote = `전송 실패: ${err.message}`; }
-  finally { odooBusy = false; }
+    const r = await fetch('/api/fac/push', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run: E.run, events: batch, snapshot: E.snapshot() }) });
+    const out = await r.json();
+    if (r.ok && sim.fac === E) { E.outbox.splice(0, batch.length - (withMaster ? 1 : 0)); E.masterSent = true; E.sent += batch.length; facNote = ''; } else if (!r.ok) facNote = `업로드 실패: ${out.error}`;
+  } catch (err) { facNote = `업로드 실패: ${err.message}`; }
+  finally { facBusy = false; }
 }
 
 // ── 패킷 덤프: 캡처 상태·통계·버튼 (데이터 연동 창) ─────────────────
@@ -512,7 +656,7 @@ function pcapHtml() {
   const state = P.full ? '<b class="bad">용량 한도(200MB) 도달 — 자동 중지</b>' : P.on ? `<b class="ok">⏺ 캡처 중</b> · ${P.duration.toFixed(0)}초 (공장 시계)` : S.packets ? '중지됨' : '대기';
   return `<div class="grid2">
     <span>상태</span><b>${state}</b>
-    <span>캡처 지점</span><b>MQTT 브로커 NIC <code>10.20.0.10:1883</code> — 양방향(클라이언트 → 브로커 · 브로커 → 구독자), Ethernet · IPv4 · TCP · MQTT 3.1.1</b>
+    <span>캡처 지점</span><b>MQTT 브로커 NIC <code>10.20.0.10:1883</code> — 양방향(클라이언트 → 브로커 · 브로커 → 구독자), Ethernet · IPv4 · TCP · MQTT 5 (속성: Payload Format · Content Type · 명령 Message Expiry)</b>
     <span>패킷</span><b>${n(S.packets)}개 (→ 브로커 ${n(S.up)} · 브로커 → ${n(S.down)}) · ${kb(P.bytes)}</b>
     <span>MQTT</span><b>PUBLISH 발행 ${n(S.publishUp)} · 구독자 전달 ${n(S.publishDown)} · PUBACK ${n(S.puback)} · CONNECT ${n(S.connect)} · SUBSCRIBE ${n(S.subscribe)} · PING ${n(S.ping)}</b>
     <span>영상</span><b>${P.video === false ? '끔' : `프레임 ${n(S.video)}개`} — CCTV·로봇 카메라 JPEG를 OPC UA ua-data ByteString(base64)으로 1초마다 (<code>…/Video_&lt;카메라&gt;</code>)</b>
@@ -543,22 +687,87 @@ function pcapVideoTick(rdt) {
   if (!glLost) for (const [key, AP] of hub.assetPcaps) {
     if (!AP.on || AP.video === false || !AP.cam) continue;
     AP.camT += rdt; if (AP.camT < 1) continue; AP.camT = 0;
-    const simT = sim.time, pr = camWall.captureFrame(AP.cam, 160, 120), kind = AP.only.kind;
-    pr?.then((bytes) => { if (!bytes || !AP.on) return; const n0 = hub.pcap; hub.pcap = AP; try { pcapPublishFrame(key, kind, `Robot_${key}`, 160, 120, bytes, simT, {}, AP.only.ip); } finally { hub.pcap = n0; } });
+    const simT = sim.time, s0 = sim, pr = camWall.captureFrame(AP.cam, 160, 120), kind = AP.only.kind;
+    pr?.then((bytes) => { if (!bytes || !AP.on || sim !== s0) return;   // 실행이 바뀐 뒤 끝난 캡처는 버린다 (새 실행의 시계로 이전 시각이 찍힘)
+      const n0 = hub.pcap; hub.pcap = AP; try { pcapPublishFrame(key, kind, `Robot_${key}`, 160, 120, bytes, simT, {}, AP.only.ip); } finally { hub.pcap = n0; } });
   }
   const P = hub.pcap; if (!P.on || P.video === false || glLost) return;
   pcapVidT += rdt; if (pcapVidT < 1) return; pcapVidT = 0;
-  const simT = sim.time, cams = sim.cctv?.cams ?? [];
+  const simT = sim.time, s0 = sim, cams = sim.cctv?.cams ?? [];   // s0: 캡처를 건 실행 — 인코딩 · 읽기가 끝났을 때 실행이 바뀌었으면 버린다
   if (cams.length && !cctvView.lost) {
     const c = cams[pcapCam++ % cams.length], r = cctvView.renderPanel(c.id, pcapCv);
-    if (r) pcapCv.toBlob((bl) => bl?.arrayBuffer().then((ab) => pcapPublishFrame(`CCTV-${c.id}`, 'cam', `CCTV_${c.id}`, 320, 180, new Uint8Array(ab), simT, { Place: r.place, Detections: r.dets.length })), 'image/jpeg', 0.7);
+    if (r) pcapCv.toBlob((bl) => bl?.arrayBuffer().then((ab) => sim !== s0 ? null : pcapPublishFrame(`CCTV-${c.id}`, 'cam', `CCTV_${c.id}`, 320, 180, new Uint8Array(ab), simT, { Place: r.place, Detections: r.dets.length })), 'image/jpeg', 0.7);
   }
   if (camWall.on && camWall.list?.length) {
     const f = camWall.list[pcapBot++ % camWall.list.length], pr = camWall.captureFrame(f.ref, 160, 120);
     const a = f.ref.type === 'mover' ? hub.assets.find((x) => x.mover?.id === f.ref.id) : null, ue = a ? sim.net?.ueOf(a.mover) : null;
     const ca = a ?? hub.assets.filter((x) => x.kind === 'CellRobot' && x.parent === f.ref.stationId)[f.ref.idx ?? 0];
-    pr?.then((bytes) => bytes && pcapPublishFrame(ca ? ca.id : f.ref.stationId ?? 'Cell', ue ? '5g' : 'lan', `Robot_${ca ? ca.id : `${f.ref.stationId}_${f.ref.idx ?? 0}`}`, 160, 120, bytes, simT, {}, ca ? hub.ipOf(ca) : null));
+    pr?.then((bytes) => bytes && sim === s0 && pcapPublishFrame(ca ? ca.id : f.ref.stationId ?? 'Cell', ue ? '5g' : 'lan', `Robot_${ca ? ca.id : `${f.ref.stationId}_${f.ref.idx ?? 0}`}`, 160, 120, bytes, simT, {}, ca ? hub.ipOf(ca) : null));
   }
+}
+// EPCIS 저장소 칸: 앱 = 내장 저장소(파일 보관) + 외부 저장소 전송(선택) · 웹 = 브라우저 메모리
+// 설비 상태 요약 · 이벤트 · Zone OEE·품질 표본 (UNS 평면 토픽) → 서버 MQTT 브로커 — 2초(실제 시간)마다 · 설비 대시보드(Telegraf → InfluxDB → Grafana)가 구독 (js/datahub.js unsTelemetry)
+// + ISA-95 UNS 트리 (js/uns.js): FacOS 상태·오더·결정·A2A · 셀 OCS · 명령 4단 · 설비 요약 · 현장 로봇 업링크 — 같은 주기에 함께 발행 · 웹 버전은 브로커 발행 없이 트리만 (오케스트레이터 창 「UNS 토픽 트리」)
+let unsSince = 0, unsBusy = false, unsSim = null;
+const uns = new UnsNamespace(null, { iso: (t) => hub.iso(t), run: () => hub.runId });
+setInterval(async () => {
+  if (unsBusy || !sim) return;
+  // 사건(결정 · A2A · 명령 · 현장 업링크 · 운영 이벤트 · 품질 표본)은 uns의 대기함(outbox)에 넣고 서버 응답(ACK) 뒤에만 뺀다 — 전송에 실패해도 다음 주기에 같은 key로 다시 (js/uns.js)
+  const isQ = (m) => m.topic.startsWith('metafactory/quality/'), flatEv = (s, k) => [...unsEvents(s, unsSince).messages, ...k.filter(isQ)];
+  if (unsSim !== sim) {   // 새 실행 — 이전 실행에서 아직 거두지 않은 사건을 그 실행 ID로 대기함에 넣은 뒤 넘어간다 (단계 전환 · 리셋 직전 2초분이 빠지지 않게)
+    if (unsSim && !hub.noServer) { const k = unsZoneKpi(unsSim); uns.enqueue(flatEv(unsSim, k), 'flat'); uns.harvest({ kpi: k }); }
+    unsSim = sim; unsSince = 0; uns.reset(sim);   // 새 실행은 로그 번호가 1부터 다시 — 이전 실행의 커서를 쓰면 첫 경보 묶음이 빠진다
+  }
+  const tele = unsTelemetry(sim);
+  if (hub.noServer) { uns.collect({ telemetry: tele }); uns.broker.on = false; return; }
+  unsBusy = true;
+  try {
+    // 외부 명령 요청 (camtic/metafactory/main/{셀}/cmd/request) → FacOS 명령 경로 — 결과는 UNS 명령 4단으로
+    const q = await fetch('/api/uns/commands/take', { method: 'POST' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    for (const c of q?.commands ?? []) uns.applyCommand(c);
+    if (unsSim !== sim) return;   // 기다리는 사이 단계 전환 — 다음 주기에 이전 실행분을 거둔다
+    const kpi = unsZoneKpi(sim); uns.enqueue(flatEv(sim, kpi), 'flat'); unsSince = sim.logSeq ?? unsSince;
+    // Sparkplug가 켜져 있으면 {존}/{셀}/telemetry는 게이트웨이의 주 호스트가 Sparkplug에서 옮겨 싣는다 — 화면은 평면 토픽만 보낸다(엣지 노드의 원천)
+    const viaSp = !!uns.broker.status?.sparkplug?.on;
+    // 주기 데이터(평면 설비 요약 · Zone OEE — 다음 주기에 새 값이 가므로 유실 허용) + UNS 상태 + 대기함의 사건 → HTTP 오류 · JSON 오류 응답 · 브로커 꺼짐은 실패로 처리 (사건은 남고 상태만 rebirth)
+    await uns.send(unsPostVia((...a) => fetch(...a)), { periodic: [...tele, ...kpi.filter((m) => !isQ(m))], extra: { telemetry: tele, kpi }, keep: viaSp ? (m) => !m.topic.endsWith('/telemetry') : null });
+  } finally { unsBusy = false; }
+}, 2000);
+// 설비 대시보드 칸 (server/monitor-api.mjs): Docker로 Telegraf → InfluxDB → Grafana 켜기 · 열기 · 끄기
+let monSt = null, monNote = '', monAt = 0, monAskReset = false;   // 데이터 초기화는 화면 안에서 한 번 더 확인 (쌓인 시계열·Grafana 설정 삭제)
+async function monStatus(force = false) { if (hub.noServer || (!force && Date.now() - monAt < 5000)) return; monAt = Date.now(); try { monSt = await (await fetch('/api/monitor/v1/status')).json(); } catch { monSt = null; } }
+function monHtml() {
+  if (hub.noServer) return '<div class="dh-note">설비 대시보드는 맥 앱 · 윈도우 앱 · npm start에서 씁니다 (웹 버전·공유 페이지에는 MQTT 브로커·서버가 없음). 앱에서는 정밀조립Zone 설비 건강도·RUL · 환경·설비 센서 · Zone 운영 분석을 오픈소스 시계열 도구(InfluxDB)에 쌓고 Grafana 대시보드로 봅니다.</div>';
+  const v = monSt, J = v?.job, run = !!(v?.grafana && v?.influx), n = (x) => Math.round(x ?? 0).toLocaleString('ko-KR');
+  const C = v?.counts ?? {}, KO = { equipment: '설비 요약', sensor: '센서', oee: 'Zone OEE', quality: '품질 표본', event: '운영 이벤트' };
+  return `<div class="grid2"><span>Docker</span><b>${!v ? '확인 중…' : v.docker ? `${escH(v.docker.version)}${v.docker.compose ? ` · compose ${escH(v.docker.compose)}` : ' · <b class="bad">compose 없음</b>'}` : '<b class="bad">찾을 수 없음</b> — Docker Desktop(맥·윈도우) 또는 Colima를 설치·실행하세요'}</b>
+      <span>대시보드</span><b>${run ? `<b class="ok">실행 중</b> · <a href="${escH(v.url)}" target="_blank" rel="noopener">${escH(v.url)}</a> (이 PC 안에서만 열림)` : (v?.containers ?? []).length ? `준비 중 · ${v.containers.map((c) => `${escH(c.service)} ${escH(c.state)}`).join(' · ')}` : '꺼짐'}</b>
+      <span>최근 1분 수신</span><b>${run ? Object.keys(KO).map((k) => `${KO[k]} ${n(C[k])}`).join(' · ') : '-'} · 앱 브로커 :${v?.mqttPort ?? '-'}</b>
+      <span>조작</span><b><button class="ep-btn" data-mon="start" ${J?.running ? 'disabled' : ''}>${run ? '다시 켜기 (구성 갱신)' : '대시보드 켜기'}</button> <button class="ep-btn" data-mon="open" ${run ? '' : 'disabled'}>대시보드 열기</button> <button class="ep-btn" data-mon="stop" ${run ? '' : 'disabled'}>끄기</button> <button class="ep-btn" data-mon="ask-reset" ${J?.running || !v?.docker ? 'disabled' : ''} title="InfluxDB 시계열과 Grafana 저장 설정을 지우고 새로 켭니다">데이터 초기화…</button>
+        ${J ? ` · ${J.running ? `진행 중 — ${escH(J.step)}` : J.ok ? `완료${J.reset ? ' (데이터 초기화)' : ''}` : `<b class="bad">실패 — ${escH(J.error ?? '')}</b>`}` : ''}</b></div>
+    ${monAskReset ? `<div class="dh-note"><b class="bad">대시보드에 쌓인 시계열 데이터(최대 90일)와 Grafana 저장 설정이 모두 지워지고 되돌릴 수 없습니다.</b> 앱 시뮬레이션 데이터·EPCIS·FAC 기록은 그대로입니다. <button class="ep-btn" data-mon="reset">지우고 다시 켜기</button> <button class="ep-btn" data-mon="cancel-reset">취소</button></div>` : ''}
+    <div class="dh-note">${escH(monNote) || '처음 켜면 이미지 내려받기로 몇 분 걸립니다 (메모리 약 1GB). 대시보드 4종: 정밀조립Zone 운영 분석(OEE·파레토·관리도·산점도) · 공장 개요 · 설비 건강도·RUL · 환경·설비 센서 — 고장·정비·품질 NG 같은 운영 이벤트를 그래프 위에 겹쳐 봅니다. 원시값 7일 · 1분 집계 90일 보관. 끄기는 데이터를 남깁니다. Docker 엔진이 꺼져 있고 Colima가 있으면 먼저 colima start로 켭니다.'}</div>`;
+}
+let epcisNote = '';
+function epcisHtml() {
+  const L = epcisSt, S = L.server, F = S?.forward, AL = sim?.serials?.allocState?.();   // AL: 서버 번호 범위 배정 상태 (js/serial.js allocState)
+  if (hub.noServer) return `<div class="grid2"><span>저장소</span><b>브라우저 메모리 저장소 — 이 브라우저 안에서만 보관 (새로고침 시 초기화)</b>
+      <span>저장된 이벤트</span><b>${epcisLocal.count.toLocaleString()}건 · 중복 제외 ${epcisLocal.stats.duplicate}</b></div>
+    <div class="dh-note">조회: 품질 추적 「🏷 시리얼·출하」에서 제품을 고른 뒤 「🔎 EPCIS 저장소에서 조회」. 파일: 불량 분석 「⬇ 전체 데이터셋」의 serial_events.jsonld. 외부 EPCIS 저장소(OpenEPCIS · 사내 · 고객사)로 보내기는 맥 앱 · 윈도우 앱에서 할 수 있습니다.</div>`;
+  return `<div class="grid2"><span>앱 내장 저장소</span><b>${S ? `<b class="ok">동작 중</b> · 저장 ${S.events.toLocaleString()}건 · 파일 ${kb(S.file)} (데이터 폴더/epcis/events.jsonl · 앱을 다시 켜도 보관)` : '확인 중…'}</b>
+      <span>이번 실행 보냄</span><b>${L.sent.toLocaleString()}건${L.retry.length ? ` · 대기 ${L.retry.length}` : ''}${L.lastError ? ` · <b class="bad">전송 실패 — ${escH(L.lastError)} (5초마다 다시 · 대기 중인 것은 남아 있음)</b>` : ''}${L.dropped ? ` · <b class="bad">대기 한도(5만 건) 초과로 버림 ${L.dropped.toLocaleString()}건</b>` : ''}</b>
+      <span>식별 번호 배정</span><b>${AL ? `${AL.ok ? '<b class="ok">정상</b>' : '<b class="bad">발행 보류</b>'} · ${escH(AL.text)}` : '확인 중…'}</b>
+      <span>외부 저장소 주소</span><b><input id="epUrl" class="ep-in" placeholder="예: http://127.0.0.1:8080 (OpenEPCIS) — 비우면 보내지 않음" value="${escH(F?.url ?? '')}" /></b>
+      <span>인증 토큰 (선택)</span><b><input id="epKey" class="ep-in" type="password" placeholder="${F?.apiKey ? '저장됨 — 바꿀 때만 입력' : 'Bearer 토큰 — 필요한 저장소만'}" autocomplete="off" /></b>
+      <span>외부 전송</span><b><label class="chk"><input type="checkbox" id="epOn" ${F?.enabled ? 'checked' : ''}/> 켜기</label> <button class="ep-btn" data-epcis="test">연결 시험</button> <button class="ep-btn" data-epcis="save">저장</button> <button class="ep-btn" data-epcis="resend" title="외부 저장소에 처음부터 다시 보냅니다 (eventID가 같아 저장소가 중복을 거릅니다)">처음부터 다시 보내기</button>
+        ${F && !F.enabled ? ' · 꺼짐 (앱 내장 저장소에만 보관)' : ''}${F?.enabled ? ` · 보냄 ${F.sent.toLocaleString()} · 대기 ${F.pending.toLocaleString()}${F.lastError ? ` · <b class="bad">실패: ${escH(F.lastError)}${F.nextRetryMs ? ` (${Math.ceil(F.nextRetryMs / 1000)}초 뒤 다시)` : ''}</b>` : F.lastOk ? ` · 최근 성공 ${F.lastOk.slice(11, 19)} UTC` : ''}` : ''}</b></div>
+    <div class="dh-note">${escH(epcisNote) || '설치 없이 앱 안 저장소에 쌓입니다. 외부 저장소는 전문 실증·고객사 연계 때만 — 주소를 넣고 「연결 시험」 → 「켜기」 → 「저장」. 연결이 끊겨도 앱은 그대로 돌고, 다시 연결되면 밀린 것부터 보냅니다.'}</div>`;
+}
+// UNS 사건 대기함 (js/uns.js outbox) — 결정 · A2A · 명령 · 현장 업링크는 서버 응답 뒤에만 보낸 것으로 친다. 실패 · 대기 · 한도 초과로 버린 것을 그대로 보인다
+function unsTxHtml() {
+  if (hub.noServer) return 'UNS 토픽 트리에만 기록 (이 버전은 MQTT 브로커 없음)';
+  const T = uns.tx, Lz = uns.lost, last = Lz.log[0];
+  return `확정 ${T.acked.toLocaleString()}건 · 대기 ${uns.outbox.length.toLocaleString()}건${T.resent ? ` · 재전송 ${T.resent.toLocaleString()}건` : ''}${T.lastError ? ` · <b class="bad">전송 실패 — ${escH(T.lastError)} (2초마다 다시 · 사건은 대기함에 보관)</b>` : ''}${Lz.n ? ` · <b class="bad">대기함 한도 초과로 버림 ${Lz.n.toLocaleString()}건 (${escH(Object.entries(Lz.kinds).map(([k, n]) => `${k} ${n}`).join(' · '))}${last ? ` · 최근 ${escH(last.at.slice(11, 19))} UTC ${escH(last.runs.join(','))}` : ''})</b>` : ''}`;
 }
 function renderData() {
   const st = hub.stats(), mq = hub.mqtt, ms = mq.status;
@@ -566,7 +775,8 @@ function renderData() {
   const kindLabel = { Factory: '라인', Station: '설비·셀', CellRobot: '셀 로봇', AMR: '운반 AMR', AGV: 'AGV', Forklift: '지게차', Humanoid: '휴머노이드', Quadruped: '사족보행', MaintenanceRobot: '정비로봇', Drone: '순찰 드론', Gnb5G: '5G 기지국' };
   const broker = hub.shared ? '<b class="bad">공유 페이지에서는 사용할 수 없음</b> — 데이터 수집만 합니다. MQTT 발행과 파일 저장은 맥 앱이나 npm start로 실행하세요'
     : hub.noServer ? '<b class="bad">웹 버전에서는 사용할 수 없음</b> — 데이터 수집과 파일 저장은 됩니다. MQTT 발행은 맥 앱이나 npm start로 실행하세요'
-    : mq.available === false ? '<b class="bad">연결 안 됨</b> — 서버(npm start 또는 맥 앱) 없이 열려 있어 수집·저장만 합니다'
+    : mq.fails && !mq.everOk && mq.fails >= 3 ? `<b class="bad">서버에 연결된 적 없음</b> — 서버(npm start 또는 맥 앱) 없이 열려 있으면 수집·저장만 합니다 · 계속 다시 시도 중 (${escH(mq.lastError ?? '')})`
+    : mq.fails ? `<b class="bad">일시 전송 실패</b> — ${escH(mq.lastError ?? '')} · 연속 ${mq.fails}회 · 다시 시도 중 (주기 데이터 ${mq.failed.toLocaleString()}건 건너뜀 · 메타데이터·이벤트·명령 ${mq.held}건은 보관했다가 재전송)`
     : !ms ? '확인 중…' : ms.listening ? `<b class="ok">실행 중</b> · mqtt://${ms.host}:${ms.port} · 구독 클라이언트 ${ms.clients}개` : `<b class="bad">시작 실패</b> — ${escH(ms.error ?? '')}`;
   const preview = hub.lastMsg ? JSON.stringify(hub.lastMsg.msg, null, 1).slice(0, 1600) : '(아직 발행 전)';
   setHTML(dataBody, `
@@ -586,12 +796,15 @@ function renderData() {
       <section class="span2"><h4>📡 OPC UA PubSub (Part 14, JSON) over MQTT</h4><div class="grid2">
         <span>내장 MQTT 브로커</span><b>${broker}</b>
         <span>발행</span><b><label class="chk"><input type="checkbox" id="dhPub" ${hub.publishOn ? 'checked' : ''}/> 수집할 때마다 발행</label> · 보낸 메시지 ${mq.sent.toLocaleString()}개${ms ? ` · ${kb(ms.bytes)}` : ''}${ms?.bridgeUrl ? ` · 외부 브로커 ${escH(ms.bridgeUrl)} ${ms.bridgeConnected ? '연결됨' : '미연결'}` : ''}</b>
+        <span>UNS 사건 전송</span><b>${unsTxHtml()}</b>
         <span>데이터 토픽</span><b><code>opcua/json/data/${PUBLISHER_ID}/${WRITER_GROUP}/&lt;자산 id&gt;</code> (ua-data · ua-keyframe)</b>
         <span>메타데이터 토픽</span><b><code>opcua/json/metadata/${PUBLISHER_ID}/${WRITER_GROUP}/&lt;자산 id&gt;</code> (ua-metadata · retain, AAS semanticId 포함)</b>
         <span>상위 명령</span><b><code>opcua/json/data/${PUBLISHER_ID}/${WRITER_GROUP}/Commands</code> (명령 상태가 바뀔 때마다: 전송 · 수신 확인 · 실행 · 완료/거부)</b>
         <span>이벤트 · AAS 모델</span><b><code>opcua/json/data/${PUBLISHER_ID}/${WRITER_GROUP}/Events</code> · <code>aas/${PUBLISHER_ID}/environment</code> (retain)</b></div>
         <details><summary>마지막 NetworkMessage — <code>${escH(hub.lastMsg?.topic ?? '')}</code></summary><pre class="dh-pre">${escH(preview)}</pre></details></section>
       <section class="span2"><h4>📦 패킷 덤프 (pcap · Wireshark)</h4>${pcapHtml()}</section>
+      <section class="span2"><h4>📈 설비 대시보드 (Telegraf → InfluxDB → Grafana — 정밀조립Zone 건강도·RUL · 센서 · Zone 운영 분석 · 운영 이벤트)</h4>${monHtml()}</section>
+      <section class="span2"><h4>🗂 EPCIS 저장소 (GS1 EPCIS 2.0 — 시리얼·포장 묶음·출하·보류·처분 이벤트)</h4>${epcisHtml()}</section>
       <section class="span2"><h4>💾 저장 (현재까지 수집한 데이터)</h4>
         <div class="dh-ver">AAS 메타모델 버전 <select id="dhVer" title="XML·RDF 네임스페이스 — 3.1: BaSyx SDK 2.x 등 최신 도구 · 3.0: 구버전 도구">${Object.keys(AAS_VERSIONS).map((v) => `<option value="${v}" ${aasVer() === v ? 'selected' : ''}>v${v}${v === '3.1' ? ' (기본)' : ' (구버전 호환)'}</option>`).join('')}</select></div>
         <div class="dh-save">${FORMATS.map(([k, n, d]) => `<button data-fmt="${k}"><b>${n}</b><small>${d}</small></button>`).join('')}</div>
@@ -603,8 +816,8 @@ function renderData() {
 }
 document.getElementById('btnData').addEventListener('click', () => {
   dataModal.classList.remove('hidden'); dataNote = '';
-  hub.refreshStatus().then(renderData); renderData();
-  clearInterval(dataTimer); dataTimer = setInterval(() => { hub.refreshStatus().then(() => { if (!dataModal.classList.contains('hidden') && !dataBody.contains(document.activeElement)) renderData(); }); }, 1500);
+  Promise.all([hub.refreshStatus(), epcisServerStatus(), monStatus(true)]).then(renderData); renderData();
+  clearInterval(dataTimer); dataTimer = setInterval(() => { Promise.all([hub.refreshStatus(), epcisServerStatus(), monStatus()]).then(() => { if (!dataModal.classList.contains('hidden') && !dataBody.contains(document.activeElement)) renderData(); }); }, 1500);
 });
 document.getElementById('closeData').addEventListener('click', () => { dataModal.classList.add('hidden'); clearInterval(dataTimer); });
 dataBody.addEventListener('change', (e) => {
@@ -612,6 +825,29 @@ dataBody.addEventListener('change', (e) => {
   if (e.target.id === 'dhPub') { hub.publishOn = e.target.checked; e.target.blur(); renderData(); }
 });
 dataBody.addEventListener('click', (e) => {
+  const mb = e.target.closest('button[data-mon]');
+  if (mb) {
+    const a = mb.dataset.mon;
+    if (a === 'open') { if (monSt?.url) window.open(monSt.url, '_blank', 'noopener'); return; }
+    if (a === 'ask-reset' || a === 'cancel-reset') { monAskReset = a === 'ask-reset'; renderData(); return; }
+    monAskReset = false;
+    monNote = a === 'start' ? '대시보드 켜는 중… (처음이면 이미지 내려받기로 몇 분)' : a === 'reset' ? '대시보드 데이터를 지우고 다시 켜는 중…' : '끄는 중…'; renderData();
+    fetch(a === 'reset' ? '/api/monitor/v1/reset?confirm=jin3d-mon' : `/api/monitor/v1/${a}`, { method: 'POST' }).then((r) => r.json()).then((r) => { monNote = a === 'stop' ? (r.ok ? '껐습니다 — 쌓인 데이터는 남아 있어 다시 켜면 이어서 봅니다' : `끄기 실패 — ${r.error ?? ''}`) : ''; })
+      .catch((err) => { monNote = `실패 — ${err.message}`; }).finally(() => monStatus(true).then(renderData));
+    // 켜는 동안 진행 단계를 따라 보여 준다
+    if (a === 'start' || a === 'reset') { const iv = setInterval(() => monStatus(true).then(() => { renderData(); if (!monSt?.job?.running) { clearInterval(iv); if (monSt?.job?.ok) monNote = `켰습니다 — 「대시보드 열기」로 ${monSt.url} (데이터는 몇 초 뒤부터 쌓입니다)`; renderData(); } }), 3000); }
+    return;
+  }
+  const eb = e.target.closest('button[data-epcis]');
+  if (eb) {
+    const a = eb.dataset.epcis, url = document.getElementById('epUrl')?.value.trim() ?? '', key = document.getElementById('epKey')?.value ?? '', on = !!document.getElementById('epOn')?.checked;
+    const post = (p, b) => fetch(`/api/epcis/v1/${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }).then((r) => r.json());
+    epcisNote = a === 'test' ? '연결 시험 중…' : '저장 중…'; renderData();
+    (a === 'test' ? post('forward/test', { url, ...(key ? { apiKey: key } : {}) }).then((r) => { epcisNote = r.ok ? `연결 성공 — ${url} (HTTP ${r.status}). 「켜기」를 체크하고 「저장」하면 보내기 시작합니다.` : `연결 실패 — ${r.error ?? ''}`; })
+      : post('config', { url, enabled: on, ...(key ? { apiKey: key } : {}), ...(a === 'resend' ? { fromStart: true } : {}) }).then((r) => { epcisNote = r.error ? `저장 실패 — ${r.error}` : a === 'resend' ? '처음부터 다시 보냅니다.' : `저장했습니다 — 외부 전송 ${r.enabled ? '켜짐' : '꺼짐'}${r.url ? ` · ${r.url}` : ''}`; }))
+      .catch((err) => { epcisNote = `실패 — ${err.message}`; }).finally(() => epcisServerStatus().then(renderData));
+    return;
+  }
   const pb = e.target.closest('button[data-pcap]');
   if (pb) {
     const P = hub.pcap, a = pb.dataset.pcap;
@@ -635,12 +871,15 @@ dataBody.addEventListener('click', (e) => {
   setAasVersion(document.getElementById('dhVer')?.value ?? aasVer());
   // AAS 저장: 진행 중인 로봇 카메라·CCTV 녹화 구간을 먼저 마감해 로컬(서버 data/)에 저장하고, 영상 파일 링크를 자산별 VideoRecordings 서브모델로 넣는다
   if (aas && robotRec.ffmpeg) { dataNote = '영상 구간 마감 · ffmpeg MP4 변환 중… (전체 + 카메라별)'; renderData(); }
-  (aas ? Promise.all([robotRec.flush(), cctvRec.flush()]).then(() => Promise.all([robotRec.convertAll(), cctvRec.convertAll()])) : Promise.resolve()).then(() => {
+  let conv = null;
+  const prog = (what) => (d, n) => { dataNote = `ffmpeg MP4 변환 중… ${what} ${d}/${n} 구간 — 최근 구간부터 · 최대 30초 기다린 뒤 저장`; renderData(); };
+  (aas ? Promise.all([robotRec.flush(), cctvRec.flush()]).then(() => Promise.all([robotRec.convertAll('robotcam', robotRec.segs, { budgetMs: 30000, onProgress: prog('로봇 카메라') }), cctvRec.convertAll({ budgetMs: 30000, onProgress: prog('CCTV') })])).then((c) => { conv = c; }) : Promise.resolve()).then(() => {
     const videosOf = (a) => { const k = hub.videoKey(a); return !k ? [] : k === 'cctv' ? cctvRec.videos() : robotRec.videosFor(k); };
     const out = hub.download(fmt, aas ? videosOf : null);
     let nv = 0; if (aas) nv = hub.assets.reduce((n, a) => n + videosOf(a).length, 0);
     const dl = aas && !robotRec.server ? downloadVideos([...robotRec.segs.map((sg) => robotRec.entry(sg, sg.index[0] ?? {})), ...cctvRec.videos()]) : 0;   // 서버가 없으면 영상도 로컬 파일로
-    dataNote = out ? `저장: ${out.name} (${kb(out.bytes)})${aas ? ` · 영상 링크 ${nv}개${robotRec.ffmpeg ? ' (MP4 · ffmpeg 카메라별)' : ''} (로봇 카메라 ${robotRec.segs.length}구간 · CCTV ${cctvRec.segs.length}구간${robotRec.server ? ' — data/robotcam · data/cctv에 저장' : dl ? ` — 영상 ${dl}개 함께 저장` : ''})` : ''}${fmt === 'aml' ? ' — 시계열은 같은 이름의 CSV를 함께 저장해 두면 연결됩니다' : ''}` : '';
+    const pend = conv ? conv.reduce((n, c) => n + (c?.pending ?? 0), 0) : 0;
+    dataNote = out ? `${pend ? `[MP4 남은 ${pend}구간은 서버에서 계속 변환 — 이번 파일은 WebM 링크] ` : ''}저장: ${out.name} (${kb(out.bytes)})${aas ? ` · 영상 링크 ${nv}개${robotRec.ffmpeg ? ' (MP4 · ffmpeg 카메라별)' : ''} (로봇 카메라 ${robotRec.segs.length}구간 · CCTV ${cctvRec.segs.length}구간${robotRec.server ? ' — data/robotcam · data/cctv에 저장' : dl ? ` — 영상 ${dl}개 함께 저장` : ''})` : ''}${fmt === 'aml' ? ' — 시계열은 같은 이름의 CSV를 함께 저장해 두면 연결됩니다' : ''}` : '';
     renderData();
   });
 });
@@ -650,7 +889,7 @@ const conceptModal = document.getElementById('concept'), conceptBody = document.
 function showConcept(busy = false) {
   renderConcept(conceptBody, { current: modeKey, res: ui.cachedCompare(SEED, currentLine), lineName: currentLine.name, busy });
 }
-document.getElementById('btnConcept').addEventListener('click', () => { conceptModal.classList.remove('hidden'); showConcept(); });
+document.getElementById('btnConcept').addEventListener('click', () => { conceptModal.classList.remove('hidden'); showConcept(ui.comparing(SEED, currentLine)); });
 document.getElementById('closeConcept').addEventListener('click', () => conceptModal.classList.add('hidden'));
 conceptBody.addEventListener('click', (e) => {
   const st = e.target.closest('button[data-stage]');
@@ -662,7 +901,7 @@ conceptBody.addEventListener('click', (e) => {
   }
   if (e.target.closest('button[data-calc]')) {
     showConcept(true);
-    setTimeout(() => { ui.computeCompare(SEED, currentLine); showConcept(); }, 30);
+    ui.computeCompare(SEED, currentLine).catch(() => {}).then(() => showConcept(ui.comparing(SEED, currentLine)));   // 늦게 끝난 이전 라인 계산이면 지금 라인 상태로 다시 그림
   }
 });
 
@@ -723,7 +962,7 @@ document.addEventListener('pointerdown', (e) => {
   // FACOS 칩·5G 카드 등에서 다른 창을 여는 경우: 정보 창 안의 버튼은 그 창을 남긴다
   closePopups(keep);
 }, true);
-// 가운데 창(진화 컨셉 · 3단계 비교 · 데이터 연동 · Fac · VLA · AIOS · FACOS 상세 · 지시 게이트 · 설정): 창 바깥 어두운 바탕을 누르면 닫는다
+// 가운데 창(진화 컨셉 · 3단계 비교 · 데이터 연동 · FAC · VLA · AIOS · FACOS 상세 · 지시 게이트 · 설정): 창 바깥 어두운 바탕을 누르면 닫는다
 // 바탕에서 누르고 뗐을 때만 (창 안에서 끌다가 바탕에서 놓은 경우는 닫지 않음) — 각 창의 ✕ 버튼을 눌러 정리 동작(갱신 타이머 해제 등)을 그대로 쓴다
 let modalDown = null;
 document.addEventListener('pointerdown', (e) => { modalDown = e.target instanceof Element && e.target.classList.contains('modal') ? e.target : null; }, true);
@@ -750,7 +989,7 @@ function renderPcapBox() {
   const ip = P?.clients.get(t.key)?.ip?.join('.') ?? (t.kind === '5g' ? '10.45.x.x (5G 단말)' : '10.20.1.x (유선 LAN)');
   const state = !P ? '대기' : P.full ? '<span class="rec">용량 한도 — 자동 중지</span>' : P.on ? `<span class="rec">⏺ 캡처 중</span> ${P.duration.toFixed(0)}초` : `중지됨 · ${P.duration.toFixed(0)}초`;
   setHTML(box, `<div class="ph">📦 패킷 캡처 (이 자산만) · ${state}</div>
-    <div>클라이언트 <b>${escH(t.key)}</b> · ${escH(ip)} ↔ 브로커 10.20.0.10:1883 · MQTT 3.1.1 (AAS → OPC UA PubSub JSON)</div>
+    <div>클라이언트 <b>${escH(t.key)}</b> · ${escH(ip)} ↔ 브로커 10.20.0.10:1883 · MQTT 5 (AAS → OPC UA PubSub JSON)</div>
     ${S ? `<div>패킷 ${n(S.packets)} (→ 브로커 ${n(S.up)} · 브로커 → ${n(S.down)}) · 발행 PUBLISH ${n(S.publishUp)} · 받은 명령 ${n(S.publishDown)} · PUBACK ${n(S.puback)} · 영상 ${n(S.video)}프레임 · PING ${n(S.ping)} · ${kb(P.bytes)}</div>` : ''}
     <div class="prow">${P?.on ? '<button type="button" data-act="pcapStop">⏹ 캡처 중지</button>' : '<button type="button" data-act="pcapStart">⏺ 캡처 시작</button>'}
       <button type="button" data-act="pcapSave">💾 pcap 저장</button>
@@ -790,14 +1029,17 @@ ui.onDetailAction = (act, st) => {
   else if (act === 'robotSave' && view.telemetry) {
     const fmt = document.getElementById('rbFmt').value, tele = view.telemetry;
     setAasVersion(document.getElementById('rbVer')?.value ?? aasVer());
-    ui.robotSaved(robotRec.ffmpeg ? '영상 녹화 구간 마감 · ffmpeg MP4 변환 중… (카메라별)' : '영상 녹화 구간 마감 · 저장 중…');
-    // 이 로봇 카메라 영상: 진행 중 구간을 마감·로컬 저장 → ffmpeg로 MP4(카메라별) 변환 → 영상 파일 링크를 AAS(VideoRecordings)에, AASX에는 링크 파일(.url)도 함께
-    robotRec.flush().then(() => robotRec.convertAll()).then(() => {
+    ui.robotSaved(robotRec.ffmpeg ? '영상 녹화 구간 마감 · ffmpeg MP4 변환 준비…' : '영상 녹화 구간 마감 · 저장 중…');
+    // 이 로봇 카메라 영상: 진행 중 구간을 마감·로컬 저장 → 이 로봇이 찍힌 구간만 ffmpeg로 MP4(카메라별) 변환(최근 것부터 · 최대 20초 대기) → 영상 파일 링크를 AAS(VideoRecordings)에, AASX에는 링크 파일(.url)도 함께
+    const a0 = hub.robotAsset(tele), key0 = tele.ref.type === 'cell' ? a0.id : `m:${tele.ref.id}`;
+    let conv = null;
+    robotRec.flush().then(() => robotRec.convertAll('robotcam', robotRec.segs, { assetKey: key0, budgetMs: 20000, onProgress: (d, n) => ui.robotSaved(`ffmpeg MP4 변환 중… ${d}/${n} 구간 (이 로봇이 찍힌 구간 · 카메라별) — 최대 20초 기다린 뒤 저장`) })).then((c) => { conv = c; }).then(() => {
       try {
-        const a = hub.robotAsset(tele), key = tele.ref.type === 'cell' ? a.id : `m:${tele.ref.id}`, videos = robotRec.videosFor(key);
+        const key = key0, videos = robotRec.videosFor(key);
         const out = hub.downloadRobot(tele, fmt, videos);
         const dl = !robotRec.server ? downloadVideos(videos) : 0;
-        ui.robotSaved(`저장: ${out.name} (${out.bytes > 1048576 ? (out.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(out.bytes / 1024)) + ' KB'}) · 영상 링크 ${videos.length}개${videos.some((v) => v.mp4Url) ? ' (MP4)' : ''}${robotRec.server ? ` (영상 ${new Set(videos.map((v) => v.segment)).size}구간 data/robotcam에 저장)` : dl ? ` · 영상 ${dl}개 함께 저장` : ''}`);
+        const convNote = conv?.pending ? ` · MP4 ${conv.ready}/${conv.total}구간 (남은 ${conv.pending}구간은 서버에서 계속 변환 — 이번 파일은 WebM 링크, 다음 저장 때 MP4 링크)` : '';
+        ui.robotSaved(`저장: ${out.name} (${out.bytes > 1048576 ? (out.bytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(out.bytes / 1024)) + ' KB'}) · 영상 링크 ${videos.length}개${videos.some((v) => v.mp4Url) ? ' (MP4)' : ''}${robotRec.server ? ` (영상 ${new Set(videos.map((v) => v.segment)).size}구간 data/robotcam에 저장)` : dl ? ` · 영상 ${dl}개 함께 저장` : ''}${convNote}`);
       } catch (e) { ui.robotSaved(`저장 실패: ${e.message}`); }
     });
   }
@@ -975,13 +1217,23 @@ function renderCctvPanel(force) {
 
 // ── 양쪽 패널 숨기기/보이기 (버튼 ◀ ▶, 단축키 [ ]) — 상태는 브라우저에 기억 ─────────────────
 const sidePanels = { left: document.getElementById('tglLeft'), right: document.getElementById('tglRight') };
-function setSide(side, hide) {
+function setSide(side, hide, save = true) {   // save=false: 토리 안내가 잠시 펼침 (사용자 설정은 그대로)
   document.body.classList.toggle(`hide-${side}`, hide);
   const b = sidePanels[side], name = side === 'left' ? '왼쪽 패널(정밀조립Zone)' : '오른쪽 패널(자율운영 에이전트)', key = side === 'left' ? '[' : ']';
   b.textContent = (side === 'left') === hide ? '▶' : '◀';
   b.title = `${name} ${hide ? '보이기' : '숨기기'} · 단축키 ${key}`;
-  try { localStorage.setItem(`jin3d.hide.${side}`, hide ? '1' : '0'); } catch { /* 저장소 없음 */ }
+  if (save) try { localStorage.setItem(`jin3d.hide.${side}`, hide ? '1' : '0'); } catch { /* 저장소 없음 */ }
 }
+// 오른쪽 아래 공정 설계 — 좌우 패널처럼 오른쪽으로 숨기기/보이기 (단축키 \ · 한글 자판 ₩ · 설정 기억)
+const tglDock = document.getElementById('tglDock');
+function setDock(hide, save = true) {
+  document.body.classList.toggle('hide-dock', hide);
+  tglDock.textContent = hide ? '◀' : '▶';
+  tglDock.title = `공정 설계 ${hide ? '보이기' : '숨기기'} · 단축키 \\`;
+  if (save) try { localStorage.setItem('jin3d.hide.dock', hide ? '1' : '0'); } catch { /* 저장소 없음 */ }
+}
+{ let h = false; try { h = localStorage.getItem('jin3d.hide.dock') === '1'; } catch { /* 무시 */ } setDock(h); }
+tglDock.addEventListener('click', () => setDock(!document.body.classList.contains('hide-dock')));
 for (const side of ['left', 'right']) {
   let h = false; try { h = localStorage.getItem(`jin3d.hide.${side}`) === '1'; } catch { /* 무시 */ }
   setSide(side, h);
@@ -991,8 +1243,10 @@ for (const side of ['left', 'right']) {
 const panKeys = new Set();
 addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
-  if (e.key === '[') setSide('left', !document.body.classList.contains('hide-left'));
+  if (e.key === 'p' || e.key === 'P') perf.toggle();   // 구간별 성능 표시 (js/perf.js)
+  else if (e.key === '[') setSide('left', !document.body.classList.contains('hide-left'));
   else if (e.key === ']') setSide('right', !document.body.classList.contains('hide-right'));
+  else if (e.key === '\\' || e.key === '₩') setDock(!document.body.classList.contains('hide-dock'));
   else if (e.key.startsWith('Arrow')) { panKeys.add(e.key); e.preventDefault(); }
 });
 addEventListener('keyup', (e) => { if (e.key.startsWith('Arrow')) panKeys.delete(e.key); });
@@ -1037,6 +1291,13 @@ function updateAlarmButtons() {
 // (시뮬레이션은 계속), 브라우저가 컨텍스트를 돌려주면 이어 그리고, 1.5초 안에 안 돌려주면 렌더러를 새로 만든다.
 const glNote = document.getElementById('glNote');
 let glLost = false, glTimer = 0, glRebuilds = 0;
+// 현장 대응 팝업 (js/fieldpop.js): 현장 이벤트가 감지되면 화면 아래에 감지 로봇 · 대응 로봇 · 추적 사족보행 창 — 실시간 영상 · 상태 · 서버 전송(UNS _field 토픽)
+const simClock = (t) => { const x = Math.floor(t) + 8 * 3600; return [x / 3600 % 24, x / 60 % 60, x % 60].map((v) => String(Math.floor(v)).padStart(2, '0')).join(':'); };
+const fieldPops = new FieldPops({
+  el: document.getElementById('fieldPops'), sim: () => sim, camWall, cctvView, clock: simClock, dark: () => modeKey === 'dark' && !glLost,
+  dest: () => (hub.noServer ? 'UNS 토픽 트리에 기록 (이 버전은 MQTT 브로커 없음)' : uns.broker.on ? 'MQTT 브로커로 발행 (UNS)' : uns.broker.error ? '브로커 연결 끊김 — 다시 연결되면 발행' : 'UNS 발행 대기'),
+  video: (c) => (c.cctv ? (cctvRec.on ? `🎥 CCTV 자동 녹화 · ${cctvRec.server ? '서버 data/cctv 보관' : '브라우저 보관'}` : '') : robotRec.on ? `🎥 카메라 영상 자동 녹화 · ${robotRec.server ? '서버 data/robotcam 보관' : '브라우저 보관 (이 버전은 영상 서버 없음)'}` : ''),
+});
 function watchContext(r) {
   r.domElement.addEventListener('webglcontextlost', (e) => {
     e.preventDefault();
@@ -1084,39 +1345,58 @@ document.addEventListener('visibilitychange', () => {
 
 // ── 루프 ─────────────────────────────
 const clock = new THREE.Clock();
-let uiTimer = 0, screenTimer = 0, robotTimer = 0, camTimer = 0, vlaTimer = 0;
+const interp = new StepInterp();   // 간격은 SIM_DT (js/sim.js)
+let stepAcc = 0;
+// 보간 대상: 이동체(차량·지게차·AMR·정비·보충·사족보행·드론·작업자·트럭) · 셀 진행률(로봇 팔 자세)
+const interpTargets = () => [sim.vehicles, sim.forklifts, sim.carriers, sim.techs, sim.helpers, sim.quads, sim.drones, sim.workers, sim.yard?.trucks, sim.inbound?.trucks, sim.stations].flatMap((a) => a ?? []);
+let uiTimer = 0, screenTimer = 0, robotTimer = 0, camTimer = 0, vlaTimer = 0, zdTimer = 0;
 const rbCam = { key: null, sel: 'head' };   // 로봇 정보 창 카메라 선택
 document.getElementById('detail').addEventListener('click', (e) => { const b = e.target.closest('[data-rbcam]'); if (b) { rbCam.sel = b.dataset.rbcam; camTimer = 1; } });
 const clockEl = document.getElementById('clock');
+const wallFrustum = new THREE.Frustum(), wallVP = new THREE.Matrix4();
+let shadowDrawn = null;   // 메인 화면을 한 번 그린 렌더러 — 보조 화면(전광판·녹화·에피소드 캡처)은 그림자 지도를 다시 그리지 않으므로, 그림자 지도가 생긴 뒤에만 그린다 (첫 화면이 피지컬AI라 첫 프레임부터 전광판이 켜져 있음 · 안 그린 지도를 샘플링하면 GL 형식 불일치 오류)
+const frameErrs = new Set();
+function guard(name, fn) { try { fn(); } catch (e) { const k = `${name}:${e?.message}`; if (!frameErrs.has(k)) { frameErrs.add(k); console.error(`[화면 갱신 오류 · ${name}]`, e); } } }
 function frame() {
   requestAnimationFrame(frame);   // 한 프레임에서 예외가 나도 루프는 계속
   const rdt = Math.min(clock.getDelta(), 0.1);
-  if (running && !llm.holdSim) {
-    let left = rdt * speed;
-    while (left > 1e-6) {
-      const h = Math.min(0.1, left);
-      sim.step(h); agent.update(h);
-      left -= h;
+  // 시뮬레이션은 0.1초 고정 간격으로만 진행한다 (헤드리스 테스트·디지털트윈과 같은 간격) — 프레임 시간으로 나눠 진행하면 화면 주사율에 따라 결과가 달라졌다
+  // 남은 시간은 다음 프레임으로 넘기고, 그 사이 프레임은 화면 보간(js/stepinterp.js)으로 부드럽게 그린다
+  perf.begin();
+  if (running && !llm.holdSim) perf.run('sim', () => {
+    stepAcc += rdt * speed;
+    const n = Math.floor(stepAcc / SIM_DT + 1e-9);
+    for (let i = 0; i < n; i++) {
+      if (i === n - 1) interp.capture(interpTargets());
+      sim.step(SIM_DT); agent.update(SIM_DT);
     }
+    stepAcc = Math.max(0, stepAcc - n * SIM_DT);
     llm.update();
-  }
+  });
   hub.tick(rdt);
-  bzT += rdt; if (bzT > 1.5) { bzT = 0; blenderize(scene); }   // Blender 옵션: 운영 중에 새로 생긴 모델(대상물·트럭 등)도 바꿔 끼운다
+  bzT += rdt; if (bzT > 1.5) { bzT = 0; blenderize(scene); trimShadows(scene); }   // Blender 옵션: 운영 중에 새로 생긴 모델(대상물·트럭 등)도 바꿔 끼운다
   pcapVideoTick(rdt);
-  odooSyncTick(rdt);
-  view.update(rdt, running, speed);
+  facPushTick(rdt);
+  perf.run('anim', () => {
+  interp.apply(interpTargets(), running && !llm.holdSim ? stepAcc / SIM_DT : 1);   // 그리는 동안만 위치·진행률을 직전 간격과 섞는다 (멈춤 중에는 현재 상태 그대로 — 멈춘 채 편집한 위치가 보이게)
+  // 화면 갱신에서 예외가 나도 보간 값은 되돌리고 나머지는 그린다 · 같은 오류는 콘솔에 한 번만 (프레임마다 조용히 묻히지 않게)
+  guard('정밀조립', () => view.update(rdt, running, speed));
+  interp.restore();
+  });
   keyPan(rdt, shiftHeld);
   netT += rdt; if (netT > 1 && !netCard.hidden) { netT = 0; renderNetCard(); }
   gnbT += rdt; if (gnbT > 1 && gnbSel) { gnbT = 0; renderGnb(); }
   controls.update();
   uiTimer += rdt; screenTimer += rdt;
+  perf.run('ui', () => {
   if (uiTimer > 0.25) { uiTimer = 0; ui.update(); view.updateLabels(); updateZoneCard(); orchView.tick(); gateView.tick(); updateAlarmButtons(); updateCmdUI(); clockEl.title = `기준 시계 (UTC) ${hub.iso()} · 모든 데이터·메시지가 이 시각을 씁니다`; }
   robotTimer += rdt;
   if (view.telemetry && robotTimer > 0.12) { robotTimer = 0; ui.renderRobot(view.telemetry.snapshot(), hub.robotCounts(view.telemetry)); }
   pcapBoxT += rdt; if (pcapBoxT > 0.5 && ui.robotMode && !document.getElementById('detail').classList.contains('hidden') && !document.getElementById('pcapBox')?.contains(document.activeElement)) { pcapBoxT = 0; renderPcapBox(); }
+  });
   // 피지컬AI: 로봇 정보 창에 그 로봇 카메라의 실시간 영상 (약 10fps)
   camTimer += rdt;
-  if (view.telemetry && ui.robotMode && camTimer > 0.1) {
+  if (view.telemetry && ui.robotMode && camTimer > 0.1) perf.run('rbcam', () => {
     camTimer = 0;
     const box = document.getElementById('rbCamBox'), cv = document.getElementById('rbCam');
     // 휴머노이드·AMMR: 카메라 4대(머리 · 왼손 · 오른손 · 등) 중 고른 시점
@@ -1127,29 +1407,115 @@ function frame() {
     if (tabs) { const h = camList.length ? camList.map(([k, l]) => `<button type="button" data-rbcam="${k}" class="${rbCam.sel === k ? 'on' : ''}">${l.replace(' 카메라', '').replace('스테레오', '')}</button>`).join('') : ''; if (tabs.dataset.h !== h) { tabs.innerHTML = h; tabs.dataset.h = h; } tabs.hidden = !camList.length; }
     const shown = modeKey === 'dark' && box && cv && camWall.renderRobotView(camList.length ? { ...ref0, cam: rbCam.sel } : ref0, cv, (() => { const t = Math.floor(sim.time) + 8 * 3600; return [t / 3600 % 24, t / 60 % 60, t % 60].map((v) => String(Math.floor(v)).padStart(2, '0')).join(':'); })());
     if (box) box.hidden = !shown;
-  }
+  });
+  perf.run('ui', () => {
   if (view.telemetry && ui.robotMode) placeRobotPanel();
   if (screenTimer > 0.6 && modeKey !== 'traditional') { screenTimer = 0; view.drawScreen(sim.kpi(), agent.lastThought, { hub: hub.stats(), msgs: hub.msgs, bytes: hub.bytes }); }
-  epRec.update();
-  vlaTimer += rdt; if (vlaTimer > 0.5) { vlaTimer = 0; renderVla(); renderAios(); renderImpact(); aiosUpload(); renderFacos(); renderFacosView(); }
-  cctvT += rdt; if (cctvSel && cctvT > 0.12) { cctvT = 0; renderCctvPanel(); }
+  });
+  // 현장 대응 팝업 (js/fieldpop.js): 감지 로봇 · 대응 로봇 · 추적 사족보행 영상과 서버 전송(UNS _field 토픽)
+  perf.run('fpop', () => fieldPops.tick(rdt));
+  if (shadowDrawn === renderer) perf.run('ep', () => epRec.update(sim.time - (1 - (running && !llm.holdSim ? stepAcc / SIM_DT : 1)) * SIM_DT));   // 지금 3D 자세가 보여 주는 시각 (화면 보간 — interp.apply와 같은 비율)
+  vlaTimer += rdt; if (vlaTimer > 0.5) perf.run('dash', () => { vlaTimer = 0; renderVla(); renderAios(); renderImpact(); renderTrace(); zdTimer += 0.5; if (zdTimer >= 2) { zdTimer = 0; renderZoneDash(); } aiosUpload(); renderFacos(); renderFacosView(); renderSensors(); sensorFlush(); updateSensor3d(); });
+  cctvT += rdt; if (cctvSel && cctvT > 0.12) { cctvT = 0; perf.run('cctvp', renderCctvPanel); }
   if (!glLost) {
     try {
-      camWall.update(rdt);
-      cctvView.update(rdt);
-      cctvRec.update(rdt);
-      robotRec.update(rdt);
-      composer.render();
+      // 보조 화면(전광판·녹화)은 공장 전체를 여러 번 다시 그린다 — 객체 위치(행렬)는 이번 프레임에 한 번만 계산하고 그 값을 함께 쓴다
+      // (그릴 때마다 모든 객체의 위치를 처음부터 다시 계산하던 것을 없앰. 메인 화면은 아래 composer.render에서 평소대로 다시 계산)
+      perf.run('matrix', () => scene.updateMatrixWorld()); scene.matrixWorldAutoUpdate = false;
+      camera.updateMatrixWorld(); wallFrustum.setFromProjectionMatrix(wallVP.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+      camWall.seen = !!camWall.screen && wallFrustum.intersectsObject(camWall.screen);   // 시야 밖 전광판은 덜 자주 그림 (robotcam.js)
+      if (shadowDrawn === renderer) try {
+        perf.run('walls', () => camWall.update(rdt));
+        perf.run('cctv', () => cctvView.update(rdt));
+        perf.run('rec', () => { cctvRec.update(rdt); robotRec.update(rdt); });
+      } finally { scene.matrixWorldAutoUpdate = true; }
+      // 안개는 카메라 거리를 따라 민다 — 줌 아웃해도 공장이 배경색(어두운 색)으로 바래지 않고 밝기를 유지한다 (가까이서는 기존 70~160m 그대로)
+      if (scene.fog) { const d = camera.position.distanceTo(controls.target); scene.fog.near = Math.max(70, d + 40); scene.fog.far = Math.max(160, d + 160); }
+      // 메인 화면도 화면에 1픽셀(기기 픽셀)보다 작게 찍힐 작은 물체는 빼고 그린다 (멀리서 볼 때 나사·케이블·라벨판) — 그룹째 숨기기는 쓰지 않음 (시야 밖 설비의 그림자가 시야 안에 드리움)
+      perf.run('main', () => (mainCull.on ? withCull(scene, camera, innerHeight * renderer.getPixelRatio(), undefined, () => composer.render()) : composer.render()));
+      shadowDrawn = renderer;
     } catch (e) { if (!frame.errAt || performance.now() - frame.errAt > 5000) { frame.errAt = performance.now(); console.error('[피지컬AI 실증 메타팩토리] 렌더 오류', e); } }
   }
-  labelRenderer.render(scene, camera);
+  perf.run('labels', () => labelRenderer.render(scene, camera));
+  perf.end();
 }
 
 // Blender 모델을 먼저 불러온 뒤 공장을 한 번만 그린다 (불러오지 못하면 기본 도형 모델로 계속)
 let blenderErr = null;
 await loadBlenderAssets().catch((e) => { blenderErr = e.message; });
 document.body.dataset.render = RENDER.loaded ? 'blender' : '3d';
-start('smart');
+start('dark');
+// 토리 안내용 카메라: 지금 시점에서 목표 시점으로 부드럽게 이동 · 확대 (1.2초) — 시점 이름(TORI_VIEWS) · 좌표(x, z, 높이 d) · 설비(셀 ID)
+const TORI_VIEWS = { all: [[-10.5, 45, 58], [-5.5, 0, 1]], precision: [[0.5, 38, 42], [0.5, 0, 1]] };   // all: 건물 전체(첫 화면과 같음) · precision: 정밀조립 라인(부품분류 → 조립 → 체결 → 검사·포장)
+let camTw = null;
+function tweenCam(p, t, ms = 1200) {
+  const p0 = persp.position.clone(), t0 = ctlP.target.clone(), P = new THREE.Vector3(...p), T = new THREE.Vector3(...t), start = performance.now(), id = (camTw = {});
+  const step = (now) => { if (camTw !== id) return; const k = Math.min(1, (now - start) / ms), e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+    persp.position.lerpVectors(p0, P, e); ctlP.target.lerpVectors(t0, T, e); ctlP.update(); if (k < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+}
+function toriCam(c) {
+  if (c.view) { const [p, t] = TORI_VIEWS[c.view] ?? TORI_VIEWS.all; return tweenCam(p, t); }
+  let { x, z } = c; const d = c.d ?? 24;
+  if (c.station) { const sv = view.stationViews.find((v) => v.st.id === c.station); if (!sv) return; const w = sv.group.getWorldPosition(new THREE.Vector3()); x = w.x; z = w.z; }
+  tweenCam([x + d * 0.12, d, z + d * 0.9], [x, 0, z], c.ms);
+}
+// 토리 안내용 창: 오케스트레이터(FacOS 계층 · A2A · UNS 토픽 트리 · 인시던트 흐름도) · FAC(구매오더) · 품질 추적(탭 · 선택 제품 · EPCIS 조회) · KPI 영향 · Zone 대시보드 · 데이터 연동 · 센서망 · 5G 지도 · 로봇 정보
+function toriPanel(p) {
+  document.body.classList.add('tori-tour');
+  if (p.kind === 'orch') { unsFocus(p.uns ?? null); orchView.show(); orchView.tab = p.tab; orchView.render(true); }   // p.uns: UNS 탭에서 강조할 토픽 (토리 인시던트 예시)
+  else if (p.kind === 'data') { if (dataModal.classList.contains('hidden')) document.getElementById('btnData').click(); }   // 데이터 연동 창 (AAS · OPC UA PubSub · pcap)
+  else if (p.kind === 'sensors') { if (sensorModal.classList.contains('hidden')) document.getElementById('btnSensors').click(); }   // 센서망 창 (계층 · PTP 기준 시계)
+  else if (p.kind === 'net5g') { if (!netBtn.classList.contains('on')) { netBtn.click(); toriNet = true; } }   // 이음5G 신호 지도 · 요약 카드 (토리가 켠 것만 닫을 때 끈다)
+  else if (p.kind === 'fac') { facTab = p.tab ?? 'po'; document.getElementById('btnFac').click(); }
+  else if (p.kind === 'robot') { if (modeKey === 'dark' && [...sim.movers, ...(sim.drones ?? [])].some((m) => m.id === p.id)) { view.selectRobot({ type: 'mover', id: p.id }); ui.showRobot(); robotTimer = 1; camTimer = 1; } }   // 로봇 정보 창 (그 로봇 카메라 영상 · AI 검출)
+  else if (p.kind === 'orchInc') { const inc = sim.orch.incidents.find((i) => i.key === p.key); orchView.show(); orchView.tab = 'flow'; if (inc) orchView.sel = inc.id; orchView.render(true); }   // 그 인시던트 흐름도
+  else if (p.kind === 'impact') {   // KPI 영향 · 개선 창 — 손실 표 · 그 제안 카드 · 의사결정 이력으로 스크롤
+    openImpact();
+    const at = () => (p.focus === 'loss' ? impactBody.querySelector('h3') : p.focus === 'log' ? [...impactBody.querySelectorAll('h3')].find((h) => h.textContent.startsWith('의사결정 이력')) ?? [...impactBody.querySelectorAll('h3')].find((h) => h.textContent.startsWith('개선 방법')) : p.focus != null ? impactBody.querySelector(`[data-imp-id="${p.focus}"]`) : null);
+    requestAnimationFrame(() => at()?.scrollIntoView({ block: p.focus === 'loss' || p.focus === 'log' ? 'start' : 'center', behavior: 'smooth' }));
+  }
+  else if (p.kind === 'facos') { if (modeKey === 'dark') openFacosView(p.view); }   // FacOS 상세 창 (셀 게이트 · 현장 감지 · 보안)
+  else if (p.kind === 'zd') { zdState.tab = p.tab ?? 'live'; openZoneDash(); }
+  else if (p.kind === 'trace') {
+    traceState.tab = p.tab ?? 'trace'; traceState.q = '';
+    if (p.caseId) traceState.caseId = p.caseId; if (p.capaId) traceState.capaId = p.capaId;
+    if (p.tab === 'serial') traceState.sid = p.id ?? null; else traceState.serial = p.id ?? null;
+    traceModal.classList.remove('hidden'); renderTrace(true);
+    if (p.epcis) setTimeout(() => traceBody.querySelector('[data-qt-epcis]')?.click(), 600);   // 발행 → 적재 → 팔레트 → 출하 이벤트 사슬
+  }
+}
+// 토리 품질 관리 시나리오: 조립셀 하나에 공정 편차(드리프트)를 일으키고 다음 2개를 불량으로 — 체결셀 전수 검사가 잡아 사례 · AI 원인 분석 · 8D로 이어진다
+function toriQualityDrift() {
+  const st = ['DT_ASSY', 'EA_ASSY'].map((id) => sim.processing.find((x) => x.id === id && !x.standby)).find(Boolean); if (!st) return null;
+  st.drift = Math.max(st.drift, 0.6); st.forceDefect = 2;
+  sim.log('warn', `[시나리오] 공정 편차 주입 · ${st.name}`, { obs: '안내(토리 품질 관리) 시연 — 드리프트 60% · 다음 2개 불량', act: '체결셀 전수 검사 → 불량 사례 · AI 원인 분석 · 8D' });
+  return { id: st.id, name: st.name, t: sim.time };
+}
+let toriNet = false;   // 토리가 이음5G 지도를 켰는지 (사용자가 켠 지도는 끄지 않는다)
+function toriClosePanels() {
+  document.body.classList.remove('tori-tour'); unsFocus(null); orchView.hide(); zdModal.classList.add('hidden');
+  if (ui.robotMode) { view.selectRobot(null); ui.hideDetail(); }
+  facModal.classList.add('hidden'); clearInterval(facTimer); traceModal.classList.add('hidden');
+  fcModal.classList.add('hidden'); fcView = null; impactModal.classList.add('hidden');
+  dataModal.classList.add('hidden'); clearInterval(dataTimer); sensorModal.classList.add('hidden');
+  if (toriNet && netBtn.classList.contains('on')) netBtn.click(); toriNet = false;
+}
+// 토리 인시던트 예시: 흐름도를 바로 열지 않고 현장 이벤트만 만든다 (⚠ 버튼은 흐름도를 함께 연다) · 배속 · 이동체 위치
+function toriEvent() {
+  const ev = camWall.injectRandom();   // 움직이는 로봇 카메라 앞 (그 카메라가 곧 감지)
+  if (ev) ev.quiet = true;   // 토리가 「AI 감지」 단계에서 풀 때까지 아무도 감지하지 않는다 (말과 현장을 맞춤)
+  if (ev) sim.log('warn', `[시나리오] 현장 이벤트 발생 · ${ev.label}`, { obs: '안내(토리 인시던트 예시) — 아직 아무도 인지하지 못한 상태, 로봇 카메라 영상의 AI 추론으로 감지되면 자율 대응합니다' });
+  return ev ?? null;
+}
+const toriSpeed = (v) => { if (v == null) return speed; document.querySelector(`#speedSeg [data-speed="${v}"]`)?.click(); return v; };
+const toriPause = (v) => { if (running === v) playBtn.click(); };   // v=true 멈춤 (▶ 버튼과 같은 상태)
+const toriMover = (id) => { const m = [...sim.movers, ...(sim.drones ?? [])].find((x) => x.id === id); return m ? { x: m.x, z: m.z } : null; };
+const tori = new Tori({ flyTo: (k) => toriCam({ view: k }), camTo: toriCam, openPanel: toriPanel, closePanels: toriClosePanels, qualityDrift: toriQualityDrift,
+  quietEvent: toriEvent, speed: toriSpeed, moverPos: toriMover, pause: toriPause, sim: () => sim, setMode: (k) => document.querySelector(`#modeSeg button[data-mode="${k}"]`)?.click(), mode: () => modeKey,
+  side: (k, hide) => setSide(k, hide, false), paused: () => !running });   // 토리가 잠시 펼친 패널은 저장하지 않는다 · 사용자가 멈춰 뒀는지   // 안내 아바타 (js/tori.js) — 처음 접속이면 인사
+toriRun = () => tori.simChanged();
+tori.greetIfFirst();
 if (blenderErr) sim.log('warn', 'Blender 모델을 불러오지 못함', { obs: blenderErr, act: '기본 도형 모델로 계속' });
 frame();
 
@@ -1179,14 +1545,20 @@ if (!window.JIN3D_SHARED && !window.JIN3D_NO_SERVER) fetch('/api/status').then((
 const bridge = window.jin3d;
 if (bridge?.isApp) {
   document.body.classList.add('app');
+  // 윈도우 앱: 기본 창틀을 쓰므로 상단 바의 신호등 여백·끌기 영역을 끄고, 키 보관 문구·단축키를 윈도우에 맞춘다 (맥은 그대로)
+  if (bridge.platform && bridge.platform !== 'darwin') {
+    document.body.classList.add('win');
+    document.querySelector('#settings .modal-h small').textContent = '키는 윈도우 데이터 보호(DPAPI)로 암호화되어 이 PC에만 저장되며, 화면(렌더러)으로는 전달되지 않습니다.';
+    document.getElementById('btnSettings').title = 'Agent API 키 설정 (Ctrl+,)';
+  }
   const modal = document.getElementById('settings');
   const statusEl = document.getElementById('keyStatus');
   const input = document.getElementById('keyInput');
   const showStatus = (st, msg) => {
     statusEl.className = 'key-status ' + (msg ? 'err' : st.hasKey ? 'ok' : '');
     statusEl.textContent = msg || (st.hasKey
-      ? `키 설정됨 (${st.source === 'keychain' ? '키체인에 저장' : '환경변수'}) — 대화 기반 Agent를 쓸 수 있습니다`
-      : '키가 없습니다 — 추론 기반 에이전트만 사용 가능');
+      ? `키 설정됨 (${st.source === 'keychain' ? (document.body.classList.contains('win') ? 'PC에 암호화 저장' : '키체인에 저장') : '환경변수'}) — 대화 기반 Agent를 쓸 수 있습니다`
+      : '키가 없습니다 — 정책 기반 에이전트만 사용 가능');
   };
   const open = async () => { modal.classList.remove('hidden'); input.value = ''; showStatus(await bridge.keyStatus()); input.focus(); };
   const afterChange = async (res) => {
@@ -1200,6 +1572,57 @@ if (bridge?.isApp) {
   document.getElementById('closeSettings').addEventListener('click', () => modal.classList.add('hidden'));
   document.getElementById('keyForm').addEventListener('submit', async (e) => { e.preventDefault(); afterChange(await bridge.setApiKey(input.value)); });
   document.getElementById('keyClear').addEventListener('click', async () => afterChange(await bridge.clearApiKey()));
+} else if (serverless()) {
+  // ── 웹 버전(GitHub Pages) 전용: API 키를 이 브라우저에 두고 Claude API를 직접 부른다 (서버 없음)
+  document.body.classList.add('webkey');
+  const modal = document.getElementById('settings');
+  const statusEl = document.getElementById('keyStatus');
+  const input = document.getElementById('keyInput');
+  document.querySelector('#settings .modal-h small').textContent = '키는 이 브라우저 저장소에만 두고 Anthropic API(api.anthropic.com)로만 직접 보냅니다 — 페이지 서버로는 전달되지 않습니다.';
+  const keep = document.createElement('label'); keep.className = 'chk key-keep';
+  keep.innerHTML = '<input type="checkbox" id="keyRemember" /> 이 브라우저에 기억 (끄면 이 탭을 닫을 때 지워짐 · 공용 PC에서는 끄기)';
+  document.querySelector('#keyForm .key-btns').before(keep);
+  const remember = document.getElementById('keyRemember');
+  const showStatus = (msg) => {
+    statusEl.className = 'key-status ' + (msg ? 'err' : llm.available ? 'ok' : '');
+    statusEl.textContent = msg || (llm.provider === 'key' ? '키 설정됨 (이 브라우저) — 대화 기반 Agent가 Claude API를 직접 부릅니다' : '키가 없습니다 — 정책 기반 에이전트와 내장 해석기만 사용');
+  };
+  const open = () => { modal.classList.remove('hidden'); input.value = ''; remember.checked = browserKeyKept(); showStatus(); input.focus(); };
+  const afterChange = (res) => { if (!res.ok) return showStatus(res.error); input.value = ''; showStatus(); if (!llm.available && llm.enabled) llm.setEnabled(false); };
+  document.getElementById('btnSettings').addEventListener('click', open);
+  document.getElementById('closeSettings').addEventListener('click', () => modal.classList.add('hidden'));
+  document.getElementById('keyForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!input.value.trim()) return showStatus('키를 입력하세요.');
+    afterChange(await llm.setBrowserKey(input.value, remember.checked));
+  });
+  document.getElementById('keyClear').addEventListener('click', async () => afterChange(await llm.setBrowserKey('', false)));
+  document.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); open(); } });
+}
+// ── 사용자 가이드 PDF 내려받기 (상단 📘) ─────────────────
+// docs/USER_GUIDE.pdf — 앱·npm start는 서버가, 웹 버전은 GitHub Pages가 내준다. 파일이 실제로 있을 때만 버튼을 보인다 (없는 링크를 내놓지 않는다)
+const GUIDE_PDF = { url: 'docs/USER_GUIDE.pdf', name: 'Jin-3D_사용자가이드.pdf' };
+{
+  const btn = document.getElementById('btnGuide');
+  if (!window.JIN3D_SHARED) fetch(GUIDE_PDF.url, { method: 'HEAD' }).then((r) => { btn.hidden = !(r.ok && /pdf/i.test(r.headers.get('content-type') ?? '')); }, () => {});
+  btn.addEventListener('click', () => { const a = document.createElement('a'); a.href = GUIDE_PDF.url; a.download = GUIDE_PDF.name; document.body.appendChild(a); a.click(); a.remove(); });
+}
+// ── 맥·윈도우 앱 내려받기 (상단 ⬇) — 웹 버전(GitHub Pages)에서만 ─────────────────
+// 맥·윈도우 앱과 npm start(로컬 서버)에는 보이지 않는다. 릴리스 파일 주소를 아래 한 곳에 넣으면 그 링크와 버튼이 보인다 (빈 값이면 숨김)
+//   예: 'https://github.com/theuniversepark/jin-3d/releases/latest/download/피지컬AI 실증 메타팩토리-darwin-arm64.zip' — 릴리스마다 두 zip을 함께 올린다
+const APP_DOWNLOADS = { mac: '', win: '', releases: '' };
+{
+  const web = !bridge?.isApp && serverless(), any = !!(APP_DOWNLOADS.mac || APP_DOWNLOADS.win);
+  const btn = document.getElementById('btnApps'), modal = document.getElementById('appsModal');
+  btn.hidden = !(web && any);
+  if (web && any) {
+    for (const [k, id] of [['mac', 'appsMac'], ['win', 'appsWin'], ['releases', 'appsRel']]) {
+      const a = document.getElementById(id), u = APP_DOWNLOADS[k];
+      if (u) { a.href = u; if (k !== 'releases') a.querySelector('small').append(` · ${u.split('/').pop()}`); } else (k === 'releases' ? a.closest('li') : a).remove();
+    }
+    btn.addEventListener('click', () => modal.classList.remove('hidden'));
+    document.getElementById('closeApps').addEventListener('click', () => modal.classList.add('hidden'));
+  } else modal.remove();
 }
 // ── VLA 데이터·학습 파이프라인 창 ─────────────────
 const vlaModal = document.getElementById('vlaModal'), vlaBody = document.getElementById('vlaBody');
@@ -1271,9 +1694,126 @@ function renderImpact(force) {
   setHTML(impactBody, impactHTML(sim));
 }
 
+// ── 품질 추적 · 불량 원인 분석 · 8D CAPA 창 (traceview.js) ─────────────────
+const traceModal = document.getElementById('traceModal'), traceBody = document.getElementById('traceBody');
+document.getElementById('btnTrace').addEventListener('click', () => { traceModal.classList.remove('hidden'); renderTrace(true); });
+document.getElementById('closeTrace').addEventListener('click', () => traceModal.classList.add('hidden'));
+traceModal.addEventListener('click', (e) => { if (e.target === traceModal) traceModal.classList.add('hidden'); });
+traceBody.addEventListener('click', (e) => {
+  const r = traceClick(sim, e); if (!r) return;
+  if (r.epcis || r.ship) {   // 「EPCIS 저장소에서 조회」 · 「이 트럭 리콜 범위」 — 앱 내장 저장소 / 웹 브라우저 메모리
+    const key = r.epcis ?? r.ship, kind = r.epcis ? 'trace' : 'ship';
+    traceState.epcis = { kind, key, loading: true }; renderTrace(true);
+    epcisQuery(kind, key).then((d) => { if (traceState.epcis?.key === key) traceState.epcis = { kind, key, data: d, src: hub.noServer ? '브라우저 메모리 저장소' : '앱 내장 EPCIS 저장소' }; })
+      .catch((err) => { if (traceState.epcis?.key === key) traceState.epcis = { kind, key, error: err.message }; }).finally(() => renderTrace(true));
+    return;
+  }
+  if (r.dl) {
+    const T = sim.trace, c = T.cases.find((x) => x.id === r.caseId), iso = (t) => hub.iso(t);
+    if (r.dl === 'case' && !c) return;
+    if (r.dl.startsWith('q')) {   // 품질 통신 (js/qcomm.js): 사례 pcap · 전체 pcap · 리포트·RCA 결과 JSON
+      const Q = sim.qcomm, cm = Q?.cases.get(traceState.caseId) ?? Q?.cases.get(Q.order.at(-1)); if (!Q || (r.dl !== 'qpcapall' && !cm)) return;
+      const data = r.dl === 'qjson' ? JSON.stringify({ caseId: cm.id, ticket: cm.ticket, status: cm.status, messages: cm.msgs.map((m) => ({ ...m, time: Q.iso(m.t) })), report: cm.report, rcaResult: cm.result, live: cm.live }, null, 2) : Q.pcap(r.dl === 'qpcap' ? cm.id : null);
+      const name = r.dl === 'qjson' ? `QualityReport_${cm.id}.json` : r.dl === 'qpcap' ? `QualityComm_${cm.id}.pcap` : `QualityComm_all_${Q.stats.reports}cases.pcap`;
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data], { type: r.dl === 'qjson' ? 'application/json' : 'application/vnd.tcpdump.pcap' })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      sim.sec?.onExport(r.dl === 'qjson' ? '불량 판정 리포트·RCA 결과' : '품질 통신 패킷 (pcap)', name, data.byteLength ?? data.length);
+      return;
+    }
+    const zip = zipStore(r.dl === 'case' ? caseFiles(T, c, iso) : allFiles(T, iso));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([zip], { type: 'application/zip' }));
+    a.download = r.dl === 'case' ? `RCA_${c.id}_${c.serial}.zip` : `RCA_dataset_${T.stats.released}products_${T.cases.length}cases_${epRec.runId}.zip`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    sim.sec?.onExport('불량 원인 분석 데이터', a.download, zip.byteLength ?? zip.length);
+    return;
+  }
+  renderTrace(true);
+});
+traceBody.addEventListener('input', (e) => {
+  if (e.target.id !== 'qtSearch') return;
+  traceState.q = e.target.value; const pos = e.target.selectionStart; renderTrace(true);
+  const el = document.getElementById('qtSearch'); el?.focus(); el?.setSelectionRange(pos, pos);
+});
+// ── Zone 대시보드 창 (js/zonedash.js · js/zonekpi.js): 실시간 모니터링 · OEE·파레토 · 관리도·산점도 — 상단 버튼 (정밀조립Zone 하나) ─────────────────
+const zdModal = document.getElementById('zdModal'), zdBody = document.getElementById('zdBody');
+function openZoneDash() { zdModal.classList.remove('hidden'); monStatus(); renderZoneDash(true); }
+document.getElementById('btnZoneDash').addEventListener('click', openZoneDash);
+document.getElementById('closeZd').addEventListener('click', () => zdModal.classList.add('hidden'));
+zdModal.addEventListener('click', (e) => { if (e.target === zdModal) zdModal.classList.add('hidden'); });
+zdBody.addEventListener('click', (e) => {
+  const r = zoneDashClick(e); if (!r) return;
+  if (r.grafana) { if (monSt?.url) window.open(`${monSt.url}d/jm-zone?from=now-6h&to=now`, '_blank', 'noopener'); return; }   // 설비 대시보드(Grafana)의 정밀조립Zone 운영 분석
+  renderZoneDash(true);
+});
+function renderZoneDash(force) {
+  if (zdModal.classList.contains('hidden')) return;
+  if (!force && (zdBody.querySelector('button:hover, tr:hover, circle:hover, rect:hover') || window.getSelection()?.toString())) return;
+  const sc = zdBody.querySelector('.zd-body')?.scrollTop ?? 0;
+  setHTML(zdBody, zoneDashHTML(sim, { grafana: !hub.noServer && monSt?.grafana ? monSt.url : null }));   // 설비 대시보드가 켜져 있으면 「Grafana에서 보기」 단추
+  const b = zdBody.querySelector('.zd-body'); if (b) b.scrollTop = sc;
+}
+// ── 센서망 창 · 공장 중앙 MQTT 발행 · 3D 센서 위치 (js/sensors.js · js/sensorview.js) ─────────────────
+const sensorModal = document.getElementById('sensorModal'), sensorBody = document.getElementById('sensorBody');
+let sensorSrv = null, sensorSrvT = 0, sensorBusy = false;
+document.getElementById('btnSensors').addEventListener('click', () => { sensorModal.classList.remove('hidden'); sensorPoll(true); renderSensors(true); });
+document.getElementById('closeSensor').addEventListener('click', () => sensorModal.classList.add('hidden'));
+sensorModal.addEventListener('click', (e) => { if (e.target === sensorModal) sensorModal.classList.add('hidden'); });
+sensorBody.addEventListener('click', (e) => { if (sensorClick(e)) { if (e.target.closest('[data-sn-3d]')) updateSensor3d(); renderSensors(true); } });
+async function sensorPoll(force) {
+  if (hub.noServer || (!force && performance.now() - sensorSrvT < 2000)) return; sensorSrvT = performance.now();
+  try {
+    const [st, lt] = await Promise.all([fetch('/api/sensors/v1/status').then((r) => r.json()), fetch('/api/sensors/v1/latency').then((r) => r.json())]);
+    sensorSrv = st.error ? { error: st.detail ?? st.error } : { status: st, latency: lt };
+  } catch (e) { sensorSrv = { error: e.message }; }
+}
+function renderSensors(force) {
+  if (sensorModal.classList.contains('hidden') && !force) return;
+  sensorPoll();
+  if (!force && (sensorBody.querySelector('button:hover, input:focus') || window.getSelection()?.toString())) return;
+  const keep = sensorBody.scrollTop; setHTML(sensorBody, sensorHTML(sim, sensorSrv)); sensorBody.scrollTop = keep;
+}
+// 존 서버 → 공장 중앙 MQTT(앱 내장 브로커) → 센서 서버(구독 · DB) · DataHub 전체 캡처가 켜져 있으면 같은 메시지를 pcap에도
+async function sensorFlush() {
+  const N = sim.sensors; if (!N?.publish || sensorBusy || !N.pending()) return;
+  const batch = N.take(600); sensorBusy = true;
+  if (hub.pcap?.on) for (const m of batch) hub.pcap.publish({ key: m.src.id, kind: 'lan', ip: m.src.ip, topic: m.topic, payload: m.payload, tMs: m.tMs ?? hub.epochMs + sim.time * 1000, retain: m.retain, subs: [] });
+  // 실패(연결 · HTTP 500 등): 측정 묶음은 주기 데이터라 유실로 세고 넘어간다(다음 묶음이 간다 · 묶음 seq로 서버가 빠진 구간을 안다) · 센서 메타(birth · retain)는 한 번만 나가므로 다시 넣어 재전송
+  const lost = () => { const b = batch.filter((m) => m.retain); N.birthQ.unshift(...b); N.stats.dropped += batch.length - b.length; };
+  try { const r = await fetch('/api/mqtt/publish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: batch.map(({ topic, payload, retain }) => ({ topic, payload, retain })) }) }); if (!r.ok) lost(); }
+  catch { lost(); } finally { sensorBusy = false; }
+}
+// 3D: 센서 위치 표시 (반투명 · 셀 위 3m — 설비·이동체와 겹쳐도 간섭 점검 대상이 아님)
+var sensor3d;   // var(초기값 없음): 첫 리셋(모듈 앞부분)에서 buildSensor3d가 먼저 불린다
+function snCol(lv) { return ({ ok: 0x3ddc84, warn: 0xf5b82e, alarm: 0xff4a4a })[lv] ?? 0x3ddc84; }
+function buildSensor3d() {
+  if (sensor3d) { scene.remove(sensor3d.g); sensor3d.g.traverse((o) => o.material?.dispose?.()); }
+  const N = sim.sensors; sensor3d = null; if (!N) return;
+  const g = new THREE.Group(), geo = new THREE.OctahedronGeometry(0.11), pole = new THREE.CylinderGeometry(0.01, 0.01, 0.5, 4), items = [];
+  for (const sn of N.sensors) {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x3ddc84, transparent: true, opacity: 0.5, depthWrite: false }));
+    m.position.set(sn.x, 3.0, sn.z); m.userData.sensor = sn.id; g.add(m);
+    const p = new THREE.Mesh(pole, new THREE.MeshBasicMaterial({ color: 0x58c4ff, transparent: true, opacity: 0.25, depthWrite: false })); p.position.set(sn.x, 3.3, sn.z); g.add(p);
+    items.push([sn, m]);
+  }
+  scene.add(g); sensor3d = { g, items }; updateSensor3d();
+}
+function updateSensor3d() {
+  if (!sensor3d) return; sensor3d.g.visible = sensorState.show3d;
+  if (!sensor3d.g.visible) return;
+  for (const [sn, m] of sensor3d.items) m.material.color.setHex(snCol(sim.sensors.latest.get(sn.id)?.lv));
+}
+function renderTrace(force) {
+  const C = sim.capa, n = C ? C.pending.length : 0, badge = document.getElementById('qtBadge');
+  if (badge) { badge.hidden = !n; badge.textContent = n; }
+  if (traceModal.classList.contains('hidden') && !force) return;
+  if (!force && (traceBody.querySelector('button:hover, input:focus, tr:hover') || window.getSelection()?.toString())) return;
+  const sc = traceBody.querySelectorAll('.qt-split > div, .qt-swim'), keep = [...sc].map((el) => el.scrollTop);
+  setHTML(traceBody, traceHTML(sim));
+  traceBody.querySelectorAll('.qt-split > div, .qt-swim').forEach((el, i) => { if (keep[i]) el.scrollTop = keep[i]; });
+}
+
+
 // ── AIOS 공장 운영 AI 창 ─────────────────
 const aiosModal = document.getElementById('aiosModal'), aiosBody = document.getElementById('aiosBody');
-const aiosUp = { n: 0, bytes: 0, busy: false };
+const aiosUp = { n: 0, bytes: 0, busy: false, fail: 0, nextAt: 0, lastError: null, lost: 0 };   // fail·nextAt: 올리기 실패 횟수 · 다시 시도할 시각 (실패한 묶음은 완료로 치지 않고 간격을 늘려 다시)
 let aiosDir = null;
 document.getElementById('btnAios').addEventListener('click', () => {
   aiosModal.classList.remove('hidden'); renderAios(true);
@@ -1291,14 +1831,26 @@ aiosModal.addEventListener('click', (e) => {
   a.download = `AIOS_ops_${range ? 'recent10m' : `${P.samples.length}samples`}_${P.version}_${epRec.runId}.zip`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   sim.sec?.onExport('AIOS 운영 데이터셋', a.download, zip.byteLength ?? zip.length);
 });
-// 10분 묶음이 생길 때마다 서버(data/aios/)에 올린다
+// 10분 묶음이 생길 때마다 서버(data/aios/)에 올린다 — 서버가 받았을 때(HTTP 200)만 완료로 표시, 실패하면 5초부터 최대 2분 간격으로 다시
+//   묶음이 생기면 바로 ZIP을 만들어 두고 성공할 때까지 같은 본문을 보낸다 — 브라우저 샘플은 최근 6시간만 남아, 나중에 다시 만들면 비거나 일부만 담긴다
+//   ZIP을 만들 때 이미 샘플이 없으면(원본 만료) 완료로 치지 않고 복구 불가(lost)로 센다
 function aiosUpload() {
-  const P = sim.aios; if (!P?.on || !epRec.server || aiosUp.busy) return;
-  const c = P.chunks.find((x) => !x.up); if (!c) return;
-  c.up = true; aiosUp.busy = true;
-  const zip = buildAiosZip(P, zipStore, (t) => hub.iso(t), epRec.runId, [c.t - (AIOS_CHUNK - 1) * AIOS_SAMPLE_S, c.t]);
-  fetch(`/api/aios?id=${epRec.runId}_${c.id}`, { method: 'POST', body: zip }).then((r) => { if (r.ok) { aiosUp.n++; aiosUp.bytes += zip.length; } })
-    .catch(() => {}).finally(() => { aiosUp.busy = false; });
+  const P = sim.aios; if (!P?.on || !epRec.server) return;
+  for (const x of P.chunks) {
+    if (x.up || x.zip || x.lost) continue;
+    const range = [x.t - (AIOS_CHUNK - 1) * AIOS_SAMPLE_S, x.t];
+    if (!P.samples.some((s) => s.t >= range[0] && s.t <= range[1])) { x.lost = true; aiosUp.lost++; continue; }
+    x.zip = buildAiosZip(P, zipStore, (t) => hub.iso(t), epRec.runId, range);
+  }
+  if (aiosUp.busy || performance.now() < aiosUp.nextAt) return;
+  const c = P.chunks.find((x) => !x.up && x.zip); if (!c) return;
+  aiosUp.busy = true;
+  const zip = c.zip;
+  fetch(`/api/aios?id=${epRec.runId}_${c.id}`, { method: 'POST', body: zip }).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    c.up = true; c.zip = null; aiosUp.n++; aiosUp.bytes += zip.length; aiosUp.fail = 0; aiosUp.nextAt = 0; aiosUp.lastError = null;
+  }).catch((e) => { aiosUp.fail++; aiosUp.lastError = e.message; aiosUp.nextAt = performance.now() + Math.min(120000, 5000 * 2 ** Math.min(aiosUp.fail - 1, 5)); })
+    .finally(() => { aiosUp.busy = false; });
 }
 function renderAios(force) {
   if (aiosModal.classList.contains('hidden') && !force) return;
@@ -1316,7 +1868,7 @@ function renderAios(force) {
       ${stage('🏭', '1 현장 데이터 수집', `샘플 ${P.total}개 · ${AIOS_SAMPLE_S}초 주기`, '생산·설비·물류(AMR·AGV)·에너지·품질 + 인시던트·운영 의사결정', true)}<b class="va">›</b>
       ${stage('🧹', '2 AI-ready 정제', `특징 ${AIOS_FEATURES.length}종 · 셀 ${sim.processing.length}×5`, '고정 스키마 · UTC 동기 · 보상 라벨 · 전이(상태·행동·보상)', true)}<b class="va">›</b>
       ${stage('📚', '3 운영 데이터셋', `전이 ${Math.max(0, P.samples.length - 1)} · 이벤트 ${P.events.length}`, `의사결정 ${P.decisions.length}건 · 10분 묶음 ${P.chunks.length}개`, false)}<b class="va">›</b>
-      ${stage('🗄', '4 서버 저장', epRec.server ? `${aiosUp.n}묶음 · ${(aiosUp.bytes / 1048576).toFixed(1)}MB` : '브라우저 보관', epRec.server ? escV(dirTxt) : '서버 없음 (웹·공유) — 파일로 내려받아 보관', aiosUp.n > 0)}<b class="va">›</b>
+      ${stage('🗄', '4 서버 저장', epRec.server ? `${aiosUp.n}묶음 · ${(aiosUp.bytes / 1048576).toFixed(1)}MB` : '브라우저 보관', epRec.server ? (aiosUp.fail ? `올리기 실패 ${aiosUp.fail}회 (${escV(aiosUp.lastError ?? '')}) — 다시 시도 중` : aiosUp.lost ? `${escV(dirTxt)} · 복구 불가 ${aiosUp.lost}묶음 (원본 만료)` : escV(dirTxt)) : '서버 없음 (웹·공유) — 파일로 내려받아 보관', aiosUp.n > 0)}<b class="va">›</b>
       ${stage('🧠', '5 AIOS 학습', act === 'train' ? `에폭 ${j.epoch}/${j.epochs} · loss ${j.loss.at(-1) ?? '-'}` : `다음 학습까지 ${Math.max(0, need - P.newSamples)}개`, act === 'train' ? `${j.label} · 정책 헤드 ${AIOS_HEADS.length}개` : `새 샘플 ${P.newSamples}개 누적 (30분마다)`, act === 'train')}<b class="va">›</b>
       ${stage('🧪', '6 트윈 검증', tw != null ? `시뮬레이션 ${tw}%` : last ? `UPH ${last.result.uphCur} → ${last.result.uphCand}` : '-', tw != null ? '현재 vs 후보 정책 · 20분 × 2' : last ? `${last.label} · 생산 ${last.result.gain >= 0 ? '+' : ''}${last.result.gain}% · 에너지 ${last.result.eGain >= 0 ? '+' : ''}${last.result.eGain}%` : '디지털트윈에서 현재·후보 정책 비교', act === 'twin')}<b class="va">›</b>
       ${stage('🚀', '7 오케스트레이터 배포', `AIOS ${P.version}`, act === 'shadow' ? `${j.label} 섀도 모드 (추천만)` : act === 'verify' ? `${j.label} 적용 · 실측 효과 확인 중` : '운영 정책 → 피지컬AI 오케스트레이터', act === 'shadow' || act === 'verify')}
@@ -1471,7 +2023,7 @@ function renderFacos() {
   const cmd = K.estopAll || s.processing.some((st) => st.cmd?.estop) ? ['비상정지 발령', 'bad'] : K.pstopAll ? ['보호정지', 'warn'] : K.lineSafe || K.evac || K.feedHold ? ['제한 운전', 'warn'] : ['정상', 'ok'];
   const mq = hub.mqtt;
   const L = [
-    ['💬', '운영자 지시', llm.enabled ? '대화 기반' : '추론 기반', 'ok', null, '추론 기반: 내장 규칙 자율 운영 · 대화 기반: 지시 → 지시 게이트(해석·대상·안전·실행 가능성·영향) → 반영 (js/llm.js · js/dialog.js · js/gate.js)'],
+    ['💬', '운영자 지시', llm.enabled ? '대화 기반' : '정책 기반', 'ok', null, '정책 기반: 명시적 운영 정책(조건·기준값)으로 자율 운영 — 학습 모델·LLM이 아닌 정해 둔 기준으로 판단 · 대화 기반: 지시 → 지시 게이트(해석·대상·안전·실행 가능성·영향) → 반영 (js/llm.js · js/dialog.js · js/gate.js)'],
     ['🏭', 'AIOS', `${P.version}${P.job ? ` · ${AIOS_PH[P.job.phase] ?? ''}` : ''}`, P.job ? 'act' : 'ok', 'btnAios', '공장 운영 AI — 운영 데이터 → 정책 학습 → 트윈 검증 → 오케스트레이터 배포 (js/aios.js)'],
     ['🛰', '오케스트레이터', open ? `인시던트 ${open}건` : '인시던트 없음', open ? 'warn' : 'ok', 'btnOrch', '인시던트 감지 → 셀 자체 조치 → 보고 → 판단 → 명령 → 조치 → 완료 확인 (js/orchestrator.js)'],
     ['🤖', '자율 에이전트', `의사결정 ${agent.decisions}건`, 'ok', 'facos:agent', '관찰 → 판단 → 실행: 예지정비·자율 보정·투입 제어·병목 최적화·공급 차질·AGV 배차·절전 (js/agent.js)'],
@@ -1482,7 +2034,7 @@ function renderFacos() {
     ['👁', '현장 감지', evs ? `이벤트 ${evs}건` : `CCTV ${s.cctv.cams.length} · 드론 ${s.drones.length} · 사족 ${s.quads.length}`, evs ? 'warn' : 'ok', 'facos:sense', '사각지대 없는 CCTV AI 영상 분석 · 로봇 비전 AI 이벤트 감지 · 순찰 드론 · 사족보행 열화상·진동 점검 (js/cctv.js · js/robotcam.js · js/drone.js)'],
     ['🗄', 'DataHub', mq.available ? `MQTT ${mq.sent.toLocaleString('ko-KR')}건` : `AAS · 수집 ${hub.samples.length}`, mq.available && mq.failed ? 'warn' : 'ok', 'btnData', '기준 시계(UTC) · AAS · OPC UA PubSub over MQTT · AASX 저장 · 패킷 덤프(pcap) (js/datahub.js · js/pcap.js)'],
     ...(s.net?.on ? [(() => { const Q = s.net.summary(); return ['📶', '5G', `gNB ${s.net.plan.cells.length} · 단말 ${Q.ues} · 유실 ${Q.lost}`, Q.lost || Q.rlf ? 'bad' : 'ok', 'btnNet5g', 'Private 5G 특화망 — 음영 없는 기지국(PCI) · 이동 로봇 5G 모뎀 · A3 핸드오버 · PDCP 포워딩 무손실 업링크 (js/net5g.js)']; })()] : []),
-    ...(s.erp?.on ? [(() => { const E = s.erp.stats(); return ['🏢', 'ERP', `구매 ${E.poOpen}/${E.po} · 정비 ${E.mrOpen}`, E.mrOpen ? 'act' : 'ok', 'btnOdoo', `Fac ERP — 발주·재고·설비보전 ${s.erp.live ? '(실시간 Fac 전송 중)' : '(시뮬레이션 Fac)'} (js/odoo.js)`]; })()] : []),
+    ...(s.fac?.on ? [(() => { const E = s.fac.stats(); return ['🏢', 'FAC', `구매 ${E.poOpen}/${E.po} · 정비 ${E.mrOpen}`, E.mrOpen ? 'act' : 'ok', 'btnFac', `FAC — FACOS 업무 기록: 발주·재고·설비보전${hub.noServer ? '' : ' · FAC API 게시'} (js/fac.js)`]; })()] : []),
   ];
   const html = `<button type="button" class="fc-brand" title="FACOS — 피지컬AI 공장 운영 SW (누르면 접기/펴기)"><b>FACOS</b><small>공장 운영 SW</small></button>` + L.map(([ic, nm, val, cls, open, tip], i) =>
     `${i ? '<i class="fc-arw">›</i>' : ''}<button type="button" class="fc-l ${cls}" ${open ? `data-open="${open}"` : 'disabled'} title="${escV(tip)}"><span class="fc-n"><i class="fc-ic">${ic}</i>${nm}</span><span class="fc-v">${escV(val)}</span></button>`).join('');
@@ -1638,4 +2190,4 @@ fcBody.addEventListener('click', (e) => {
   const sf = e.target.closest('[data-sec-flow]'); if (sf) { secFlowSel = +sf.dataset.secFlow; renderFacosView(true); }
 });
 
-window.__twin = { primKey, setRender, RENDER, openGnb: (id) => openGnb(id), cctvRec, robotRec, cctvView, epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm };
+window.__twin = { perf, mainCull, tori, primKey, setRender, RENDER, openGnb: (id) => openGnb(id), cctvRec, robotRec, cctvView, epRec, get sim() { return sim; }, get agent() { return agent; }, view, ui, hub, camWall, orchView, persp, ctlP, llm, uns, fieldPops };

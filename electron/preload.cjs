@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('jin3d', {
   isApp: true,
+  platform: process.platform,   // 'darwin'(맥) · 'win32'(윈도우) — 화면 문구·단축키 표기를 운영체제에 맞춘다
   keyStatus: () => ipcRenderer.invoke('key:status'),
   setApiKey: (key) => ipcRenderer.invoke('key:set', key),
   clearApiKey: () => ipcRenderer.invoke('key:clear'),

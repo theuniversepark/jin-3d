@@ -1,0 +1,254 @@
+[
+ {
+  "name": "_init",
+  "js": "(window.__twin.tori?.close?.(), window.__closeAll=()=>{ document.querySelectorAll('.modal:not(.hidden) [id^=close], .modal:not(.hidden) [data-close-gate]').forEach(b=>b.click()); document.querySelector('[data-tab]')?.closest('[id]')?.querySelector('[data-close]')?.click(); window.__twin.ui.hideDetail(); window.__twin.view.selectRobot(null); document.getElementById('cctvClose')?.click(); document.getElementById('gnbClose')?.click(); }, window.__later=(f,ms=1200)=>new Promise(r=>setTimeout(()=>r(f()),ms)), window.__cam=(p,t)=>{ const w=window.__twin; w.persp.position.set(...p); w.ctlP.target.set(...t); w.ctlP.update(); }, 'ok')",
+  "shot": false,
+  "always": true,
+  "wait": 300
+ },
+ {
+  "name": "02_main_smart",
+  "mode": "smart",
+  "js": "(window.__closeAll(), 1)",
+  "ff": 1800,
+  "wait": 5000
+ },
+ {
+  "name": "23_detail_machine",
+  "js": "(document.querySelector('[data-cell=EA_FAST]').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "28_designer",
+  "js": "(window.__closeAll(), document.getElementById('dockToggle').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "11_concept",
+  "js": "(document.getElementById('dockToggle').click(), document.getElementById('btnConcept').click(), 1)",
+  "wait": 2000
+ },
+ {
+  "name": "10_compare",
+  "js": "(window.__closeAll(), document.getElementById('btnCompare').click(), 1)",
+  "wait": 90000
+ },
+ {
+  "name": "03_main_legacy",
+  "mode": "traditional",
+  "js": "(window.__closeAll(), 1)",
+  "ff": 1800,
+  "wait": 5000
+ },
+ {
+  "name": "01_main_dark",
+  "mode": "dark",
+  "js": "(window.__closeAll(), 1)",
+  "ff": 1800,
+  "wait": 5000
+ },
+ {
+  "name": "24_detail_robot",
+  "js": "(()=>{ const w=window.__twin, r=w.sim.movers[0]; w.view.selectRobot({type:'mover', id:r.id}); w.ui.showRobot(); return r.id; })()",
+  "wait": 5000
+ },
+ {
+  "name": "32_miniload",
+  "js": "(window.__closeAll(), window.__cam([-29,13,-1.6],[-45.4,2.6,-1.6]), 1)",
+  "wait": 4000
+ },
+ {
+  "name": "33_miniload_aisle",
+  "js": "(window.__cam([-45.45,13,12],[-45.45,2,-1.6]), 1)",
+  "wait": 4000
+ },
+ {
+  "name": "57_sps",
+  "js": "(window.__twin.tori.h.camTo({station:'SORT', d:13}), 1)",
+  "wait": 5000
+ },
+ {
+  "name": "58_pack",
+  "js": "(window.__twin.tori.h.camTo({station:'PACK', d:13}), 1)",
+  "wait": 5000
+ },
+ {
+  "name": "59_eaxle_fast",
+  "js": "(window.__twin.tori.h.camTo({station:'EA_FAST', d:11}), 1)",
+  "wait": 5000
+ },
+ {
+  "name": "_view_all",
+  "js": "(window.__twin.tori.h.flyTo('all'), 1)",
+  "wait": 2500,
+  "shot": false
+ },
+ {
+  "name": "25_fault",
+  "js": "(document.getElementById('btnFault').click(), 1)",
+  "ff": 20,
+  "wait": 4000
+ },
+ {
+  "name": "18_orch_cmd",
+  "js": "(document.querySelector('[data-tab=cmd]').click(), 1)",
+  "wait": 2000
+ },
+ {
+  "name": "18_orch_ctl",
+  "js": "(document.querySelector('[data-tab=ctl]').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "18_orch_fos",
+  "js": "(document.querySelector('[data-tab=fos]').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "18_orch_a2a",
+  "js": "(document.querySelector('[data-tab=a2a]').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "18_orch_uns",
+  "js": "(document.querySelector('[data-tab=uns]').click(), window.__later(()=>{document.querySelector('[data-uns-all]')?.click(); return 1;}))",
+  "wait": 2500
+ },
+ {
+  "name": "40_fieldpop",
+  "js": "(window.__closeAll(), document.getElementById('btnEvent').click(), window.__later(()=>{ window.__closeAll(); return 1; }, 1500))",
+  "wait": 16000
+ },
+ {
+  "name": "26_estop",
+  "js": "(window.__closeAll(), document.getElementById('btnEstop').click(), window.__later(()=>{ window.__closeAll(); return 1; }, 1500))",
+  "ff": 120,
+  "wait": 4000
+ },
+ {
+  "name": "_estop_reset",
+  "js": "(document.getElementById('btnEstop').click(), window.__later(()=>{ window.__closeAll(); return 1; }, 1500))",
+  "ff": 60,
+  "wait": 1500,
+  "shot": false
+ },
+ {
+  "name": "_quality_drift",
+  "js": "(window.__twin.tori.h.qualityDrift(), 1)",
+  "shot": false,
+  "wait": 500
+ },
+ {
+  "name": "_ff2h",
+  "ff": 5400,
+  "shot": false,
+  "wait": 3000
+ },
+ {
+  "name": "17_impact",
+  "js": "(window.__closeAll(), document.getElementById('btnImpact').click(), 1)",
+  "wait": 3000
+ },
+ {
+  "name": "16_trace_ng",
+  "js": "(window.__closeAll(), document.getElementById('btnTrace').click(), 1)",
+  "wait": 3000
+ },
+ {
+  "name": "16_trace_serial",
+  "js": "(document.querySelector('[data-qt-tab=serial]').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "16_trace_hold",
+  "js": "(document.querySelector('[data-qt-tab=hold]').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "16_trace_capa",
+  "js": "(document.querySelector('[data-qt-tab=capa]').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "50_zonedash_live",
+  "js": "(window.__closeAll(), document.getElementById('btnZoneDash').click(), 1)",
+  "wait": 3000
+ },
+ {
+  "name": "51_zonedash_oee",
+  "js": "(document.querySelector('[data-zd-tab=oee]').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "52_zonedash_qa",
+  "js": "(document.querySelector('[data-zd-tab=qa]').click(), 1)",
+  "wait": 3000
+ },
+ {
+  "name": "12_data",
+  "js": "(window.__closeAll(), document.getElementById('btnData').click(), 1)",
+  "wait": 3000
+ },
+ {
+  "name": "13_fleet",
+  "js": "(window.__closeAll(), document.getElementById('btnFleet').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "14_fac",
+  "js": "(window.__closeAll(), document.getElementById('btnFac').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "15_sensors",
+  "js": "(window.__closeAll(), document.getElementById('btnSensors').click(), window.__later(()=>{document.querySelector('[data-sn-tab=zone]').click(); return 1;}))",
+  "wait": 2500
+ },
+ {
+  "name": "21_vla",
+  "js": "(window.__closeAll(), document.getElementById('btnVla').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "22_aios",
+  "js": "(window.__closeAll(), document.getElementById('btnAios').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "42_security",
+  "js": "(window.__closeAll(), document.querySelector('[data-open=\"facos:sec\"]').click(), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "_net5g",
+  "js": "(window.__closeAll(), document.getElementById('btnNet5g').click(), 1)",
+  "wait": 3000,
+  "shot": false
+ },
+ {
+  "name": "19_gnb",
+  "js": "(window.__twin.openGnb(window.__twin.sim.net5g?.gnbs?.[0]?.id ?? 'gNB-01'), 1)",
+  "wait": 2500
+ },
+ {
+  "name": "_cctv",
+  "js": "(window.__closeAll(), document.getElementById('btnNet5g').click(), document.getElementById('btnCctv').click(), 1)",
+  "wait": 3000,
+  "shot": false
+ },
+ {
+  "name": "29_cctv_video",
+  "js": "(document.getElementById('cctvOpen').click(), 1)",
+  "wait": 5000
+ },
+ {
+  "name": "70_tori_menu",
+  "js": "(window.__closeAll(), document.getElementById('btnCctv').click(), window.__twin.tori.h.flyTo('all'), window.__twin.tori.menu(), 1)",
+  "wait": 4000
+ },
+ {
+  "name": "71_tori_tour",
+  "js": "(window.__twin.tori.play('tour'), 1)",
+  "wait": 6000
+ }
+]

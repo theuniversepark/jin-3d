@@ -1,6 +1,6 @@
 // VLA 에피소드 파일 검증 — 휴머노이드·AMMR 에피소드는 카메라 4대(머리 · 왼손 · 오른손 · 등) 프레임을 같은 시각으로 함께 담는지,
 // 스텝마다 observation.images.<카메라> 경로와 스키마(meta/info.json)가 맞는지, 6축 로봇은 손목 카메라 하나 그대로인지. 실행: npm test
-import { buildEpisodesZip, EP_CAMS } from '../js/vla.js';
+import { buildEpisodesZip, EP_CAMS, EpisodeRecorder, EP_HZ } from '../js/vla.js';
 let pass = 0, fail = 0;
 const check = (name, ok, info = '') => { ok ? pass++ : fail++; console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${info ? '  — ' + info : ''}`); };
 const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
@@ -33,5 +33,19 @@ const info3 = JSON.parse(new TextDecoder().decode(z3).match(/\{\n  "dataset"[\s\
 check('스키마: dtype video · fps · h264 · yuv420p (LeRobot 형식)', EP_CAMS.every((c) => { const F = info3.features[`observation.images.${c}`]; return F?.dtype === 'video' && F.info['video.fps'] === 5 && F.info['video.codec'] === 'h264' && F.info['video.pix_fmt'] === 'yuv420p'; }) && /v2/.test(info3.format));
 const l3 = text(z3, 'data/ep_000003.jsonl').split('\n').filter((l) => l.startsWith('{"step"')).map((l) => JSON.parse(l));
 check('스텝마다 {영상 경로, 타임스탬프}로 프레임을 가리킴', l3.length === 3 && l3.every((r, k) => EP_CAMS.every((c) => r[`observation.images.${c}`]?.path === `videos/ep_000003/${c}.mp4` && Math.abs(r[`observation.images.${c}`].timestamp - k * 0.2) < 1e-9)), JSON.stringify(l3[2]['observation.images.head']));
+// 스텝 격자: 화면 프레임마다 읽은 자세(표본)를 0.2초 격자로 보간 — fps · 배속과 무관하게 EP_HZ (js/vla.js resample)
+{
+  const R = new EpisodeRecorder(null, null, { iso: (t) => `T${t.toFixed(3)}` }), G = 1 / EP_HZ;
+  const rec = { t0: 10, steps: [] }, smp = (t, j) => ({ t, state: [j, -j], tcp_mm: [j * 100, 0, 0], gripper: t >= 10.5 ? 1 : 0, phase: t >= 10.5 ? 'grasp' : 'approach' });
+  for (const t of [10, 10.35, 10.7]) R.resample(rec, smp(t, (t - 10) * 10), false);   // 화면 약 3fps · 배속 1 — 표본 간격 0.35초
+  const ts = rec.steps.map((s) => s.t), want = [0, 0.2, 0.4, 0.6];
+  check('격자 시각: 표본 간격과 무관하게 0.2초마다', ts.length === want.length && ts.every((v, k) => Math.abs(v - want[k]) < 1e-9), ts.join(','));
+  const s2 = rec.steps[1];
+  check('보간: 관절 · 손끝은 앞뒤 표본 사이 선형, 그리퍼 · 단계는 앞 표본 값', Math.abs(s2.state[0] - 2) < 1e-6 && s2.tcp_mm[0] === 200 && s2.gripper === 0 && s2.phase === 'approach' && s2.interp === true && rec.steps[0].interp === false, JSON.stringify(s2));
+  R.resample(rec, smp(12.5, 25), true);   // 1.8초 건너뜀(배속 높고 화면 느림) + 에피소드 끝
+  const last = rec.steps.at(-1);
+  check('표본 간격이 1초를 넘으면 보간하지 않고 표본 시각에 스텝 · 끝은 실제 끝 시각', Math.abs(last.t - 2.5) < 1e-9 && last.interp === false && rec.gaps === 1 && rec.steps.filter((x) => x.t > 0.6 && x.t < 2.5).length === 0, rec.steps.map((s) => s.t).join(','));
+  check('스텝 번호 연속', rec.steps.every((s, k) => s.i === k));
+}
 console.log(`\n결과: ${pass} PASS / ${fail} FAIL`);
 process.exitCode = fail ? 1 : 0;

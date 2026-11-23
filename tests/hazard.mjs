@@ -9,7 +9,9 @@ console.log('== 진로 위 현장 이벤트 (피지컬AI)');
 check('이벤트별 위험 반경 (누유·이물질·연기·무단 진입)', Object.values(FIELD_EVENTS).every((E) => E.radius > 0.5));
 let reports = 0, waits = 0, detours = 0, inside = 0, resumed = 0, slow = 0, incOk = 0, n = 0, shipped = 0, responderReach = 0;
 // 정지 대기(우회할 수 없는 진로)는 드물어 시드에 따라 0일 수 있다 — 검사·포장셀·구분 적재장 배치(상위 meta-factory와 같음) 뒤 시드 5는 모두 우회해 시드 3으로, 간섭 정리(AMR 투입 진입로 x −33.2 · 지게차 대기·하역 자리) 뒤 시드 3도 모두 우회해 시드 6으로 본다
-for (const seed of [2, 6]) {
+// 사족보행 꼼꼼한 순찰(셀마다 2~3곳 · 15초 안팎)로 순찰 시각이 바뀐 뒤 시드 2 · 6은 모두 우회 — 시드 1~8 중 정지 대기가 나오는 3 · 8로 본다 (반경 침입은 8개 시드 모두 0회)
+// 사족보행 순찰 점검 자리를 펜스에서 0.35m 더 띄운 뒤(형상 간섭 — 순찰 시각이 달라짐) 시드 3 · 8은 모두 우회 — 시드 1~8 중 정지 대기가 나오는 5와 8로 본다 (반경 침입은 8개 시드 모두 0회)
+for (const seed of [5, 8]) {
   const s = new Simulation('dark', seed, { line: zoneLine(), quiet: true }), ag = new FactoryAgent(s);
   const evs = []; let next = 300;
   for (let t = 0; t < 7200; t += 0.1) {

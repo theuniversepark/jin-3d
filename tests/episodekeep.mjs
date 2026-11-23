@@ -12,7 +12,7 @@ const f1 = fs.readdirSync(path.join(dir, 'episodes', 'RB-01-1')).sort();
 check('로봇별 최대 개수 — 넘으면 오래된 것부터 지움', f1.length === 5 && f1[0] === 'run_ep_003.zip' && f1[4] === 'run_ep_007.zip', f1.join(' '));
 // 전체 용량: 로봇 3대 × 5개 × 100KB = 1.5MB > 1MB → 오래된 것부터 지워 1MB 이하
 for (const r of ['HM-M1', 'HM-M2', 'RB-02-1']) for (let i = 0; i < 5; i++) { await post(r, i, 100); await new Promise((r2) => setTimeout(r2, 15)); }
-pruneEpisodes(null, true);
+await pruneEpisodes(null, true);
 fs.writeFileSync(path.join(dir, 'episodes', '.DS_Store'), 'x');   // 로봇 폴더가 아닌 파일이 섞여도 목록이 비지 않아야 함
 const ls = await (await fetch(`${base}/api/episodes`)).json(), total = Object.values(ls.robots).reduce((a, r) => a + r.bytes, 0);
 check('전체 용량 한도 — 넘으면 오래된 것부터 지움', total <= 1024 * 1024 && ls.robots['RB-02-1'].count === 5, `${(total / 1024).toFixed(0)}KB · ${JSON.stringify(Object.fromEntries(Object.entries(ls.robots).map(([k, v]) => [k, v.count])))}`);
@@ -31,10 +31,10 @@ const seg = (i, mp4kb) => { const id = `run_cctv_${String(i).padStart(4, '0')}`;
   if (mp4kb) { fs.writeFileSync(path.join(vdir, `${id}.mp4`), new Uint8Array(mp4kb * 1024)); fs.writeFileSync(path.join(vdir, `${id}.mp4.json`), '{}'); fs.mkdirSync(path.join(vdir, id)); fs.writeFileSync(path.join(vdir, id, 'CC-01_view.mp4'), new Uint8Array(mp4kb * 1024)); }
   const t = Date.now() / 1000 - 100 + i; for (const f of fs.readdirSync(vdir).filter((x) => x.startsWith(id))) fs.utimesSync(path.join(vdir, f), t, t); };
 for (let i = 0; i < 8; i++) seg(i, 50);
-const r1 = pruneVideos('cctv'), left = fs.readdirSync(vdir).filter((f) => f.endsWith('.webm')).sort(), mp4left = fs.readdirSync(vdir).filter((f) => f.endsWith('.mp4.json')).sort();
+const r1 = await pruneVideos('cctv'), left = fs.readdirSync(vdir).filter((f) => f.endsWith('.webm')).sort(), mp4left = fs.readdirSync(vdir).filter((f) => f.endsWith('.mp4.json')).sort();
 check('원본 구간 수 한도(6) · MP4 구간 수 한도(3) — 오래된 것부터', left.length === 6 && left[0] === 'run_cctv_0002.webm' && mp4left.length === 3 && mp4left[0] === 'run_cctv_0005.mp4.json' && !fs.existsSync(path.join(vdir, 'run_cctv_0004')), `원본 ${left.length} · MP4 ${mp4left.length} · 정리 ${JSON.stringify(r1)}`);
 for (let i = 8; i < 12; i++) seg(i, 400);   // 용량 초과 (MP4 큰 구간)
-pruneVideos('cctv');
+await pruneVideos('cctv');
 const st = await (await fetch(`${base}/api/cctv`)).json();
 check('전체 용량 한도(2MB) — 오래된 MP4부터, 그래도 넘으면 오래된 구간', st.bytes <= 2 * 1048576 && st.count >= 1 && fs.existsSync(path.join(vdir, 'run_cctv_0011.webm')), `${st.count}구간 · ${(st.bytes / 1024).toFixed(0)}KB (원본 ${(st.webmBytes / 1024).toFixed(0)} · MP4 ${((st.mp4Bytes + st.camBytes) / 1024).toFixed(0)}KB, ${st.mp4Count}구간)`);
 const rs = await (await fetch(`${base}/api/robotcam`)).json();

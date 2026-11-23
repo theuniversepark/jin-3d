@@ -1,7 +1,7 @@
 // HTML 오버레이 UI — KPI, 추이 차트, 에이전트 로그, 설비 상세, 모드 비교
-import { Simulation, MODES, ST_LABEL, RAW_CAP, FG_CAP } from './sim.js';
+import { MODES, ST_LABEL, RAW_CAP, FG_CAP } from './sim.js';
 import { STATION_TYPES, ROBOT_KINDS } from './line.js';
-import { FactoryAgent } from './agent.js';
+import { compareModes } from './compare.js';
 import { spsHtml, SPS_CELLS } from './spsview.js';
 
 const $ = (id) => document.getElementById(id);
@@ -15,6 +15,17 @@ const MODE_DESC = {
   smart: ['2단계 · 자동화 공장', '로봇·AMR이 일하고 사람이 감시합니다. 양쪽 협동로봇 셀, AMR 운반, IoT·MES·디지털트윈 연결로 예지보전·Pull 투입·SPC 보정을 자동 수행하고, 소수 인원이 모니터링·정비합니다.'],
   dark: ['3단계 · 피지컬AI 자율공장', 'AI가 판단하고 로봇의 몸으로 실행합니다. 휴머노이드가 정비·부품 보충을, 사족보행 로봇이 열화상·진동 순찰 점검을 맡고, 고효율 LED 조명 아래 24시간 무인 가동합니다. 사람은 원격 관제만 합니다.'],
 };
+
+// 공장 운영 로그의 구분 (FACOS 관점 필터) — 로그에 zone이 있으면 그 값, 없으면 제목 → 본문 순으로 공장 공용(입출하 · 창고 · 유틸리티 · 공장 오케스트레이터) 낱말을 찾는다 (없으면 정밀조립: 존 에이전트 판단·셀 이벤트)
+export const LOG_ZONES = { all: '전체', main: '정밀조립', fac: '공장 공용' };
+const LZ_RE = [['fac', /입고|출하|트럭|지게차|창고|도크|AS\/RS|수배전|압축기|화물|야드|센서망|공장 오케스트레이터|FacOS|오더 ORD-/]];
+export function logZone(l) {
+  if (l.zone && LOG_ZONES[l.zone]) return l.zone;
+  for (const [k, re] of LZ_RE) if (re.test(l.title)) return k;
+  const txt = `${l.obs ?? ''} ${l.dec ?? ''} ${l.act ?? ''}`;
+  for (const [k, re] of LZ_RE) if (re.test(txt)) return k;
+  return 'main';
+}
 
 function fmtClock(t) {
   const s = Math.floor(t) + 8 * 3600;
@@ -32,6 +43,11 @@ export class UI {
       c.addEventListener('pointermove', (e) => { c._hx = e.offsetX / c.clientWidth; });
       c.addEventListener('pointerleave', () => { c._hx = null; });
     }
+    // FACOS 요약 칩 · 로그 필터: 누르면 공장 운영 로그를 그쪽으로 거른다
+    // 정밀조립 존 에이전트 블록: 접고 펼친 상태 기억 (기본 접힘 — 공장 운영 로그 공간)
+    const za = $('zoneAgentBox'); try { za.open = localStorage.getItem('jin3d.zoneAgentOpen') === '1'; } catch { /* 기본 접힘 */ }
+    za.addEventListener('toggle', () => { if (za.dataset.tori) { delete za.dataset.tori; return; } try { localStorage.setItem('jin3d.zoneAgentOpen', za.open ? '1' : '0'); } catch { /* 이번 실행만 */ } });
+    for (const id of ['logFilter', 'facosSum']) $(id).addEventListener('click', (e) => { const b = e.target.closest('[data-lf]'); if (!b) return; this.setLogFilter(b.dataset.lf === this.logFilter && id === 'facosSum' ? 'all' : b.dataset.lf); this.renderFacos(); });
     $('detail').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-act]');
       if (b && this.onDetailAction) this.onDetailAction(b.dataset.act, this.detailSt);
@@ -42,6 +58,7 @@ export class UI {
     this.sim = sim; this.agent = agent;
     this.lastLogId = 0;
     $('log').innerHTML = '';
+    this.renderLogFilter();
     const [t, d] = MODE_DESC[sim.mode.key];
     $('modeDesc').innerHTML = `<b>${t}</b>${d}`;
     $('agentName').textContent = agent.name;
@@ -80,9 +97,10 @@ export class UI {
     this.drawSpark($('chartOee'), sim.history.map((h) => [h.t, h.oee * 100]), (v) => v.toFixed(1) + '%', 0, 100);
 
     $('agentCount').textContent = this.agent.decisions;
+    this.renderFacos();
     this.renderEngine();
     $('thought').innerHTML = this.llm?.enabled
-      ? `<b>운영</b> · ${this.agent.arch === 'hybrid' ? (() => { const H = this.agent.status(); return `혼합형 다중 에이전트 — 정비·품질·흐름 에이전트 제안 ${H.proposed} · 메인 승인 ${H.approved} · 보류 ${H.deferred} · 충돌 ${H.conflicts} · 평균 지연 ${H.avgLat.toFixed(1)}초`; })() : '추론 기반 에이전트가 정비·품질·흐름·물류를 계속 판단합니다'} — ${this.agent.lastThought}<br><b>대화</b> · 입력창 지시를 해석해 공정에 반영합니다 (예: 포장셀 속도 75% · 도어트림 2:1 · e-axle 조립셀 예방정비)`
+      ? `<b>운영</b> · ${this.agent.arch === 'hybrid' ? (() => { const H = this.agent.status(); return `혼합형 다중 에이전트 — 정비·품질·흐름 에이전트 제안 ${H.proposed} · 메인 승인 ${H.approved} · 보류 ${H.deferred} · 충돌 ${H.conflicts} · 평균 지연 ${H.avgLat.toFixed(1)}초`; })() : '정책 기반 에이전트가 정비·품질·흐름·물류를 계속 판단합니다'} — ${this.agent.lastThought}<br><b>대화</b> · 입력창 지시를 해석해 공정에 반영합니다 (예: 포장셀 속도 75% · 도어트림 2:1 · e-axle 조립셀 예방정비)`
       : sim.mode.agentActive
       ? `<b>현재 판단</b> · ${this.agent.lastThought}`
       : '<b>수동 운영</b> · 설비 데이터가 수집되지 않아 고장·자재 부족을 사람이 발견한 뒤에 대응합니다.';
@@ -97,15 +115,46 @@ export class UI {
     for (const l of fresh) {
       const d = document.createElement('div');
       d.className = 'entry ' + l.level + (l.dlg ? ' dlg' : '');
+      const zk = logZone(l); d.dataset.zone = zk;
       if (l.dlg) { d.dataset.dlg = l.dlg; d.title = '누르면 지시 게이트(판정·수행/거절 과정) 도식'; }
       const row = (tag, txt) => (txt ? `<div class="r"><em>${tag}</em>${esc(txt)}</div>` : '');
       const tags = l.level === 'llm' ? ['지시', 'Agent', '결과'] : l.level === 'chat' ? ['운영자'] : l.level === 'dialog' ? ['지시', '해석', '반영'] : ['관찰', '판단', '실행'];
       const tg = l.level === 'dialog' ? ['지시', '게이트', '판정'] : tags;
-      d.innerHTML = `<div class="h"><span>${esc(l.title)}</span><time>${fmtClock(l.t)}</time></div>${row(tg[0], l.obs)}${row(tg[1] ?? '판단', l.dec)}${row(tg[2] ?? '실행', l.act)}${l.dlg && l.level === 'dialog' ? '<div class="g-hint">▸ 게이트 도식 보기</div>' : ''}`;
+      d.innerHTML = `<div class="h"><span><i class="lz lz-${zk}">${LOG_ZONES[zk]}</i>${esc(l.title)}</span><time>${fmtClock(l.t)}</time></div>${row(tg[0], l.obs)}${row(tg[1] ?? '판단', l.dec)}${row(tg[2] ?? '실행', l.act)}${l.dlg && l.level === 'dialog' ? '<div class="g-hint">▸ 게이트 도식 보기</div>' : ''}`;
       box.prepend(d);
     }
     this.lastLogId = this.sim.logs[0].id;
     while (box.children.length > 80) box.lastChild.remove();
+  }
+
+  // 로그 필터 (전체 · 정밀조립 · 공장 공용) — 목록은 그대로 두고 CSS로 거른다 (#log[data-filter])
+  setLogFilter(k) { if (!LOG_ZONES[k]) return; this.logFilter = k; $('log').dataset.filter = k; this.renderLogFilter(); }
+  renderLogFilter() {
+    const f = this.logFilter ?? 'all', cnt = {};
+    for (const l of this.sim?.logs ?? []) { const z = logZone(l); cnt[z] = (cnt[z] ?? 0) + 1; }
+    $('logFilter').innerHTML = Object.entries(LOG_ZONES).map(([k, v]) => `<button type="button" data-lf="${k}" class="${k === f ? 'on' : ''}">${v}${k !== 'all' && cnt[k] ? ` <small>${cnt[k]}</small>` : ''}</button>`).join('');
+  }
+  // FACOS 요약: 정밀조립Zone · 공장 공용 상태 · 결정 대기(사람 결정) · 진행 중 오더 · 최근 공장 오케스트레이터 결정 (js/factoryos.js)
+  renderFacos() {
+    const s = this.sim; if (!s) return;
+    const k = s.kpi(), F = s.fos;
+    const chip = (key, name, main, sub, bad) => `<button type="button" class="fz ${bad ? 'bad' : ''} ${this.logFilter === key ? 'on' : ''}" data-lf="${key}"><b>${name}</b><span>${main}</span><small>${sub}</small></button>`;
+    const cellsOn = s.processing.filter((x) => !x.standby), mDown = cellsOn.filter((x) => x.state === 'DOWN' || x.state === 'MAINT').length, mBusy = cellsOn.filter((x) => x.state === 'BUSY').length;
+    const R = F?.main.reconcile();
+    const cells = [
+      chip('main', '정밀조립', `UPH ${num(k.uphRecent)}`, `가동 ${mBusy}/${cellsOn.length} · 정지 ${mDown}`, mDown > 0),
+      chip('fac', '공장 공용', `출하 ${num(s.stats.shipped ?? 0)}`, `자재 ${k.raw}/${RAW_CAP}${s.supplyDisrupted ? ' · 공급 차질' : ''}`, !!s.supplyDisrupted),
+      ...(F ? [`<div class="fz ${R?.err ? 'bad' : ''}" title="수량 정산 — 고유 투입 = 공정중 + 합격대기 + HOLD + 인계 + 폐기 (오차 0이어야 오더 종료)"><b>수량 정산</b><span>오차 ${R?.err ?? '-'}</span><small>HOLD ${R?.hold ?? 0} · 폐기 ${R?.scrap ?? 0}</small></div>`,
+        `<div class="fz ${F.online ? '' : 'bad'}" title="공장 ↔ 존 상위망 — 끊기면 공장행 메시지는 Outbox에 쌓인다"><b>상위망 · 계획</b><span>${F.online ? '연결' : '단절'}</span><small>${F.planVersion} · Outbox ${F.bus.outbox.length}</small></div>`] : []),
+    ].join('');
+    const capaWait = s.capa?.pending?.length ?? 0, impWait = s.impact?.advisor?.pending?.length ?? 0;
+    const open = (F?.orders ?? []).filter((o) => o.status === 'open'), risk = open.filter((o) => o.risk).length, lastD = F?.decisions?.[0];
+    $('facosSub').innerHTML = `공장 오케스트레이터 (FacOS) · 오더 진행 <b>${open.length}</b>${risk ? ` <em class="dn">(납기 위험 ${risk})</em>` : ''} · 결정 대기 <b class="${capaWait + impWait ? 'warn' : ''}">${capaWait + impWait}</b>`;
+    const html = `<div class="fz-grid">${cells}</div>
+      <div class="fz-line">${open.length ? `📋 ${open.slice(0, 2).map((o) => `${o.id} 납기 ${fmtClock(o.due).slice(-8, -3)}${o.risk ? ' ⚠' : ''}`).join(' · ')}` : '📋 진행 중 오더 없음'}${capaWait ? ` · 🧭 8D 정책 결정 ${capaWait}` : ''}${impWait ? ` · 💡 개선안 결정 ${impWait}` : ''}</div>
+      ${lastD ? `<div class="fz-line muted">🏛 최근 FacOS 결정 ${fmtClock(lastD.t).slice(-8)} · ${esc(lastD.verdict)} — ${esc(String(lastD.text).slice(0, 70))}</div>` : ''}`;
+    const box = $('facosSum'); if (box.dataset.h !== html) { box.dataset.h = html; box.innerHTML = html; }   // 같은 내용이면 다시 그리지 않는다 (칩을 누르는 중에 바뀌지 않게)
+    if ((this._lfT = (this._lfT ?? 0) + 1) % 4 === 0) this.renderLogFilter();   // 구분별 로그 건수 (가끔)
   }
 
   renderEngine() {
@@ -122,9 +171,9 @@ export class UI {
     const st = $('llmStatus');
     st.classList.toggle('busy', llm.inFlight);
     let msg;
-    const helper = llm.available ? `Agent 연결됨` : '내장 해석기 (Agent 미연결)';
+    const helper = llm.available ? `Agent 연결됨${llm.provider && llm.provider !== 'server' ? ` (${llm.providerLabel})` : ''}` : '내장 해석기 (Agent 미연결)';
     if (!sim.mode.agentActive) msg = '레거시 공장은 데이터 수집이 없어 대화 기반을 쓸 수 없습니다';
-    else if (!llm.enabled) msg = `대화 기반: 추론 기반 운영 + 입력 지시 해석·반영 · ${helper}`;
+    else if (!llm.enabled) msg = `대화 기반: 정책 기반 운영 + 입력 지시 해석·반영 · ${helper}`;
     else if (llm.inFlight || llm.calls) msg = `${llm.inFlight ? '' : '대기 · '}${llm.status || '준비'} · Agent 해석 ${llm.calls}회 · 약 $${llm.costUSD.toFixed(3)}`;
     else msg = `대화 기반 · 입력창 지시를 공정에 반영합니다 · ${helper}`;
     st.innerHTML = (llm.inFlight ? '<span class="spin"></span>' : '') + esc(msg);
@@ -248,13 +297,19 @@ export class UI {
     }
   }
 
-  // Fac 설비보전: 이 설비의 정비요청 이력 (설비 등록 일련번호 · 진행 중 요청 · 최근 요청)
-  erpLine(st) {
-    const E = this.sim.erp; if (!E?.on) return '';
+  // 시리얼 발행·마킹 셀 (js/serial.js): 발행 수 · 마킹 방식 · 판독 등급 분포 · 재마킹 · 최근 시리얼
+  markLine(zone, cell) {
+    const H = this.sim.serials; if (!H?.isMarkCell(zone, cell)) return '';
+    const S = H.cellSummary(zone, cell), g = S?.grades ?? {};
+    return `<div class="note">🏷 최종 외관·라벨 검사 합격 시 시리얼 발행·마킹 — QR 라벨 (GS1 Digital Link) · 발행 <b>${S?.n ?? 0}</b>개 · 판독 등급 ${['A', 'B', 'C', 'D', 'F'].map((k) => `${k} ${g[k] ?? 0}`).join(' · ')} · 재마킹 ${S?.relabel ?? 0}${S?.ng ? ` · 판독 불가 ${S.ng}` : ''}${S?.last?.serial ? `<br>최근 <b>${esc(S.last.serial)}</b> (등급 ${S.last.mark?.grade ?? '-'}) — 품질 추적 「🏷 시리얼·출하」에서 코드 확인` : ''}</div>`;
+  }
+  // FAC 설비보전: 이 설비의 정비요청 이력 (설비 등록 일련번호 · 진행 중 요청 · 최근 요청)
+  facLine(st) {
+    const E = this.sim.fac; if (!E?.on) return '';
     const e = E.equipmentOf(st.id) ?? E.equipmentOf(st.uid), mrs = E.db.mr.filter((m) => m.equipment === e?.serial_no);
     if (!e) return '';
     const open = mrs.find((m) => m.stage !== 'done'), last = mrs[0];
-    return `<div class="note">🏢 Fac 설비보전 · 설비 ${esc(e.serial_no)} — 정비요청 ${mrs.length}건 (누적 ${Math.round(e.downtime * 60)}분)${open ? ` · <b>${open.ref} ${open.type === 'corrective' ? '긴급' : '예방'} ${open.stage === 'progress' ? '진행 중' : '신규'}</b>` : last ? ` · 최근 ${last.ref} 완료` : ''}</div>`;
+    return `<div class="note">🏢 FAC 설비보전 · 설비 ${esc(e.serial_no)} — 정비요청 ${mrs.length}건 (누적 ${Math.round(e.downtime * 60)}분)${open ? ` · <b>${open.ref} ${open.type === 'corrective' ? '긴급' : '예방'} ${open.stage === 'progress' ? '진행 중' : '신규'}</b>` : last ? ` · 최근 ${last.ref} 완료` : ''}</div>`;
   }
   renderDetail() {
     const st = this.detailSt, sim = this.sim;
@@ -299,35 +354,36 @@ export class UI {
         ${rep}
       </div>
       ${sim.mode.key === 'traditional' ? '<div class="note">※ 레거시 공장에는 센서가 없어 건강도·RUL은 현장에서 보이지 않는 시뮬레이션 내부값입니다.</div>' : ''}
-      ${this.erpLine(st)}
+      ${this.facLine(st)}
       ${sim.zone && sim.sps && SPS_CELLS.includes(st.id) ? spsHtml(sim.sps, st.id) : ''}
-      ${st.def.type === 'pack' && sim.zone ? `<div class="note">🏷 최종 외관·라벨 검사 합격 시 시리얼 발행 · QR 라벨 (GS1 Digital Link) — 발행 <b>${st.marks ?? 0}</b>개${st.lastMark ? ` · 최근 <b>${esc(st.lastMark.id)}</b>` : ''}</div>` : ''}
+      ${sim.zone ? this.markLine('main', st.id) : ''}
       <div class="btns"><button data-act="fault">⚡ 고장 주입</button><button data-act="pm">🔧 정비 지시</button></div>
       <div class="pcap-box" id="pcapBox"></div>`;
     this.onDetailRendered?.();
   }
 
-  // 3개 단계 헤드리스 시뮬레이션 (동일 시드, 8시간) — 같은 라인이면 결과를 재사용한다
+  // 3개 단계 헤드리스 시뮬레이션 (동일 시드, 8시간, 화면과 같은 0.1초 간격) — 같은 라인이면 결과를 재사용한다 · 계산은 Worker에서 (js/compare.js)
+  //   라인별로 결과를 따로 보관한다 — 계산이 늦게 끝난 이전 라인이 새 라인 결과를 덮어쓰지 않게 (cmpRuns: 계산 중인 라인)
   computeCompare(seed, line, HOURS = 8) {
-    const sig = JSON.stringify([seed, line]);
-    if (this.cmpCache?.sig === sig) return this.cmpCache.res;
-    const res = {};
-    for (const key of Object.keys(MODES)) {
-      const s = new Simulation(key, seed, { quiet: true, line }), ag = new FactoryAgent(s);
-      for (let i = 0; i < (HOURS * 3600) / 0.25; i++) { s.step(0.25); ag.update(0.25); }
-      res[key] = { k: s.kpi(), decisions: ag.decisions };
-    }
-    this.cmpCache = { sig, res };
-    return res;
+    const sig = JSON.stringify([seed, line, HOURS]);
+    this.cmpCache ??= new Map(); this.cmpRuns ??= new Map();
+    if (this.cmpCache.has(sig)) return Promise.resolve(this.cmpCache.get(sig));
+    if (this.cmpRuns.has(sig)) return this.cmpRuns.get(sig);
+    const p = compareModes(Object.keys(MODES), seed, line, HOURS).then((res) => { this.cmpCache.set(sig, res); if (this.cmpCache.size > 8) this.cmpCache.delete(this.cmpCache.keys().next().value); return res; })
+      .finally(() => this.cmpRuns.delete(sig));
+    this.cmpRuns.set(sig, p);
+    return p;
   }
-  cachedCompare(seed, line) { return this.cmpCache?.sig === JSON.stringify([seed, line]) ? this.cmpCache.res : null; }
+  cachedCompare(seed, line, HOURS = 8) { return this.cmpCache?.get(JSON.stringify([seed, line, HOURS])) ?? null; }
+  comparing(seed, line, HOURS = 8) { return !!this.cmpRuns?.has(JSON.stringify([seed, line, HOURS])); }
 
   runCompare(seed, line) {
     const modal = $('compare'), body = $('compareBody');
     modal.classList.remove('hidden');
-    body.innerHTML = '<p style="color:#a9b4c0">계산 중…</p>';
-    setTimeout(() => {
-      const HOURS = 8, res = this.computeCompare(seed, line, HOURS);
+    body.innerHTML = '<p style="color:#a9b4c0">계산 중… (3개 단계 × 8시간, 0.1초 간격 — 화면은 계속 동작합니다)</p>';
+    const HOURS = 8, want = (this.cmpWant = JSON.stringify([seed, line, HOURS]));   // 비교 창에는 마지막으로 요청한 라인 결과만
+    this.computeCompare(seed, line, HOURS).then((res) => {
+      if (this.cmpWant !== want) return;
       const keys = Object.keys(MODES);
       const rows = [
         ['양품 생산량 (개)', (r) => r.k.good, num, 'max'],
@@ -360,6 +416,6 @@ export class UI {
         • 차이의 주요 원인: 예지보전·순찰 선제 감지로 돌발 고장 감소 → 가용률↑, 풀(Pull)방식 투입·병목 최적화 → 재공↓·성능↑, SPC 자율 보정·전수 판정 → 불량 유출↓, 고효율 조명·공조 최소화 → 에너지 원단위↓<br>
         • 대상 라인: <b>${esc(line.name)}</b> (${line.stations.map((x) => esc(x.name)).join(' → ')})<br>
         • 공정 구성은 오른쪽 하단 ‘공정 설계’에서, 운영 파라미터(마모율·고장 위험함수·수리시간 등)는 <code>js/sim.js</code>의 <code>MODES</code>와 <code>js/line.js</code>에서 조정할 수 있습니다. 결과는 예시용 가정값 기반입니다.</div>`;
-    }, 30);
+    }).catch((e) => { body.innerHTML = `<p style="color:#ff8a80">계산 실패 — ${esc(e?.message ?? e)}</p>`; });
   }
 }

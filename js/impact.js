@@ -423,16 +423,24 @@ export class Advisor {
     this.job = null;
   }
   // 적용: 운영값 변경 · 오케스트레이터 로그 · 실측 기준 시점
-  apply(id) {
+  // 적용 · 되돌림은 FacOS 공장 결정을 거친다 (js/factoryos.js change) — Manufacturing Agent가 결정 요청 → 운영자 승인 기록 → 계획 버전 P-n 증가 → 적용
+  //   상위망이 끊겨 공장 결정을 받을 수 없으면 적용하지 않는다 (p.blocked에 사유)
+  apply(id, by = '운영자 (의사결정 지원)') {
     const p = this.find(id), s = this.sim; if (!p || !p.lever || p.status === 'applied') return false;
-    if (this.job?.p === p) this.job = null;
-    p.from = LEVERS[p.lever].get(s);
-    LEVERS[p.lever].set(s, p.to);
-    if (AIOS_KEYS.includes(p.lever) && s.aios?.policy) s.aios.policy[p.lever] = p.to;   // AIOS 기준 정책도 맞춘다
-    p.status = 'applied'; p.tApply = s.time; p.before = this.windowKpi(s.time - VERIFY_S, s.time);
-    p.beforeRows = this.tr.rangeRows(s.time - VERIFY_S, s.time); p.ctxB = fieldCtx(s); p.actual = null;
-    s.log('act', `개선안 적용 · ${p.title}`, { obs: p.why, dec: '운영자 승인 (의사결정 지원)', act: `${LEVERS[p.lever].label} ${fmtV(p.lever, p.from)} → ${fmtV(p.lever, p.to)}` });
-    this.log.unshift({ t: s.time, act: '적용', title: p.title, change: `${fmtV(p.lever, p.from)} → ${fmtV(p.lever, p.to)}` });
+    const from = LEVERS[p.lever].get(s);
+    const run = () => {
+      if (this.job?.p === p) this.job = null;
+      p.from = from;
+      LEVERS[p.lever].set(s, p.to);
+      if (AIOS_KEYS.includes(p.lever) && s.aios?.policy) s.aios.policy[p.lever] = p.to;   // AIOS 기준 정책도 맞춘다
+      p.status = 'applied'; p.tApply = s.time; p.before = this.windowKpi(s.time - VERIFY_S, s.time); p.blocked = null;
+      p.beforeRows = this.tr.rangeRows(s.time - VERIFY_S, s.time); p.ctxB = fieldCtx(s); p.actual = null;
+    };
+    const r = s.fos ? s.fos.change({ kind: 'kpi-lever', title: `KPI 개선안 적용 — ${p.title}`, target: { proposal: p.id, lever: p.lever }, before: fmtV(p.lever, from), after: fmtV(p.lever, p.to), by, human: true, constraints: `적용 후 ${VERIFY_S / 60}분 실측 · 되돌리기 가능`, resume: '실측 판정 (개선 · 악화 · 변화 작음)' }, run) : (run(), { ok: true });
+    if (!r.ok) { p.blocked = r.reason; this.log.unshift({ t: s.time, act: '적용 보류', title: p.title, change: r.reason }); return false; }
+    p.version = s.fos?.planVersion ?? null;
+    s.log('act', `개선안 적용 · ${p.title}`, { obs: p.why, dec: `운영자 승인 (의사결정 지원)${p.version ? ` → FacOS 결정 · 계획 ${p.version}` : ''}`, act: `${LEVERS[p.lever].label} ${fmtV(p.lever, p.from)} → ${fmtV(p.lever, p.to)}` });
+    this.log.unshift({ t: s.time, act: '적용', title: p.title, change: `${fmtV(p.lever, p.from)} → ${fmtV(p.lever, p.to)}${p.version ? ` · ${p.version}` : ''}` });
     return true;
   }
   hold(id) {
@@ -442,12 +450,13 @@ export class Advisor {
     this.log.unshift({ t: this.sim.time, act: '보류', title: p.title });
     return true;
   }
-  revert(id) {
+  revert(id, by = '운영자 (의사결정 지원)') {
     const p = this.find(id), s = this.sim; if (!p || p.status !== 'applied') return false;
-    LEVERS[p.lever].set(s, p.from);
-    if (AIOS_KEYS.includes(p.lever) && s.aios?.policy) s.aios.policy[p.lever] = p.from;
-    p.status = 'reverted';
-    s.log('warn', `개선안 되돌림 · ${p.title}`, { act: `${LEVERS[p.lever].label} ${fmtV(p.lever, p.to)} → ${fmtV(p.lever, p.from)}` });
+    const run = () => { LEVERS[p.lever].set(s, p.from); if (AIOS_KEYS.includes(p.lever) && s.aios?.policy) s.aios.policy[p.lever] = p.from; p.status = 'reverted'; };
+    // 되돌림은 이전 승인 상태로 돌아가는 안전 쪽 변경 — 상위망이 끊겨도 적용하고 결정 요청은 Outbox에 쌓는다
+    const r = s.fos ? s.fos.change({ kind: 'kpi-revert', title: `KPI 개선안 되돌림 — ${p.title}`, target: { proposal: p.id, lever: p.lever }, before: fmtV(p.lever, p.to), after: fmtV(p.lever, p.from), by, human: true, autonomous: true, verdict: '되돌림', constraints: '이전 승인 값으로 복귀', resume: '' }, run) : (run(), { ok: true });
+    if (!r.ok) return false;
+    s.log('warn', `개선안 되돌림 · ${p.title}`, { act: `${LEVERS[p.lever].label} ${fmtV(p.lever, p.to)} → ${fmtV(p.lever, p.from)}${s.fos ? ` · 계획 ${s.fos.planVersion}` : ''}` });
     this.log.unshift({ t: s.time, act: '되돌림', title: p.title, change: `${fmtV(p.lever, p.to)} → ${fmtV(p.lever, p.from)}` });
     return true;
   }

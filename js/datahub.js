@@ -132,6 +132,50 @@ function buildAssets(sim, view) {
   return assets;
 }
 
+// ── 설비 상태 요약 · 이벤트 (UNS 평면 토픽) — 설비 대시보드(Telegraf → InfluxDB → Grafana)가 바로 읽는 짧은 JSON ─────────────────
+// OPC UA PubSub JSON은 구조가 깊어 시계열 도구로 바로 읽기 어렵다 — 통합 네임스페이스(UNS) 관례대로 설비마다 요약을 함께 발행한다 (기존 발행은 그대로)
+//   metafactory/telemetry/v1/main/{설비 ID}  { asset, name, zone, kind, health, rul_min, risk10, cpk, util, state, busy, down }   — 정밀조립Zone 하나
+//   metafactory/events/v1/{수준}             { level, title, text, zone }   — 그래프 위 이벤트 표시(정비·고장·품질 NG)
+export const UNS_TELEMETRY = (zone, id) => `metafactory/telemetry/v1/${zone}/${id}`;
+export const UNS_EVENT = (level) => `metafactory/events/v1/${level}`;
+const r3 = (v, d = 2) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
+export function unsTelemetry(sim) {
+  const out = [], put = (zone, st, kind) => {
+    let a = {}; try { a = sim.assess(st) ?? {}; } catch { /* 평가 불가 설비 */ }
+    const id = String(st.uid ?? st.id).replace(/[^\w.-]/g, '_'), s = st.state ?? 'OK';
+    out.push({ topic: UNS_TELEMETRY(zone, id), payload: JSON.stringify({ asset: st.uid ?? st.id, name: st.name, zone, kind, health: r3(st.health, 1), rul_min: r3(a.rul, 1), risk10: r3(a.risk10, 4), cpk: r3(a.cpk, 3), util: r3(a.util, 3), state: s, busy: s === 'BUSY' || st.busy ? 1 : 0, down: s === 'DOWN' || s === 'MAINT' ? 1 : 0 }) });
+  };
+  for (const st of sim.processing ?? []) if (!st.standby) put('main', st, 'cell');
+  return out;
+}
+// 운영 로그 중 대시보드에 겹쳐 볼 것 (경보 · 주의 · 조치) — since 이후 새 것만
+export function unsEvents(sim, since) {
+  const L = (sim.logs ?? []).filter((x) => x.id > since && ['alert', 'warn', 'act'].includes(x.level)).reverse();
+  return { next: sim.logSeq ?? since, messages: L.map((l) => ({ topic: UNS_EVENT(l.level), payload: JSON.stringify({ level: l.level, title: l.title, text: [l.obs, l.dec, l.act].filter(Boolean).join(' / ').slice(0, 400), zone: 'main' }) })) };
+}
+
+// Zone 운영 분석 (js/zonekpi.js) — 설비 대시보드 「정밀조립Zone 운영 분석」
+//   metafactory/oee/v1/main       { zone, oee, a, p, q, good, judged, progress, loss_*(분 · 누적), pm_min }   — 2초마다
+//   metafactory/quality/v1/main   { zone, product, id, ng, kind, x_*(공정 변수), y_*(품질 특성) }   — 제품 1개 판정마다 (평면 JSON)
+export const UNS_OEE = (zone) => `metafactory/oee/v1/${zone}`;
+export const UNS_QUALITY = (zone) => `metafactory/quality/v1/${zone}`;
+export function unsZoneKpi(sim, { max = 400 } = {}) {
+  const K = sim.zkpi; if (!K) return [];
+  K.feedOn = true; K.collectMain();
+  const out = ['main'].map((z) => {
+    const o = K.oee(z), L = Object.fromEntries(K.lossPareto(z, o).map((x) => [`loss_${x.key}`, r3(x.v, 2)])), pr = K.progress(z);
+    return { topic: UNS_OEE(z), payload: JSON.stringify({ zone: z, oee: r3(o.OEE, 4), a: r3(o.A, 4), p: r3(o.P, 4), q: r3(o.Q, 4), good: o.quality.good, judged: o.quality.judged, progress: r3(pr.pct, 4),
+      ...Object.fromEntries(['down', 'setup', 'stop', 'idle', 'blocked', 'speed', 'defect'].map((k) => [`loss_${k}`, L[`loss_${k}`] ?? 0])), pm_min: r3(o.rows.filter((r) => !r.standby).reduce((a, r) => a + r.t.pm, 0) / 60, 2) }) };
+  });
+  for (const u of K.drain().slice(-max)) {
+    const flat = { zone: u.zone, product: u.product, id: String(u.id), ng: u.ng ? 1 : 0, kind: u.kind ?? 'OK' };
+    for (const [k, v] of Object.entries(u.x)) if (Number.isFinite(v)) flat[`x_${k}`] = v;
+    for (const [k, v] of Object.entries(u.y)) if (Number.isFinite(v)) flat[`y_${k}`] = v;
+    out.push({ topic: UNS_QUALITY(u.zone), payload: JSON.stringify(flat) });
+  }
+  return out;
+}
+
 export class DataHub {
   constructor() {
     this.interval = 10;         // 수집 주기 (시뮬레이션 초)
@@ -139,7 +183,8 @@ export class DataHub {
     this.publishOn = true;
     this.shared = !!globalThis.window?.JIN3D_SHARED;   // 아티팩트 공유 페이지: 수집만 하고 발행·저장은 하지 않는다 (내려받기 차단)
     this.noServer = this.shared || !!globalThis.window?.JIN3D_NO_SERVER;   // 정적 웹(GitHub Pages): 발행만 못 하고 저장은 된다
-    this.mqtt = { available: this.noServer ? false : null, status: null, sent: 0, failed: 0, lastError: null };
+    // available: 마지막으로 서버에 닿았을 때 브로커가 떠 있었는가 (null = 아직 모름) · fails: 연속 전송 실패(서버에 닿지 못함 · HTTP 오류) — 일시 실패와 「서버 없음(noServer)」은 다르다 · everOk: 한 번이라도 서버에 닿았는가
+    this.mqtt = { available: this.noServer ? false : null, status: null, sent: 0, failed: 0, lastError: null, fails: 0, retryAt: 0, everOk: false, held: 0 };
     this.queue = []; this.flushT = 0; this.lastMsg = null;
     this.pcap = null;   // 패킷 덤프 (js/pcap.js) — 켜져 있으면 발행하는 메시지를 MQTT/TCP/IP 패킷으로도 기록
     this.assetPcaps = new Map();   // 개별 캡처 (로봇·설비 정보 창): 자산 id → PacketCapture(only)
@@ -150,7 +195,7 @@ export class DataHub {
     this.sim = sim; this.view = view;
     const base = new Date(); base.setHours(8, 0, 0, 0);          // 화면 시계(08:00 시작)와 같은 기준
     this.epochMs = base.getTime();
-    this.runId = `run-${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}`;
+    this.runId = `run-${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}-${Math.random().toString(36).slice(2, 6).padEnd(4, '0')}`;   // 같은 초에 다시 시작해도 겹치지 않게 짧은 난수 접미사 (RCA 서버가 실행·사례로 같은 건을 가린다 · 서버 저장 ID 64자 제한 안)
     this.assets = buildAssets(sim, view);
     this.writerIds = new Map(this.assets.map((a, i) => [a.id, i + 1]));
     this.samples = []; this.events = []; this.lastLogId = sim.logSeq; this.lastT = -Infinity; this.seq = 0;
@@ -303,26 +348,36 @@ export class DataHub {
     this.queue.push({ topic: `aas/${PUBLISHER_ID}/environment`, payload: this.count(JSON.stringify(buildEnvironment(this.assets, [], null))), retain: true });
   }
 
+  // 발행 대기열 → 서버 MQTT 브로커. 서버 없는 화면(noServer)은 버린다(수집·저장만).
+  //   전송 실패(서버가 잠시 안 됨 · HTTP 오류)는 「서버 없음」으로 굳히지 않는다 — 간격을 늘려(1초 → 최대 30초) 계속 다시 시도하고 화면에 일시 실패로 보인다.
+  //   실패한 묶음: 주기 데이터(ua-keyframe 수집값)는 버린다(다음 수집에 새 값이 간다 · failed에 셈) · 한 번만 나가는 것(retain 메타데이터 · AAS 모델 · 이벤트 · 명령)은 다시 넣어 재전송
   async flush() {
     if (!this.queue.length) return;
-    if (this.mqtt.available === false || this.flushing) { if (this.mqtt.available === false) this.queue = []; return; }
+    if (this.noServer) { this.queue = []; return; }
+    const M = this.mqtt, once = (m) => m.retain || /\/(Events|Commands)$/.test(m.topic);
+    if (this.flushing || Date.now() < M.retryAt) {
+      if (this.queue.length > 6000) { const keep = this.queue.filter(once).slice(-4000), n = this.queue.length - keep.length; M.failed += n; this.queue = keep; }   // 기다리는 동안 쌓이는 주기 데이터는 버린다
+      return;
+    }
     const batch = this.queue.splice(0, 2000);
     this.flushing = true;
     try {
       const res = await fetch('/api/mqtt/publish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: batch }) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const out = await res.json();
-      this.mqtt.available = !!out.status?.listening; this.mqtt.status = out.status; this.mqtt.sent += out.published;
-      if (!out.status?.listening) this.queue = [];
+      M.available = !!out.status?.listening; M.status = out.status; M.sent += out.published; M.fails = 0; M.retryAt = 0; M.everOk = true; M.lastError = null;
+      if (!out.status?.listening) this.queue = [];   // 서버는 있는데 브로커가 못 떴다 (포트 충돌 등) — 상태에 사유가 있다
     } catch (e) {
-      this.mqtt.failed += batch.length; this.mqtt.lastError = e.message;
-      this.mqtt.available = false;   // 서버 없는 환경(정적 공유 등): 수집·저장만 한다
+      const again = batch.filter(once);
+      M.failed += batch.length - again.length; M.lastError = e.message; M.fails++; M.held = again.length;
+      M.retryAt = Date.now() + Math.min(30000, 1000 * 2 ** Math.min(M.fails - 1, 5));
+      this.queue.unshift(...again);
     } finally { this.flushing = false; }
   }
   async refreshStatus() {
     if (this.noServer) return this.mqtt;
-    try { const r = await fetch('/api/mqtt/status'); this.mqtt.status = await r.json(); this.mqtt.available = !!this.mqtt.status.listening; }
-    catch { this.mqtt.available = false; }
+    try { const r = await fetch('/api/mqtt/status'); if (!r.ok) throw new Error(`HTTP ${r.status}`); this.mqtt.status = await r.json(); this.mqtt.available = !!this.mqtt.status.listening; this.mqtt.everOk = true; if (this.mqtt.fails) this.mqtt.retryAt = 0; }   // 서버가 돌아왔다 — 바로 다시 보낸다
+    catch (e) { this.mqtt.lastError = e.message; this.mqtt.fails = Math.max(1, this.mqtt.fails); }
     return this.mqtt;
   }
 

@@ -1,11 +1,29 @@
-// 대화 기반 운영 컨트롤러 — 추론 기반 에이전트(FactoryAgent)가 정비·품질·흐름·물류를 계속 운영하고,
+// 대화 기반 운영 컨트롤러 — 정책 기반 에이전트(FactoryAgent)가 정비·품질·흐름·물류를 계속 운영하고,
 // 입력창의 운영자 지시만 해석해 공정에 반영한다. 내장 해석기(js/dialog.js)가 먼저 처리하고,
 // 해석하지 못한 문장은 Claude가 연결되어 있을 때 Claude가 해석해 같은 조치(도구)로 돌려준다.
 import { parseInstruction, applyAction, DIALOG_EXAMPLES } from './dialog.js';
 import { evaluate } from './gate.js';
+import { runAgentTurn, MODEL } from './agentcore.js';
 
 const HISTORY = 12;
 
+// 서버 없는 웹 버전(GitHub Pages): 운영자가 넣은 API 키로 브라우저에서 Claude API를 직접 부른다.
+// 키는 이 브라우저 저장소에만 두고 api.anthropic.com으로만 보낸다.
+const KEY_STORE = 'jin3d.anthropicKey';
+const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.131.0/+esm';   // package.json과 같은 버전
+export const serverless = () => !!(globalThis.window?.JIN3D_SHARED || globalThis.window?.JIN3D_NO_SERVER);
+export function browserKey() {
+  try { return sessionStorage.getItem(KEY_STORE) || localStorage.getItem(KEY_STORE) || ''; } catch { return ''; }
+}
+export const browserKeyKept = () => { try { return !!localStorage.getItem(KEY_STORE); } catch { return false; } };   // 설정 창의 「기억」 표시
+// remember=true면 브라우저를 닫아도 남고(localStorage), false면 이 탭을 닫으면 지워진다(sessionStorage). 빈 키는 삭제
+export function storeBrowserKey(key, remember) {
+  try {
+    sessionStorage.removeItem(KEY_STORE); localStorage.removeItem(KEY_STORE);
+    if (key) (remember ? localStorage : sessionStorage).setItem(KEY_STORE, key);
+    return true;
+  } catch { return false; }
+}
 const fmt = (t) => {
   const s = Math.floor(t) + 8 * 3600;
   return `${String(Math.floor(s / 3600) % 24).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
@@ -19,30 +37,79 @@ export class LLMController {
     this.enabled = false;
     this.pauseWhileThinking = true;
     this.inFlight = false;
-    this.queue = null;            // { reasons:Set, urgent, operatorMessage }
+    this.queue = [];              // 차례로 보낼 요청 [{ reasons:Set, urgent, operatorMessage, rec }] — 지시마다 따로 (응답을 그 지시에 연결)
     this.calls = 0; this.costUSD = 0; this.tokensIn = 0; this.tokensOut = 0;
     this.status = '';
     this.onChange = null;
   }
 
   async probe() {
-    // 공유 페이지(서버 없음)에서는 Claude 서버에 묻지 않는다
-    if (window.JIN3D_SHARED || window.JIN3D_NO_SERVER) { this.available = false; this.onChange?.(); return; }
+    // 서버 없는 웹 버전: 저장된 API 키가 있으면 브라우저에서 직접 호출한다 (없으면 내장 해석기만)
+    if (serverless()) {
+      if (browserKey()) { this.provider = 'key'; this.available = true; this.model = MODEL; this.onChange?.(); return; }
+      this.provider = null; this.available = false; this.model = null; this.onChange?.();
+      return;
+    }
     try {
       const r = await fetch('/api/status');
-      if (r.ok) { const j = await r.json(); this.available = !!j.llm; this.model = j.model; }
-    } catch { this.available = false; }
+      if (r.ok) { const j = await r.json(); this.available = !!j.llm; this.model = j.model; this.provider = this.available ? 'server' : null; }
+    } catch { this.available = false; this.provider = null; }
     this.onChange?.();
+  }
+
+  // 공정 설계(자연어 라인·레시피 설계)는 서버(맥·윈도우 앱·npm start)에서만 — 웹 버전 Agent는 대화 지시 해석에만 쓴다
+  get designAvailable() { return this.available && this.provider === 'server'; }
+  get providerLabel() { return ({ server: '서버', key: 'API 키 · 브라우저 직접 호출' })[this.provider] ?? ''; }
+
+  // 웹 버전 API 키 저장·삭제 (설정 창) — 저장 후 연결 상태를 다시 확인한다
+  async setBrowserKey(key, remember) {
+    const k = String(key ?? '').trim();
+    if (k && !/^sk-ant-/.test(k)) return { ok: false, error: 'Anthropic API 키는 sk-ant- 로 시작합니다.' };
+    if (!storeBrowserKey(k, remember)) return { ok: false, error: '이 브라우저는 저장소를 쓸 수 없습니다 (사생활 보호 모드 등).' };
+    this.client = null;
+    await this.probe();
+    return { ok: true };
+  }
+
+  // 브라우저에서 Claude API를 직접 부르는 SDK 클라이언트 (처음 쓸 때만 CDN에서 불러온다)
+  async sdkClient() {
+    if (this.client) return this.client;
+    this.SDK ??= (await import(SDK_URL)).default;
+    this.client = new this.SDK({ apiKey: browserKey(), dangerouslyAllowBrowser: true, maxRetries: 1 });
+    return this.client;
+  }
+
+  // 한 턴 실행 — 연결 방식(서버 · API 키)에 관계없이 같은 결과 모양 { text, actions, rejected, usage, costUSD, latencyMs }
+  async runTurn(payload) {
+    const t0 = performance.now();
+    if (this.provider === 'key') {
+      const client = await this.sdkClient();
+      try {
+        return { ...await runAgentTurn((p) => client.beta.messages.create(p), payload), latencyMs: performance.now() - t0 };
+      } catch (e) {
+        const S = this.SDK;
+        if (e instanceof S.AuthenticationError) throw new Error('API 키가 올바르지 않습니다 (⚙ 설정에서 다시 입력)');
+        if (e instanceof S.PermissionDeniedError) throw new Error('이 API 키로는 해당 모델을 쓸 수 없습니다');
+        if (e instanceof S.RateLimitError) throw new Error('API 사용 한도에 걸렸습니다 — 잠시 뒤 다시 시도');
+        if (e instanceof S.APIConnectionError) throw new Error('Claude API에 연결하지 못했습니다 (이 페이지의 네트워크 정책 또는 인터넷 연결 확인)');
+        if (e instanceof S.APIError) throw new Error(`Claude API 오류 ${e.status ?? ''}`.trim());
+        throw e;
+      }
+    }
+    const res = await fetch('/api/agent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+    return out;
   }
 
   attach(sim, agent) {
     this.sim = sim; this.agent = agent;
-    this.history = []; this.queue = null;
+    this.history = []; this.queue = []; this.pendingDialog = null;
     this.gen = (this.gen ?? 0) + 1;     // 모드 전환 시 이전 응답 무시
     this.setEnabled(this.enabled && sim.mode.agentActive);
   }
 
-  // 대화 기반은 Claude 연결 없이도 쓸 수 있다 (내장 해석기). 운영 판단은 언제나 추론 기반 에이전트가 한다 — Claude는 운영자 지시 해석에만 쓴다
+  // 대화 기반은 Claude 연결 없이도 쓸 수 있다 (내장 해석기). 운영 판단은 언제나 정책 기반 에이전트가 한다 — Claude는 운영자 지시 해석에만 쓴다
   setEnabled(on) {
     this.enabled = !!(on && this.sim?.mode.agentActive);
     this.onChange?.();
@@ -50,12 +117,12 @@ export class LLMController {
 
   get holdSim() { return this.enabled && this.inFlight && this.pauseWhileThinking; }
 
-  request(reason, urgent = false, operatorMessage = null) {
+  // 운영자 지시(rec)는 하나씩 따로 줄을 세운다 — 응답 대기 중 새 지시가 와도 앞 지시를 덮어쓰지 않고, 응답은 보낸 그 지시에 붙는다
+  request(reason, urgent = false, operatorMessage = null, rec = null) {
     if (!this.enabled) return;
-    if (!this.queue) this.queue = { reasons: new Set(), urgent: false, operatorMessage: null };
-    this.queue.reasons.add(reason);
-    this.queue.urgent ||= urgent;
-    if (operatorMessage) this.queue.operatorMessage = operatorMessage;
+    const last = this.queue.at(-1);
+    if (!rec && !operatorMessage && last && !last.rec && !last.operatorMessage) { last.reasons.add(reason); last.urgent ||= urgent; }   // 지시가 아닌 요청끼리는 묶는다
+    else this.queue.push({ reasons: new Set([reason]), urgent, operatorMessage, rec });
     this.pump();
   }
 
@@ -75,7 +142,7 @@ export class LLMController {
       else rec.items.push({ clause: c, source: '내장 해석기', gate: evaluate({ type: 'unknown', clause: c }, sim, this.agent) });
     }
     this.logDialog(rec);
-    if (unknown.length && this.available) { this.pendingDialog = rec; this.request('운영자 지시 해석 (내장 해석기로 알 수 없는 문장)', true, unknown.join(' / ')); }
+    if (unknown.length && this.available) this.request('운영자 지시 해석 (내장 해석기로 알 수 없는 문장)', true, unknown.join(' / '), rec);
     return true;
   }
 
@@ -108,7 +175,7 @@ export class LLMController {
     this.history.push({ t: fmt(sim.time), who: '에이전트', text: items.map(line).join(' / ') });
   }
 
-  // 대화 기반에서는 Claude를 주기적으로 부르지 않는다 (운영 판단은 추론 기반 에이전트)
+  // 대화 기반에서는 Claude를 주기적으로 부르지 않는다 (운영 판단은 정책 기반 에이전트)
   update() {}
 
   snapshot() {
@@ -147,53 +214,48 @@ export class LLMController {
       drone: (sim.drones ?? []).map((d) => ({ id: d.id, task: d.task, battery: Math.round(d.battery), mission: d.mission ? { incident: d.mission.title, arrived: !!d.arrived } : null })),
       incidents_open: sim.orch.incidents.filter((i) => i.status === 'open').map((i) => ({ type: i.type, title: i.title, age_s: Math.round(sim.time - i.t0), drone_observation: i.drone?.obs ?? null })),
       recent_events: sim.logs.slice(0, 8).map((l) => `[${fmt(l.t)}] ${l.title}`),
-      // 현장 감시 · 통신 · 에너지 · ERP — 판단 근거 (CCTV 에이전트 보고, 5G 링크, 배터리 부족 로봇, Odoo 발주·정비요청)
+      // 현장 감시 · 통신 · 에너지 · FAC — 판단 근거 (CCTV 에이전트 보고, 5G 링크, 배터리 부족 로봇, FAC 발주·정비요청)
       cctv: sim.cctvAgent ? { cameras: sim.cctv.cams.length, blind_spots: sim.cctv.stats.blind, open_events: sim.cctvAgent.history.filter((h) => h.status === 'open').map((h) => ({ no: h.no, kind: h.kind, cam: h.cam, label: h.label, conf: h.conf })) } : null,
       network_5g: sim.net?.on ? (() => { const Q = sim.net.summary(); return { cells: sim.net.plan.cells.length, ues: Q.ues, handovers: Q.ho, ho_fail: Q.hoFail, rlf: Q.rlf, uplink_lost: Q.lost, weakest_rsrp_dbm: r1(Math.min(...sim.net.ues.map((u) => u.rsrp))) }; })() : null,
       low_battery: [...sim.vehicles, ...sim.carriers, ...sim.helpers, ...sim.techs.filter((t) => t.kind === 'humanoid'), ...sim.quads, ...(sim.drones ?? [])].filter((m) => m.battery != null && m.battery < 35).map((m) => ({ id: m.id, battery: Math.round(m.battery), charging: !!(m.charging || m.chgNow) })),
-      erp: sim.erp?.on ? (() => { const E = sim.erp.stats(); return { purchase_orders_open: E.poOpen, maintenance_requests_open: sim.erp.db.mr.filter((m) => m.stage !== 'done').map((m) => ({ ref: m.ref, equipment: m.equipmentName, type: m.type, stage: m.stage })), rack_stock: { raw: sim.erp.quant.rackRaw.raw, parts: sim.erp.quant.rackParts.parts } }; })() : null,
+      fac: sim.fac?.on ? (() => { const E = sim.fac.stats(); return { purchase_orders_open: E.poOpen, maintenance_requests_open: sim.fac.db.mr.filter((m) => m.stage !== 'done').map((m) => ({ ref: m.ref, equipment: m.equipmentName, type: m.type, stage: m.stage })), rack_stock: { raw: sim.fac.quant.rackRaw.raw, parts: sim.fac.quant.rackParts.parts } }; })() : null,
     };
   }
 
   async pump() {
-    if (this.inFlight || !this.queue || !this.enabled) return;
-    const job = this.queue; this.queue = null;
+    if (this.inFlight || !this.queue.length || !this.enabled) return;
+    const job = this.queue.shift(), rec = job.rec ?? null;
     const gen = this.gen;
     this.inFlight = true;
     const trigger = [...job.reasons].join(' / ');
     this.status = `분석 중 · ${trigger}`;
     this.onChange?.();
     try {
-      const res = await fetch('/api/agent', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ snapshot: this.snapshot(), trigger, urgent: job.urgent, operatorMessage: job.operatorMessage, history: this.history.slice(-HISTORY) }),
-      });
-      const out = await res.json();
+      const out = await this.runTurn({ snapshot: this.snapshot(), trigger, urgent: job.urgent, operatorMessage: job.operatorMessage, history: this.history.slice(-HISTORY) });
       if (gen !== this.gen) return;
-      if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
       this.calls++; this.costUSD += out.costUSD; this.tokensIn += out.usage.input_tokens; this.tokensOut += out.usage.output_tokens;
-      for (const a of out.actions) this.apply(a);
+      this.pendingDialog = rec;   // apply()가 해석 결과를 붙일 지시 = 이 요청을 보낸 지시
+      try { for (const a of out.actions) this.apply(a); } finally { this.pendingDialog = null; }
       for (const r of out.rejected) this.sim.log('warn', `Agent 제안 반려 · ${r.name}`, { obs: r.input.reason, dec: r.error });
-      const rec = this.pendingDialog; this.pendingDialog = null;
       if (rec) {
-        for (const it of rec.items) if (it.gate.verdict === 'pending') { it.gate.verdict = rec.agentItems?.length ? 'delegated' : 'reject'; it.gate.reason = rec.agentItems?.length ? 'Agent가 해석해 아래 조치로 전환' : 'Agent도 공정 조치로 해석하지 못함'; it.gate.checks[0].text += rec.agentItems?.length ? ' → 해석됨' : ' → 조치 없음'; it.reply = out.text; }
-        this.logDialog(rec, rec.agentItems ?? []);
+        for (const it of rec.items) if (it.gate.verdict === 'pending') { it.gate.verdict = rec.agentItems?.length ? 'delegated' : 'reject'; it.gate.reason = rec.agentItems?.length ? 'Agent가 해석해 아래 조치로 전환' : `Agent 판단: ${(out.text || '공정 조치로 해석하지 못함').replace(/\s+/g, ' ').slice(0, 160)}`; it.gate.checks[0].text += rec.agentItems?.length ? ' → 해석됨' : ' → 조치 없음'; it.reply = out.text; }
+        this.logDialog(rec, rec.agentItems?.length ? rec.agentItems : rec.items.filter((i) => i.source === 'Agent'));   // Agent가 조치하지 않았으면 거절과 그 원인(Agent 판단)을 보고
       }
       if (out.text) {
         this.history.push({ t: fmt(this.sim.time), who: '에이전트', text: out.text });
-        this.sim.log('llm', 'Agent 판단', { obs: trigger, dec: out.text, act: out.actions.length ? `조치 ${out.actions.length}건 실행` : '추가 조치 없음' });
+        this.sim.log('llm', 'Agent 판단', { obs: trigger, dec: out.text, act: out.actions.length ? `조치 ${out.actions.length}건 실행` : '추가 조치 없음 (원인은 위 판단 참고)' });
       }
       this.status = `${(out.latencyMs / 1000).toFixed(1)}초 응답 · 조치 ${out.actions.length}건`;
     } catch (e) {
       if (gen !== this.gen) return;
-      if (this.pendingDialog) { for (const it of this.pendingDialog.items) if (it.gate.verdict === 'pending') { it.gate.verdict = 'reject'; it.gate.reason = `Agent 호출 실패: ${e.message}`; } this.pendingDialog = null; }
-      this.sim.log('alert', 'Agent 호출 실패', { obs: e.message, act: '추론 기반 에이전트로 계속 운영 · 지시를 더 짧게 다시 입력해 보세요' });
+      if (rec) for (const it of rec.items) if (it.gate.verdict === 'pending') { it.gate.verdict = 'reject'; it.gate.reason = `Agent 호출 실패: ${e.message}`; }
+      this.sim.log('alert', 'Agent 호출 실패', { obs: e.message, act: '정책 기반 에이전트로 계속 운영 · 지시를 더 짧게 다시 입력해 보세요' });
       this.status = `오류: ${e.message}`;
     } finally {
       if (gen === this.gen) {
         this.inFlight = false;
         this.onChange?.();
-        if (this.queue) setTimeout(() => this.pump(), 500);
+        if (this.queue.length) setTimeout(() => this.pump(), 500);
       }
     }
   }

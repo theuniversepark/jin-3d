@@ -1,0 +1,14 @@
+apiVersion: 1
+datasources:
+  - name: Jin-3D InfluxDB
+    uid: jm-influx
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    isDefault: true
+    jsonData:
+      version: Flux
+      organization: jin3d
+      defaultBucket: raw
+    secureJsonData:
+      token: ${JIN3D_INFLUX_TOKEN}

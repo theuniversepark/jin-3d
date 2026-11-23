@@ -56,11 +56,13 @@ app.whenReady().then(async () => {
   await testPopup('5G 카드', () => clickId('btnNet5g'), D('#net5gCard'), () => clickId('btnNet5g'));
   await testPopup('5G 기지국 창', () => js(`window.__twin.openGnb('gNB-01')`), D('#gnbPanel'), () => js(`document.getElementById('gnbClose').click()`));
   await testPopup('오케스트레이터 (인시던트 흐름)', () => clickId('btnOrch'), D('#orchPanel'), async () => {});
+  await testPopup('오케스트레이터 (공정별 제어 흐름도)', () => js(`document.querySelector('#orchPanel [data-tab=ctl]').click()`), D('#orchPanel'), async () => {});
+  await testPopup('오케스트레이터 (흐름 분석)', () => js(`document.querySelector('#orchPanel [data-cview=analysis]').click()`), D('#orchPanel'), () => js(`document.querySelector('#orchPanel [data-cview=steps]').click()`));
   await testPopup('오케스트레이터 (명령 콘솔)', () => js(`document.querySelector('#orchPanel [data-tab=cmd]').click()`), D('#orchPanel'), async () => { await js(`document.querySelector('#orchPanel [data-tab=flow]').click()`); await clickId('btnOrch'); });
   await testPopup('진화 컨셉', () => clickId('btnConcept'), D('#concept'), () => clickId('closeConcept'));
   await testPopup('3단계 8시간 비교', async () => { await clickId('btnCompare'); await wait(1500); }, D('#compare'), () => clickId('closeCompare'));
   await testPopup('데이터 연동', () => clickId('btnData'), D('#datahub'), () => clickId('closeData'));
-  for (const tab of ['po', 'stock', 'mr', 'live', 'log']) await testPopup(`Odoo (${tab})`, async () => { await clickId('btnOdoo'); await js(`document.querySelector('[data-odtab=${tab}]')?.click()`); }, D('#odooModal'), () => clickId('closeOdoo'));
+  for (const tab of ['po', 'stock', 'mr', 'api', 'log']) await testPopup(`FAC (${tab})`, async () => { await clickId('btnFac'); await js(`document.querySelector('[data-factab=${tab}]')?.click()`); }, D('#facModal'), () => clickId('closeFac'));
   await testPopup('VLA 학습', () => clickId('btnVla'), D('#vlaModal'), () => clickId('closeVla'));
   await testPopup('AIOS 학습', () => clickId('btnAios'), D('#aiosModal'), () => clickId('closeAios'));
   for (const v of ['agent', 'cell', 'sense']) await testPopup(`FACOS 상세 (${v})`, () => js(`document.querySelector('#facos [data-open="facos:${v}"]')?.click()`), D('#facosModal'), () => clickId('closeFacos'));

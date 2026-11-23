@@ -64,6 +64,8 @@ function propCard(sim, p) {
   if (p.status === 'new' || p.status === 'verified') {
     const q = p.twin ? (p.twin.recommend === 'apply' ? '트윈 검증에서 개선이 확인됐습니다. 이 제안을 적용하시겠습니까?' : p.twin.recommend === 'hold' ? '트윈 검증에서 나빠졌습니다. 그래도 적용하시겠습니까?' : '트윈 검증에서 효과가 작습니다. 적용하시겠습니까?') : p.lever ? '디지털트윈 검증 전입니다. 검증하거나 바로 적용할 수 있습니다.' : '운영자 확인이 필요한 제안입니다.';
     act = `<div class="imp-ask"><span>❓ ${q}</span>${p.lever ? `${!p.twin && !A.job ? '<button data-imp-verify>🧪 트윈 검증</button>' : ''}<button data-imp-apply class="primary">✅ 적용</button>` : ''}<button data-imp-hold>⏸ 보류</button></div>`;
+    if (p.blocked) act += `<p class="imp-note dn">⛔ ${p.blocked}</p>`;
+    act += '<p class="imp-note">적용하면 FacOS 공장 결정(운영자 승인 기록 · 계획 버전 증가)을 거쳐 반영됩니다.</p>';
   }
   if (p.status === 'applied') {
     const left = Math.max(0, VERIFY_S - (sim.time - p.tApply));
@@ -80,6 +82,7 @@ function propCard(sim, p) {
   return `<div class="imp-card ${p.status}" data-imp-id="${p.id}">
     <div class="imp-ch"><b>${p.title}</b><span class="imp-chips">${chips}</span><small>${STATUS[p.status]}</small></div>
     <div class="imp-why">📊 근거: ${p.why}</div>
+    ${p.version ? `<div class="imp-chg">🗂 FacOS 결정 · 계획 ${p.version}</div>` : ''}
     ${L ? `<div class="imp-chg">⚙️ ${L.label}: <b>${fmtV(p.lever, p.status === 'applied' || p.status === 'reverted' ? p.from : L.get(sim))}</b> → <b>${fmtV(p.lever, p.to)}</b></div>` : ''}
     <div class="imp-why">🎯 기대 효과: ${p.expect}${p.est ? ` <em>(추정 ${p.est})</em>` : ''}</div>
     <div class="imp-why muted">⚖️ 부작용: ${p.trade}</div>

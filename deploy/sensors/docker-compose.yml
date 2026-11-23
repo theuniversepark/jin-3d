@@ -1,0 +1,36 @@
+# 메타팩토리 센서망 — 운영 배포용 오픈소스 스택 (공장 중앙 서버 · 센서 서버 · 센서 DB)
+#   Mosquitto(공장 UNS 브로커) · Node-RED(엣지 게이트웨이 흐름 예시) · Telegraf(MQTT → DB 적재) · TimescaleDB(센서 DB) · Grafana(대시보드)
+#   시간 동기(linuxptp · chrony)는 호스트에서 실행 — ptp/ 설정 참고 (컨테이너는 호스트 시계를 쓴다)
+# 실행: docker compose up -d   (앱 시뮬레이션을 붙이려면 앱 설정 MQTT_BRIDGE_URL=mqtt://<이 서버>:1883)
+name: jin3d-sensors   # 구성 이름 — meta-factory의 같은 폴더 구성(sensors)과 컨테이너·볼륨 이름이 겹치지 않게
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0.20
+    ports: ["1883:1883"]
+    volumes: ["./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro", "mosquitto-data:/mosquitto/data"]
+    restart: unless-stopped
+  timescaledb:
+    image: timescale/timescaledb:2.17.2-pg16
+    environment: { POSTGRES_DB: sensors, POSTGRES_USER: sensors, POSTGRES_PASSWORD: "${SENSOR_DB_PASSWORD:?SENSOR_DB_PASSWORD를 .env에 지정하세요}" }
+    ports: ["5432:5432"]
+    volumes: ["./timescaledb/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro", "tsdb-data:/var/lib/postgresql/data"]
+    restart: unless-stopped
+  telegraf:
+    image: telegraf:1.33.1
+    depends_on: [mosquitto, timescaledb]
+    environment: { SENSOR_DB_PASSWORD: "${SENSOR_DB_PASSWORD}" }
+    volumes: ["./telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro"]
+    restart: unless-stopped
+  nodered:
+    image: nodered/node-red:4.0.9
+    ports: ["1880:1880"]
+    volumes: ["./nodered/flows_gateway.json:/data/flows.json", "nodered-data:/data"]
+    restart: unless-stopped
+  grafana:
+    image: grafana/grafana:11.4.0
+    depends_on: [timescaledb]
+    ports: ["3000:3000"]
+    environment: { SENSOR_DB_PASSWORD: "${SENSOR_DB_PASSWORD}" }
+    volumes: ["./grafana/provisioning:/etc/grafana/provisioning:ro", "./grafana/dashboards:/var/lib/grafana/dashboards:ro", "grafana-data:/var/lib/grafana"]
+    restart: unless-stopped
+volumes: { mosquitto-data: {}, tsdb-data: {}, nodered-data: {}, grafana-data: {} }

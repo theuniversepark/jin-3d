@@ -357,4 +357,4 @@ export class Private5G {
       sent: S.sent, delivered: S.delivered, inflight, lost: S.sent - S.delivered - inflight, fwd: S.fwd, bytes: S.bytes };
   }
 }
-export const STACK = 'AAS(IDTA) 서브모델 → OPC UA PubSub JSON(ua-data) → MQTT 3.1.1 QoS 1 → 5G NR n79(4.75GHz) 업링크 → 5GC UPF → MQTT 브로커';
+export const STACK = 'AAS(IDTA) 서브모델 → OPC UA PubSub JSON(ua-data) → MQTT 5 QoS 1 → 5G NR n79(4.75GHz) 업링크 → 5GC UPF → MQTT 브로커';

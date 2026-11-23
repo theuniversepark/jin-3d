@@ -7,6 +7,22 @@ import * as THREE from 'three';
 
 export const REC = { fps: 2, segS: 300, keep: 2, width: 2592, bitrate: 1_100_000 };   // 2fps · 5분 구간 · 칸 288×162(9열 기준) · 구간 약 40MB
 const FONT = '"Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
+// MP4 변환 요청 (서버 ffmpeg 큐): 최근 구간부터 · 기다리는 시간은 budgetMs까지 — 넘으면 기다리지 않고 돌려준다(서버는 이어서 변환, 다음 저장 때 MP4 링크)
+// 돌려주는 값: { done(이번에 끝난 구간), ready(MP4 있는 구간), total(대상), pending(남은 구간) }
+export async function convertSegs(kind, segs, { budgetMs = 20000, onProgress } = {}) {
+  const list = segs.filter((s) => s.stored).reverse(), todo = list.filter((s) => !s.mp4), t0 = performance.now();
+  let done = 0;
+  for (const s of todo) {
+    const left = budgetMs - (performance.now() - t0); if (left <= 0) break;
+    onProgress?.(done, todo.length);
+    const req = fetch(`/api/convert?kind=${kind}&id=${encodeURIComponent(s.id)}`).then(async (r) => { if (r.ok) s.mp4 = await r.json(); return r.ok; }).catch(() => false);
+    const ok = await Promise.race([req, new Promise((res) => setTimeout(() => res('late'), left))]);
+    if (ok === 'late') break;
+    if (ok) done++;
+  }
+  const ready = list.filter((s) => s.mp4).length;
+  return { done, ready, total: list.length, pending: list.length - ready };
+}
 const two = (n) => String(n).padStart(2, '0');
 export const recSupported = () => typeof MediaRecorder !== 'undefined' && typeof HTMLCanvasElement !== 'undefined' && !!HTMLCanvasElement.prototype.captureStream;
 export const pickMime = () => ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((m) => MediaRecorder.isTypeSupported?.(m)) ?? '';
@@ -30,8 +46,8 @@ export class CCTVRecorder {
   }
   // 운전 시작·단계 전환 때: 지금 녹화 중인 구간을 닫고 새로 시작
   attach(sim, runId, iso) {
-    this.sim = sim; this.runId = runId; this.iso = iso;
-    if (this.rec) this.stopSegment();
+    if (this.rec) this.stopSegment();   // 이전 실행의 시계로 먼저 닫는다 (새 시뮬레이션을 붙인 뒤 닫으면 종료 시각이 0초 근처로 찍혀 길이가 음수가 됐다)
+    this.sim = sim; this.runId = runId; this.iso = iso; this.gen = (this.gen ?? 0) + 1;   // 실행 세대 — 이전 실행에서 건 비동기 읽기를 가려낸다
     this.on = recSupported() && !globalThis.window?.JIN3D_SHARED;   // 공유 페이지(아티팩트)는 파일 저장이 막혀 있어 녹화하지 않는다
     this.cv.recording = this.on;
     this.acc = 1e9;
@@ -75,11 +91,9 @@ export class CCTVRecorder {
     }
     return out;
   }
-  async convertAll() {
-    if (!this.server || !this.ffmpeg) return 0;
-    let n = 0;
-    for (const s of this.segs) { if (!s.stored || s.mp4) continue; try { const r = await fetch(`/api/convert?kind=cctv&id=${encodeURIComponent(s.id)}`); if (r.ok) { s.mp4 = await r.json(); n++; } } catch { /* WebM만 */ } }
-    return n;
+  async convertAll(opts = {}) {   // 최근 구간부터 · budgetMs까지만 기다림 (convertSegs)
+    if (!this.server || !this.ffmpeg) return { done: 0, ready: 0, total: 0, pending: 0 };
+    return convertSegs('cctv', this.segs, opts);
   }
   // 가장 최근 구간 MP4(서버 ffmpeg) — 변환이 끝날 때까지 기다렸다가 로컬 파일로
   async saveLatestMp4() {
@@ -91,7 +105,7 @@ export class CCTVRecorder {
   }
   stopSegment() {
     if (!this.rec) return;
-    this.seg.t1 = this.sim.time; this.seg.iso1 = this.iso(this.sim.time); this.seg.realS = (performance.now() - this.seg.real0) / 1000;
+    this.seg.t1 = this.sim.time; this.seg.iso1 = new Date(Date.parse(this.seg.iso0) + (this.seg.t1 - this.seg.t0) * 1000).toISOString(); this.seg.realS = (performance.now() - this.seg.real0) / 1000;
     try { this.rec.stop(); } catch { /* 이미 멈춤 */ }
     this.rec = null; this.seg = null; this.track = null;
   }
@@ -106,8 +120,8 @@ export class CCTVRecorder {
     if (this.server && blob.size) {
       try {
         const r = await fetch(`/api/cctv?id=${encodeURIComponent(seg.id)}&ext=webm`, { method: 'POST', body: blob });
-        await fetch(`/api/cctv?id=${encodeURIComponent(seg.id)}&ext=json`, { method: 'POST', body: JSON.stringify(meta, null, 1) });
-        if (r.ok) { this.saved++; this.bytes += blob.size; seg.stored = true; } else this.failed++;
+        const rj = await fetch(`/api/cctv?id=${encodeURIComponent(seg.id)}&ext=json`, { method: 'POST', body: JSON.stringify(meta, null, 1) });
+        if (r.ok && rj.ok) { this.saved++; this.bytes += blob.size; seg.stored = true; } else this.failed++;
       } catch { this.failed++; }
     }
   }
@@ -117,25 +131,35 @@ export class CCTVRecorder {
     if (document.hidden) return;
     if (!this.rec) this.startSegment();
     if ((performance.now() - this.seg.real0) / 1000 >= REC.segS) { this.stopSegment(); this.startSegment(); }
-    this.acc += rdt; if (this.acc < 1 / REC.fps) return; this.acc = 0;
+    // 녹화 주기는 실제 경과 시간으로 (프레임 시간 rdt는 0.1초로 잘려 들어와, 화면이 느리면 2장/초보다 훨씬 덜 찍혔다)
+    const now = performance.now() / 1000; this.acc += Math.min(1, now - (this.lastNow ?? now)); this.lastNow = now;
+    if (this.acc < 1 / REC.fps) return; this.acc = Math.min(this.acc - 1 / REC.fps, 1 / REC.fps);   // 남은 시간을 넘겨 평균 주기를 맞춤
     this.capture();
   }
+  // 녹화 한 장: 전광판을 합성해 그린 뒤 비동기로 읽어(GPU를 멈추지 않음) 받으면 캔버스에 그린다. 시각·구간 표시는 읽기를 건 시점 값.
+  // 앞 읽기가 아직이면 이번 장은 건너뛴다. 읽기를 건 구간 · 실행 세대 · 시계를 잡아 두고, 끝났을 때 그 구간이 그대로 열려 있을 때만 그린다
+  // (버퍼 · 해상도만 보면 구간을 바꾼 뒤 이전 구간 프레임이 새 구간 영상에 들어가고, 실행을 바꾼 뒤에는 새 시계로 이전 시각이 찍혔다)
   capture() {
+    if (this.reading || !this.seg) return;
     const r = this.getRenderer(), { w, h, head } = this.size(), cv = this.cv;
     if (!this.rt || this.rt.width !== w || this.rt.height !== h) { this.rt?.dispose(); this.rt = new THREE.WebGLRenderTarget(w, h); this.rt.texture.colorSpace = THREE.SRGBColorSpace; this.buf = new Uint8Array(w * h * 4); this.img = new ImageData(w, h); }
     if (this.canvas.width !== w || this.canvas.height !== h + head) { this.stopSegment(); return; }   // 배치가 바뀌면(공정 설계) 새 구간
     if (this.base.material.map !== cv.rt.texture || this.over.material.map !== cv.overTex) { this.base.material.map = cv.rt.texture; this.over.material.map = cv.overTex; this.base.material.needsUpdate = this.over.material.needsUpdate = true; }
     const prev = r.getRenderTarget(), auto = r.shadowMap.autoUpdate; r.shadowMap.autoUpdate = false;
     r.setRenderTarget(this.rt); r.setClearColor(0x05080c, 1); r.clear(); r.render(this.scene, this.cam); r.setRenderTarget(prev); r.shadowMap.autoUpdate = auto;
-    r.readRenderTargetPixels(this.rt, 0, 0, w, h, this.buf);
+    const buf = this.buf, seg = this.seg, gen = this.gen, iso = this.iso, t = this.sim.time, label = `REC · CCTV ${cv.slots.length}대 전체 · ${this.sim.mode.label} · 피지컬AI 실증 메타팩토리 NVR`;
+    this.reading = true;
+    r.readRenderTargetPixelsAsync(this.rt, 0, 0, w, h, buf).then(() => { this.reading = false; if (this.seg === seg && this.gen === gen && this.buf === buf && this.canvas.width === w && this.canvas.height === h + head) this.paint(w, h, head, t, seg.no, label, iso); }, () => { this.reading = false; });
+  }
+  paint(w, h, head, t, no, label, iso = this.iso) {
     const row = w * 4; for (let y = 0; y < h; y++) this.img.data.set(this.buf.subarray((h - 1 - y) * row, (h - y) * row), y * row);
     const g = this.ctx; g.putImageData(this.img, 0, head);
     // 머리 띠: ● REC · 카메라 수 · 공장 단계 · 시각 · 구간
     g.fillStyle = '#05080c'; g.fillRect(0, 0, w, head);
     g.fillStyle = Math.floor(performance.now() / 600) % 2 ? '#ff4d4d' : '#7a2020'; g.beginPath(); g.arc(18, head / 2, 7, 0, Math.PI * 2); g.fill();
     g.font = `800 18px ${FONT}`; g.fillStyle = '#e8edf2'; g.textBaseline = 'middle';
-    g.fillText(`REC · CCTV ${cv.slots.length}대 전체 · ${this.sim.mode.label} · 피지컬AI 실증 메타팩토리 NVR`, 34, head / 2);
-    g.textAlign = 'right'; g.fillStyle = '#7fb8cc'; g.fillText(`${this.iso(this.sim.time).replace('T', ' ').slice(0, 19)} UTC · 구간 #${this.seg?.no ?? '-'}`, w - 12, head / 2); g.textAlign = 'left';
+    g.fillText(label, 34, head / 2);
+    g.textAlign = 'right'; g.fillStyle = '#7fb8cc'; g.fillText(`${iso(t).replace('T', ' ').slice(0, 19)} UTC · 구간 #${no ?? '-'}`, w - 12, head / 2); g.textAlign = 'left';
   }
   stats() {
     const cur = this.seg ? (performance.now() - this.seg.real0) / 1000 : 0;

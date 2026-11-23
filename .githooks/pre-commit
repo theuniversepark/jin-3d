@@ -1,0 +1,4 @@
+#!/bin/sh
+# 커밋 전: index.html의 앱 파일 버전(?v=내용 해시)을 갱신해 함께 커밋한다 — GitHub Pages 캐시 어긋남 방지 (tools/stamp-version.mjs)
+node tools/stamp-version.mjs >/dev/null || exit 1
+git add index.html
