@@ -52,7 +52,7 @@
 | Claude 아티팩트 (claude.ai) | 공유 페이지 호스팅 |
 | Anthropic Claude API (모델 `claude-opus-5-5`) | 대화 기반 Agent 해석, 자연어 공정 설계 (API 키가 있을 때만) |
 | https://console.anthropic.com/settings/keys | 설정 화면의 API 키 발급 안내 링크 |
-| 캠틱종합기술원 — https://www.camtic.or.kr | 서버 랙 양옆 로고·앞쪽 바닥 표시 이미지 `assets/camtic_logo.png` · `assets/camtic_logo_dark.png` (바닥용 — 흰 로고타입을 진한 회색으로 바꿈) |
+| 캠틱종합기술원 — https://www.camtic.or.kr | 서버 랙 양옆 로고·앞쪽 바닥 표시 이미지 `assets/camtic_logo.png` · `assets/camtic_logo_dark.png` (바닥용 — 흰 로고타입을 진한 회색으로 바꿈). 두 파일 모두 550px 원본을 2200px로 키우고 가장자리를 선명하게 다듬은 것 |
 | 사용자 제공 이미지 | 도어트림 실물 이미지 `assets/doortrim.png` · e-axle 실물 단면 이미지 `assets/eaxle.png` (부품분류셀 이후 AMR 위 제품 표시) |
 | 사용자 제공 이미지 (캐릭터) | 안내 아바타 토리 — 공장장 캐릭터 이미지 `assets/tori/manager.png` · 영어 안내용 `assets/tori/manager-en.png` |
 | Microsoft 신경망 음성 (ko-KR-InJoonNeural · en-US-AndrewNeural) | 토리 안내 음성 녹음 `assets/tori/voice/*.mp3` · `assets/tori/voice/en/*.mp3` — edge-tts로 미리 만든 파일. 앱 실행 중에는 접속하지 않음. 공개 배포물에 넣는 것에 대한 이용 조건은 확인되지 않음(정식 Azure Speech 등으로 다시 만들 수 있게 생성 도구를 분리함) |

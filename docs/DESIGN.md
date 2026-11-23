@@ -258,7 +258,7 @@ flowchart TB
 | 네트워크 노출 | 앱 서버·브로커·센서 서버·RCA 서버 모두 127.0.0.1에만 열림. 설비 대시보드(Grafana 3320 · InfluxDB 8206)도 127.0.0.1에만 게시 | 방화벽 구역 분리(OT/IT), 필요한 포트만 개방 |
 | 요청 출처 | 로컬 서버는 루프백 Host · 같은 출처 Origin · Sec-Fetch-Site를 검사해 이 앱 화면의 요청만 받음(거부 403). 정적 파일은 공개 폴더만 | REST 토큰 또는 mTLS |
 | 인증·권한 | MQTT는 UNS 역할별 계정·ACL(Mosquitto 비밀번호·ACL 파일 자동 생성, 권한 밖 발행은 버림). REST는 인증 없음 | MQTT TLS, DB 암호, Grafana 관리자 암호 |
-| 비밀 정보 | Claude API 키는 safeStorage(맥 키체인 · 윈도우 DPAPI)로 암호화해 사용자 데이터 폴더에 저장하고 화면으로 전달하지 않음. 연동 키(EPCIS 토큰 · ERPNext 키 · 브리지 비밀번호)는 `server/secrets.mjs`로 암호문 저장. `.env`는 저장소 제외 | 비밀 관리 서비스 |
+| 비밀 정보 | Claude API 키는 safeStorage(맥 키체인 · 윈도우 DPAPI)로 암호화해 사용자 데이터 폴더에 저장하고 화면으로 전달하지 않음. 앱 이름 변경 전(Jin-3D)에 저장한 키처럼 풀리지 않는 키는 설정 창에서 다시 입력하라고 안내함(`keyStatus().unreadable`). 연동 키(EPCIS 토큰 · ERPNext 키 · 브리지 비밀번호)는 `server/secrets.mjs`로 암호문 저장. `.env`는 저장소 제외 | 비밀 관리 서비스 |
 | 웹 버전 키 | 사용자가 넣은 API 키는 그 브라우저 저장소에만 둠(기억을 끄면 탭을 닫을 때 지워짐) | — |
 | 데이터 내보내기 | 에피소드·AIOS·RCA 데이터 내려받기마다 보안 이벤트 기록(`sec.onExport`) | 감사 로그 보관 |
 | AI 안전 | LLM 출력은 제약 검사 후 사람 승인, 첨부 내용은 지시로 취급 안 함 | 요청·응답 기록 |
@@ -329,7 +329,7 @@ flowchart TB
 
 - 저장소: GitHub(`theuniversepark/jin-3d`), 기본 브랜치 `main`. GitHub Pages가 `main` 브랜치 루트를 그대로 서비스한다.
 - 산출물 제외(`.gitignore`): `node_modules/`, `.env`, 배포본(`dist/`), 런타임 데이터(`data/`), 점검 결과(`outputs/`), `tests/.cache/`, `analysis/rca/rca_results/`.
-- js 파일을 바꾸면 `npm run stamp`로 `index.html` import map을 갱신하고, `npm test` 끝의 `--check`가 누락을 잡는다.
+- js 파일을 바꾸면 `npm run stamp`로 `index.html` import map을 갱신하고, `npm test` 끝의 `--check`가 누락을 잡는다. 저장소를 새로 받으면 `git config core.hooksPath .githooks`를 한 번 실행해 커밋 전 자동 갱신(`.githooks/pre-commit`)을 켠다.
 
 ## 12. 배포·운영
 
@@ -337,8 +337,8 @@ flowchart TB
 
 | 배포 형태 | 대상 | 기능 범위 | 배포 방법 |
 | --- | --- | --- | --- |
-| 맥 앱 (Electron) | 내부 운영·실증 담당 | 전체 (앱 서버·브로커·센서 서버·RCA·파일 저장·Agent) | `npm run package` → `dist/피지컬AI 실증 메타팩토리-darwin-arm64/피지컬AI 실증 메타팩토리.app` (Apple Silicon · 번들 ID `kr.or.camtic.jin3d` · ad-hoc 서명 · 테스트·도구·분석·배포 구성·Blender 원본 폴더 제외) |
-| 윈도우 앱 (Electron) | 내부 운영·실증 담당 | 맥 앱과 같음 | `npm run package:win` → `dist/피지컬AI 실증 메타팩토리-win32-x64/피지컬AI 실증 메타팩토리.exe` (실제 윈도우 PC 실행은 미확인) |
+| 맥 앱 (Electron) | 내부 운영·실증 담당 | 전체 (앱 서버·브로커·센서 서버·RCA·파일 저장·Agent) | `npm run package` → `dist/피지컬AI 실증 메타팩토리-darwin-arm64/피지컬AI 실증 메타팩토리.app` (Apple Silicon · 번들 ID `kr.or.camtic.jin3d` · ad-hoc 서명 · 테스트·도구·분석·배포 구성·Blender 원본 폴더 · 개발용 `.claude/` 제외 · 약 709MB) |
+| 윈도우 앱 (Electron) | 내부 운영·실증 담당 | 맥 앱과 같음 | `npm run package:win` → `dist/피지컬AI 실증 메타팩토리-win32-x64/피지컬AI 실증 메타팩토리.exe` (약 770MB · 맥에서 빌드 확인 · 실제 윈도우 PC 실행은 미확인) |
 | 브라우저 + 로컬 서버 | 개발자 | 맥 앱과 같음 | `npm start` → http://localhost:8765 (`PORT`로 변경) |
 | 웹 버전 | 외부 설명·데모 | 화면 기능 (자연어 공정 설계·MQTT 발행 제외, 대화 기반 Agent는 API 키 입력 시 브라우저 직접 호출, EPCIS 저장소는 브라우저 메모리) | GitHub Pages(`main`) — https://theuniversepark.github.io/jin-3d/ |
 | 설비 대시보드 (선택) | 운영·데이터 담당 | Telegraf 1.34 → InfluxDB 2.7.12 → Grafana OSS 12.4.3, 대시보드 4종(`jm-overview` · `jm-health` · `jm-sensors` · `jm-zone`) | 앱 「데이터 연동 → 설비 대시보드 → 대시보드 켜기」 (`docker compose -p jin3d-mon`, Docker Desktop 또는 Colima) → http://127.0.0.1:3320/ |

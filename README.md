@@ -12,7 +12,8 @@
 - **바닥 · 서버 랙 로고는 캠틱종합기술원**: 과학기술정보통신부 · 정보통신산업진흥원 로고 대신 캠틱종합기술원 로고를 넣었습니다(아래 「캠틱종합기술원 표시」). 로고 이미지는 원본(550px)을 4배(2200px)로 키우고 가장자리를 세워 가까이서도 선명합니다.
 - **사용자 가이드 PDF · Word · 그림**(`docs/USER_GUIDE.pdf` · `.docx` · `docs/guide-images/` 40장)도 이 앱 화면으로 다시 만들었습니다(`tools/guide-shots.cjs` → `npm run guide:docx`).
 - **저장 키 안내**: 앱 이름을 바꾸기 전(Jin-3D)에 저장한 Claude API 키는 키체인 항목 이름이 달라 읽지 못합니다 — ⚙ 설정 창에 「예전에 저장한 키를 읽지 못했습니다 … 다시 입력해 저장하세요」로 알리고, 다시 저장하면 해결됩니다.
-- **패키징**: 개발용 폴더 `.claude/`를 앱 묶음에서 뺍니다(맥 약 709MB · 윈도우 약 770MB).
+- **패키징**: 개발용 폴더 `.claude/`를 앱 묶음에서 뺍니다(맥 약 709MB · 윈도우 약 770MB · 둘 다 맥에서 빌드 확인).
+- **커밋 훅**: 저장소를 새로 받으면 `git config core.hooksPath .githooks`를 한 번 실행합니다 — 커밋 전에 `index.html`의 파일 버전(내용 해시)을 자동으로 갱신합니다.
 
 **문서**: [사용자 가이드](docs/USER_GUIDE.md)(설치 · 화면 조작 · 운영 시나리오 실습 · 기능별 사용법 · 문제 해결 — PDF는 `npm run guide:pdf` 로 `docs/USER_GUIDE.pdf` 를 만들며 화면 상단 📘로 내려받음 · Word는 `npm run guide:docx` 로 `docs/USER_GUIDE.docx`, LibreOffice 필요) · [설계서](docs/DESIGN.md)(요구 · 아키텍처 · 데이터 · 인터페이스 · AI · 보안 · 테스트 · 운영 · 위험 · 로드맵) · [AAS 스키마](docs/AAS_SCHEMA.md) · [KPI 영향 분석 보고서](docs/KPI_IMPACT_REPORT.md)
 
