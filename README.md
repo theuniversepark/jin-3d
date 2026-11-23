@@ -4,6 +4,14 @@
 
 웹 브라우저에서 실행되는 3D 공장 시뮬레이션 에이전트입니다. 사용한 오픈소스와 출처는 [OPEN_SOURCE.md](OPEN_SOURCE.md)를 보세요.
 
+**버전 1.1.1 (2026-11-24) — micro-assembly 1.1.1과 같은 기능**: 이 저장소에서 갈라져 나간 [micro-assembly](https://github.com/theuniversepark/micro-assembly)(Jin-micro)의 1.1.1 소스를 그대로 옮겨 기능을 같게 맞췄습니다. 아래만 다릅니다.
+- **이 앱 고유값은 그대로**: 앱 이름 「피지컬AI 실증 메타팩토리」 · 번들 ID `kr.or.camtic.jin3d` · 앱 아이콘 · 사용자 데이터 폴더 `Jin-3D` · 브라우저 저장 키 `jin3d.*`(저장해 둔 라인 설정을 이어서 씀) · 저장소·웹 주소 `jin-3d`.
+- **Odoo 연동 → FAC**: `js/odoo.js` · `server/odoo-gateway.mjs`를 없애고 FACOS 업무 기록 계층 FAC(`js/fac.js` · `server/fac-api.mjs`)와 ERPNext 연동(`server/erpnext-bridge.mjs`)을 씁니다.
+- **모니터링 · 브로커 이름은 `jin3d`**: Docker 구성 `jin3d-mon` · `jin3d-sensors`, InfluxDB 조직 `jin3d`, MQTT 클라이언트 ID `jin3d-…` — micro-assembly(`jinmicro-…`)와 컨테이너 · 데이터가 섞이지 않습니다. 포트(Grafana 3310 · InfluxDB 8196)는 micro-assembly와 같고 앱에 고정되어 있어, 두 앱의 설비 대시보드는 동시에 켤 수 없습니다(한쪽을 끄고 켭니다).
+- **토리 안내 2문장**: 앱 내려받기 안내의 「Jin-micro.exe를 실행해」를 「폴더 안의 실행 파일을 실행해」로 바꾸고 그 문장만 다시 녹음했습니다(한국어 · 영어).
+- **바닥 · 서버 랙 로고는 캠틱종합기술원**: 과학기술정보통신부 · 정보통신산업진흥원 로고 대신 캠틱종합기술원 로고를 넣었습니다(아래 「캠틱종합기술원 표시」).
+- **사용자 가이드 PDF · Word · 그림**(`docs/USER_GUIDE.pdf` · `.docx` · `docs/guide-images/`)은 아직 micro-assembly에서 만든 것이라 앱 이름 · 로고가 다르게 보입니다 — `npm run guide:pdf` · `npm run guide:docx`로 다시 만듭니다. 본문 `docs/USER_GUIDE.md`는 이 앱 기준입니다.
+
 **문서**: [사용자 가이드](docs/USER_GUIDE.md)(설치 · 화면 조작 · 운영 시나리오 실습 · 기능별 사용법 · 문제 해결 — PDF는 `npm run guide:pdf` 로 `docs/USER_GUIDE.pdf` 를 만들며 화면 상단 📘로 내려받음 · Word는 `npm run guide:docx` 로 `docs/USER_GUIDE.docx`, LibreOffice 필요) · [설계서](docs/DESIGN.md)(요구 · 아키텍처 · 데이터 · 인터페이스 · AI · 보안 · 테스트 · 운영 · 위험 · 로드맵) · [AAS 스키마](docs/AAS_SCHEMA.md) · [KPI 영향 분석 보고서](docs/KPI_IMPACT_REPORT.md)
 
 ## 맥 앱 (피지컬AI 실증 메타팩토리.app)
