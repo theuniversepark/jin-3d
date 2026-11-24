@@ -1,17 +1,11 @@
 // 브라우저용 실행: npm start → http://localhost:8765
 //   API 키: ANTHROPIC_API_KEY 환경변수 또는 .env 파일. CLAUDE_AUTH=subscription 이면 키 대신 이 맥의 claude 로그인(Pro/Max 구독)
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const envFile = path.join(ROOT, '.env');
-if (fs.existsSync(envFile)) {
-  for (const line of fs.readFileSync(envFile, 'utf8').split('\n')) {
-    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
-    if (m && m[2] && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
-  }
-}
+const { loadEnvFile } = await import('./server/env-file.mjs');
+loadEnvFile(path.join(ROOT, '.env'));   // 서버 모듈을 불러오기 전에 읽는다
 
 const { startServer, hasApiKey } = await import('./server/app-server.mjs');
 const { MODEL } = await import('./server/llm-agent.mjs');

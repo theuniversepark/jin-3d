@@ -1,5 +1,6 @@
 // 피지컬AI 실증 메타팩토리 맥·윈도우 앱 — 내장 로컬 서버를 띄우고 창에서 시뮬레이터를 연다.
 // Claude API 키는 safeStorage(맥 키체인 · 윈도우 DPAPI)로 암호화해 사용자 데이터 폴더에만 저장한다.
+import { envLoaded } from './env.mjs';   // .env 를 서버 모듈보다 먼저 읽는다 — 이 줄이 맨 위여야 한다
 import { app, BrowserWindow, Menu, ipcMain, safeStorage, shell, dialog } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,7 +32,7 @@ function loadStoredKey() {
 }
 
 function keyStatus() {
-  return { hasKey: hasApiKey(), source: keySource, encryption: safeStorage.isEncryptionAvailable(), unreadable: keyUnreadable && !hasApiKey() };
+  return { hasKey: hasApiKey(), source: keySource, encryption: safeStorage.isEncryptionAvailable(), unreadable: keyUnreadable && !hasApiKey(), subscription: process.env.CLAUDE_AUTH === 'subscription', envFile: envLoaded.length > 0 };
 }
 
 ipcMain.handle('key:status', () => keyStatus());
@@ -165,6 +166,7 @@ app.whenReady().then(async () => {
   // 개발 실행(npm run app)에서도 Dock에 앱 아이콘 — 패키징한 앱은 build/icon.icns가 들어간다
   const devIcon = path.join(HERE, '..', 'build', 'icon.png');
   if (!app.isPackaged && process.platform === 'darwin' && fs.existsSync(devIcon)) app.dock?.setIcon(devIcon);
+  for (const e of envLoaded) console.log(`.env 읽음: ${e.file} (${e.names.join(' · ')})`);   // 이름만 — 값은 찍지 않는다
   loadStoredKey();
   buildMenu();
   if (IS_MAC) app.setAboutPanelOptions({

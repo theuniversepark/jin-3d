@@ -13,6 +13,7 @@
 - **사용자 가이드 PDF · Word · 그림**(`docs/USER_GUIDE.pdf` · `.docx` · `docs/guide-images/` 40장)도 이 앱 화면으로 다시 만들었습니다(`tools/guide-shots.cjs` → `npm run guide:docx`).
 - **저장 키 안내**: 앱 이름을 바꾸기 전(Jin-3D)에 저장한 Claude API 키는 키체인 항목 이름이 달라 읽지 못합니다 — ⚙ 설정 창에 「예전에 저장한 키를 읽지 못했습니다 … 다시 입력해 저장하세요」로 알리고, 다시 저장하면 해결됩니다.
 - **패키징**: 개발용 폴더 `.claude/`를 앱 묶음에서 뺍니다(맥 약 709MB · 윈도우 약 770MB · 둘 다 맥에서 빌드 확인).
+- **앱에서도 `.env`**: 맥·윈도우 앱이 시작할 때 `.env`를 읽습니다(`electron/env.mjs` · `server/env-file.mjs`) — 패키징한 앱은 사용자 데이터 폴더(맥 `~/Library/Application Support/Jin-3D/.env` · 윈도우 `%APPDATA%\Jin-3D\.env`), 개발 실행(`npm run app`)은 그 파일과 프로젝트 폴더의 `.env`. `ANTHROPIC_API_KEY` · `CLAUDE_AUTH=subscription`(Claude 구독 호출) 등을 `npm start`와 같게 씁니다. 이미 있는 환경변수는 덮어쓰지 않고, ⚙에서 저장한 키가 있으면 그 키가 먼저입니다(`tests/envfile.mjs`).
 - **커밋 훅**: 저장소를 새로 받으면 `git config core.hooksPath .githooks`를 한 번 실행합니다 — 커밋 전에 `index.html`의 파일 버전(내용 해시)을 자동으로 갱신합니다.
 
 **문서**: [사용자 가이드](docs/USER_GUIDE.md)(설치 · 화면 조작 · 운영 시나리오 실습 · 기능별 사용법 · 문제 해결 — PDF는 `npm run guide:pdf` 로 `docs/USER_GUIDE.pdf` 를 만들며 화면 상단 📘로 내려받음 · Word는 `npm run guide:docx` 로 `docs/USER_GUIDE.docx`, LibreOffice 필요) · [설계서](docs/DESIGN.md)(요구 · 아키텍처 · 데이터 · 인터페이스 · AI · 보안 · 테스트 · 운영 · 위험 · 로드맵) · [AAS 스키마](docs/AAS_SCHEMA.md) · [KPI 영향 분석 보고서](docs/KPI_IMPACT_REPORT.md)
@@ -1037,7 +1038,7 @@ AGV·지게차, 운반 AMR, 정비 인력·휴머노이드, 사족보행 로봇,
 | `server/line-designer.mjs` | 자연어 → 라인 초안 (구조화 출력) |
 | `server/http-guard.mjs` | 로컬 서버 요청 출처 검사: 루프백 Host · Origin · Sec-Fetch-Site — 이 앱 화면이 보낸 요청만 (다른 웹페이지 · DNS 리바인딩 차단) |
 | `server/secrets.mjs` | 연동 설정 파일의 비밀 값 보관: safeStorage 암호문(`enc:…`) · 암호기 없으면 0600 평문 · 임시 파일 뒤 이름 바꾸기 (EPCIS 외부 전송 토큰 · ERPNext 키) |
-| `electron/main.mjs`, `electron/preload.cjs` | 맥·윈도우 앱 셸: 내장 서버, 창, 메뉴(윈도우는 창 위 메뉴 막대), 키 저장(맥 키체인 · 윈도우 DPAPI) |
+| `electron/main.mjs`, `electron/preload.cjs`, `electron/env.mjs`, `server/env-file.mjs` | 맥·윈도우 앱 셸: 내장 서버, 창, 메뉴(윈도우는 창 위 메뉴 막대), 키 저장(맥 키체인 · 윈도우 DPAPI), `.env` 읽기(앱 시작 때 · `npm start`와 같은 함수) |
 | `build/icon.icns`, `build/icon.ico`, `build/icon.png` | 앱 아이콘 — 맥(`npm run package`) · 윈도우(`npm run package:win`, icon.png에서 16~256px 7단계로 만든 ICO) · 원본 |
 | `tests/reviewfix.mjs`, `tests/finalfix.mjs` | 서버 보안 · 안정성 회귀 검증: 정적 경로 우회 · 영상 제공 · 변환 캐시 · 시작 때 변환 대상 / 루프백 Host · 다른 웹페이지 요청 차단(실제 서버) · 연동 키 보관 · RCA 실행 구분 · ERPNext 대기열/EPCIS 파일 복구 · EPCIS 외부 전송 |
 | `js/serial.js`, `js/codes.js` | 시리얼 서비스: WIP ID → 제품 시리얼 · QR 마킹·판독 검증 · 팔레트 SSCC · 출하 전 샘플 재검 · 봉쇄·처분(MRB) / QR · DataMatrix 인코더 |

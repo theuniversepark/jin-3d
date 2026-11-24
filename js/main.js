@@ -1556,8 +1556,8 @@ if (bridge?.isApp) {
   const input = document.getElementById('keyInput');
   const showStatus = (st, msg) => {
     statusEl.className = 'key-status ' + (msg ? 'err' : st.hasKey ? 'ok' : '');
-    statusEl.textContent = msg || (st.hasKey
-      ? `키 설정됨 (${st.source === 'keychain' ? (document.body.classList.contains('win') ? 'PC에 암호화 저장' : '키체인에 저장') : '환경변수'}) — 대화 기반 Agent를 쓸 수 있습니다`
+    statusEl.textContent = msg || (st.subscription ? 'Claude 구독 로그인으로 호출합니다 (.env CLAUDE_AUTH=subscription) — 대화 기반 Agent를 쓸 수 있습니다' : st.hasKey
+      ? `키 설정됨 (${st.source === 'keychain' ? (document.body.classList.contains('win') ? 'PC에 암호화 저장' : '키체인에 저장') : st.envFile ? '.env 파일' : '환경변수'}) — 대화 기반 Agent를 쓸 수 있습니다`
       : st.unreadable ? '예전에 저장한 키를 읽지 못했습니다(앱 이름 변경 전에 저장한 키) — 키를 다시 입력해 저장하세요' : '키가 없습니다 — 정책 기반 에이전트만 사용 가능');
   };
   const open = async () => { modal.classList.remove('hidden'); input.value = ''; showStatus(await bridge.keyStatus()); input.focus(); };

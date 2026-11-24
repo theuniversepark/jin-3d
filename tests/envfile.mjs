@@ -1,0 +1,20 @@
+// .env 읽기 (server/env-file.mjs) — npm start 와 맥·윈도우 앱이 같이 쓴다
+import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { loadEnvFile } from '../server/env-file.mjs';
+let pass = 0, fail = 0;
+const check = (name, ok, note = '') => { console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${note ? `  — ${note}` : ''}`); ok ? pass++ : fail++; };
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jin3d-env-')), f = path.join(tmp, '.env');
+console.log('== .env 읽기');
+fs.writeFileSync(f, 'A_KEY=abc\r\n# COMMENTED=1\nEMPTY=\n  SPACED = "quoted value" \nKEEP=new\nlower=no\n');
+const env = { KEEP: 'old' }, names = loadEnvFile(f, env);
+check('KEY=값 줄을 올리고 읽은 이름만 돌려줌', env.A_KEY === 'abc' && names.join() === 'A_KEY,SPACED', names.join(' · '));
+check('윈도우 줄바꿈(CRLF) · 앞뒤 공백 · 따옴표 처리', env.A_KEY === 'abc' && env.SPACED === 'quoted value');
+check('주석 · 빈 값 · 소문자 이름은 건너뜀', !('COMMENTED' in env) && !('EMPTY' in env) && !('lower' in env));
+check('이미 있는 환경변수는 덮어쓰지 않음', env.KEEP === 'old');
+check('파일이 없으면 빈 목록 (오류 없음)', loadEnvFile(path.join(tmp, 'none'), {}).length === 0);
+const main = fs.readFileSync(new URL('../electron/main.mjs', import.meta.url), 'utf8'), envm = fs.readFileSync(new URL('../electron/env.mjs', import.meta.url), 'utf8');
+check('앱: .env 를 서버 모듈보다 먼저 읽음 (main.mjs 첫 import)', main.match(/^import .*$/m)[0].includes("./env.mjs") && main.indexOf("./env.mjs") < main.indexOf('../server/app-server.mjs'));
+check('앱: 사용자 데이터 폴더 .env → 개발 실행일 때만 프로젝트 .env', /USER_DATA, '\.env'\)/.test(envm) && /app\.isPackaged \? \[\]/.test(envm));
+check('앱: 읽은 변수 이름만 기록 (값은 찍지 않음)', /e\.names\.join/.test(main) && !/console\.log\([^)]*process\.env\.ANTHROPIC/.test(main));
+fs.rmSync(tmp, { recursive: true, force: true });
+console.log(`\n결과: ${pass} PASS / ${fail} FAIL`); process.exit(fail ? 1 : 0);

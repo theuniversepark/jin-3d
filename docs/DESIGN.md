@@ -258,7 +258,7 @@ flowchart TB
 | 네트워크 노출 | 앱 서버·브로커·센서 서버·RCA 서버 모두 127.0.0.1에만 열림. 설비 대시보드(Grafana 3320 · InfluxDB 8206)도 127.0.0.1에만 게시 | 방화벽 구역 분리(OT/IT), 필요한 포트만 개방 |
 | 요청 출처 | 로컬 서버는 루프백 Host · 같은 출처 Origin · Sec-Fetch-Site를 검사해 이 앱 화면의 요청만 받음(거부 403). 정적 파일은 공개 폴더만 | REST 토큰 또는 mTLS |
 | 인증·권한 | MQTT는 UNS 역할별 계정·ACL(Mosquitto 비밀번호·ACL 파일 자동 생성, 권한 밖 발행은 버림). REST는 인증 없음 | MQTT TLS, DB 암호, Grafana 관리자 암호 |
-| 비밀 정보 | Claude API 키는 safeStorage(맥 키체인 · 윈도우 DPAPI)로 암호화해 사용자 데이터 폴더에 저장하고 화면으로 전달하지 않음. 앱 이름 변경 전(Jin-3D)에 저장한 키처럼 풀리지 않는 키는 설정 창에서 다시 입력하라고 안내함(`keyStatus().unreadable`). 연동 키(EPCIS 토큰 · ERPNext 키 · 브리지 비밀번호)는 `server/secrets.mjs`로 암호문 저장. `.env`는 저장소 제외 | 비밀 관리 서비스 |
+| 비밀 정보 | Claude API 키는 safeStorage(맥 키체인 · 윈도우 DPAPI)로 암호화해 사용자 데이터 폴더에 저장하고 화면으로 전달하지 않음. 앱 이름 변경 전(Jin-3D)에 저장한 키처럼 풀리지 않는 키는 설정 창에서 다시 입력하라고 안내함(`keyStatus().unreadable`). `.env`(API 키 · `CLAUDE_AUTH`)는 `npm start`와 앱이 같은 읽기 함수(`server/env-file.mjs`)로 읽음 — 앱은 서버 모듈보다 먼저(`electron/env.mjs`) 사용자 데이터 폴더의 `.env`, 개발 실행이면 프로젝트 `.env`까지 읽고 변수 이름만 기록함. 연동 키(EPCIS 토큰 · ERPNext 키 · 브리지 비밀번호)는 `server/secrets.mjs`로 암호문 저장. `.env`는 저장소 제외 | 비밀 관리 서비스 |
 | 웹 버전 키 | 사용자가 넣은 API 키는 그 브라우저 저장소에만 둠(기억을 끄면 탭을 닫을 때 지워짐) | — |
 | 데이터 내보내기 | 에피소드·AIOS·RCA 데이터 내려받기마다 보안 이벤트 기록(`sec.onExport`) | 감사 로그 보관 |
 | AI 안전 | LLM 출력은 제약 검사 후 사람 승인, 첨부 내용은 지시로 취급 안 함 | 요청·응답 기록 |
@@ -274,7 +274,7 @@ flowchart TB
 
 | 계층 | 도구 | 범위 | 통과 기준 |
 | --- | --- | --- | --- |
-| 1. 헤드리스 회귀 테스트 | `npm test` (테스트 파일 53개 + `tools/stamp-version.mjs --check`) | 아래 목록 | 전체 PASS |
+| 1. 헤드리스 회귀 테스트 | `npm test` (테스트 파일 66개 + `tools/stamp-version.mjs --check`) | 아래 목록 | 전체 PASS |
 | 2. 물리 간섭 점검 | `npm run check:interference` (`electron tools/check-interference.cjs [분=20] [모드…]`) | 3개 모드에서 이동체 형상 ↔ 장면 형상 겹침 | 겹침 0건 (있으면 exit 1) |
 | 3. 통합 테스트 | 실제 MQTT 브로커 → 센서 서버 프로세스 → SQLite, Mosquitto 실제 기동, RCA·EPCIS REST, 가짜 ERPNext·EPCIS·Docker | 프로세스 간 연동 | 적재·응답 코드·멱등성 |
 | 4. 화면 실행 점검 | `npm run smoke`(세 단계 실행 · 콘솔 오류 검사 · `SHOT`/`EVAL`), `npm run test:ui`(팝업 스크롤), `npm run perf` | 새 창·버튼·연동 동작 | 콘솔 오류 없음, 화면 확인 |

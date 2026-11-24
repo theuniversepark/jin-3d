@@ -25,7 +25,7 @@
 | 설치 | 앱 파일만 복사 | 폴더째 복사 | Node.js + 저장소 | 없음 (주소만 열기) |
 | 지원 환경 | Apple Silicon Mac | 64비트(x64) 윈도우 10·11 | Node.js | 최신 브라우저 |
 | 주소 | 앱 창 (내장 서버 `127.0.0.1:47615`) | 앱 창 (내장 서버 `127.0.0.1:47615`) | http://localhost:8765 | https://theuniversepark.github.io/jin-3d/ |
-| Claude Agent — 대화 지시 해석 | ○ (⚙ 또는 ⌘,에서 API 키 입력) | ○ (⚙ 또는 Ctrl+,에서 API 키 입력) | ○ (`.env`에 API 키 또는 Claude 구독) | ○ (⚙에서 API 키 입력) |
+| Claude Agent — 대화 지시 해석 | ○ (⚙ 또는 ⌘,에서 API 키 입력 · 또는 `.env`) | ○ (⚙ 또는 Ctrl+,에서 API 키 입력 · 또는 `.env`) | ○ (`.env`에 API 키 또는 Claude 구독) | ○ (⚙에서 API 키 입력) |
 | Claude Agent — 공정 설계 자연어·파일 분석 | ○ | ○ | ○ | × (직접 편집만) |
 | MQTT 발행 · UNS · FAC API · 센서 DB · RCA 서버 · EPCIS 파일 보관 | ○ | ○ | ○ | × (화면 안에서 시뮬레이션으로 대체) |
 | 설비 대시보드(Grafana) · ERPNext 연동 · 외부 EPCIS 전송 | ○ | ○ | ○ | × |
@@ -83,6 +83,7 @@ npm start          # → http://localhost:8765  (포트 변경: PORT=9000 npm st
 - `index.html` 파일을 직접 열면 동작하지 않음(ES 모듈). 반드시 서버 주소로 접속함.
 - Claude Agent를 쓰려면 `.env.example` 을 `.env` 로 복사하고 `ANTHROPIC_API_KEY=sk-ant-...` 를 넣음. 키가 없어도 실행되며, 그때는 정책 기반 에이전트와 내장 해석기만 씀.
 - **(Claude 구독으로 호출)** `.env` 에 `CLAUDE_AUTH=subscription` 을 넣으면 API 키 대신 이 Mac의 claude 로그인(Pro/Max 구독)으로 호출함 — 본인 개인 사용만. 기본값은 `CLAUDE_AUTH=api`.
+- **(앱에서도 `.env`)** 맥·윈도우 앱도 `.env`를 읽음 — 패키징한 앱은 사용자 데이터 폴더(맥 `~/Library/Application Support/Jin-3D/.env` · 윈도우 `%APPDATA%\Jin-3D\.env`), 개발 실행(`npm run app`)은 그 파일과 프로젝트 폴더의 `.env`. 이미 있는 환경변수는 덮어쓰지 않고, ⚙에서 저장한 키가 있으면 그 키가 `.env`의 키보다 먼저임.
 
 ### 1.5 Agent API 키 설정 (맥·윈도우 앱)
 
@@ -330,7 +331,7 @@ npm start          # → http://localhost:8765  (포트 변경: PORT=9000 npm st
 ### 5.3 운영 에이전트와 대화 지시
 
 - **(준비)** 오른쪽 패널의 「정밀조립Zone 존 에이전트 설정·현재 판단 ▾」을 펼쳐 엔진을 「대화 기반」으로 바꿈 → 아래 입력창이 열림 (자동화·피지컬AI 단계).
-- **(Agent 연결)** 맥·윈도우 앱은 1.5절의 API 키, `npm start`는 1.4절의 `.env`(API 키 또는 Claude 구독), 웹 버전은 1.6절의 API 키로 연결함. 연결하지 않아도 내장 해석기는 동작함.
+- **(Agent 연결)** 맥·윈도우 앱은 1.5절의 API 키 또는 1.4절의 `.env`, `npm start`는 1.4절의 `.env`(API 키 또는 Claude 구독), 웹 버전은 1.6절의 API 키로 연결함. 연결하지 않아도 내장 해석기는 동작함.
 - **(입력)** 지시를 쓰고 「전송」. 쉼표·「그리고」로 여러 지시를 한 번에 줄 수 있음.
 - **(판정)** 지시마다 해석 → 대상 확인 → 안전 규칙 → 실행 가능성 → 영향 평가 게이트를 거쳐 수행 또는 거절(사유 · 대안)로 로그에 남음. 로그의 지시 게이트 항목을 누르면 판정 도식 창이 열림.
 - **(계획 변경)** 혼류 비율 · 투입 간격 · 긴급 조달은 FacOS 결정을 거쳐 계획 버전(P-n)을 올린 뒤 적용됨(5.15).
